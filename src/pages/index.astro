@@ -1,0 +1,35 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+import HeroSection from '../components/HeroSection.astro';
+import EmpathySection from '../components/EmpathySection.astro';
+import ProblemSection from '../components/ProblemSection.astro';
+import ValueSection from '../components/ValueSection.astro';
+import AvatarsSection from '../components/AvatarsSection.astro';
+import AuthoritySection from '../components/AuthoritySection.astro';
+import ReviewsSection from '../components/ReviewsSection.astro';
+import SedesSection from '../components/SedesSection.astro';
+import FAQSection from '../components/FAQSection.astro';
+import ClosingSection from '../components/ClosingSection.astro';
+import StickyWhatsAppButton from '../components/StickyWhatsAppButton.astro';
+import SedeModal from '../components/SedeModal.astro';
+---
+<BaseLayout
+  title="Dr. Liber Acosta | Sistema de Transformación 360™ - Alergia e Inmunología"
+  description="Recupera tu calidad de vida controlando tu alergia desde la raíz. Más de 20 años ayudando a niños y adultos en el NEA. Corrientes, Resistencia, Formosa, Sáenz Peña."
+>
+  <main>
+    <HeroSection />
+    <SedesSection />
+    <EmpathySection />
+    <ProblemSection />
+    <ValueSection />
+    <AvatarsSection />
+    <AuthoritySection />
+    <ReviewsSection />
+    <FAQSection />
+    <ClosingSection />
+  </main>
+  <StickyWhatsAppButton />
+  <SedeModal />
+</BaseLayout>

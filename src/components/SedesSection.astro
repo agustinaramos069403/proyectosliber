@@ -1,0 +1,23 @@
+---
+const locations = [
+  { city: 'Corrientes', place: 'Clínica del Pilar' },
+  { city: 'Resistencia', place: 'IMMI' },
+  { city: 'Sáenz Peña', place: 'Clínica Santa María' },
+  { city: 'Formosa', place: 'Inst. de Gastroenterología' },
+];
+---
+<section class="py-16 lg:py-24 bg-slate-50">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 text-center mb-10">
+      Sedes
+    </h2>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {locations.map((loc) => (
+        <div class="p-4 rounded-xl bg-white border border-slate-100 text-center">
+          <p class="font-semibold text-slate-900">{loc.city}</p>
+          <p class="text-base text-slate-600">{loc.place}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

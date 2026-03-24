@@ -1,0 +1,57 @@
+---
+// Reemplazá con reseñas reales de Google My Business. Formato: { text, author, rating }
+import { GOOGLE_REVIEWS_URL } from '../config';
+const reviews = [
+  {
+    text: 'Excelente atención. Por fin encontré un diagnóstico claro después de años de síntomas.',
+    author: 'Paciente de Corrientes',
+    rating: 5,
+  },
+  {
+    text: 'Mi hijo dejó de tener crisis de asma. El Dr. Liber cambió nuestra vida.',
+    author: 'Madre de paciente pediátrico',
+    rating: 5,
+  },
+  {
+    text: 'Profesional, empático y con un enfoque integral. Muy recomendable.',
+    author: 'Paciente de Resistencia',
+    rating: 5,
+  },
+];
+---
+<section class="py-16 lg:py-24 bg-slate-50">
+  <div class="max-w-6xl mx-auto px-6">
+    <p class="text-slate-600 text-center mb-6 max-w-2xl mx-auto">
+      En el Nordeste argentino, las alergias son más frecuentes por el clima húmedo y los alérgenos del ambiente. Muchos pacientes viven con síntomas todo el año sin diagnóstico correcto.
+    </p>
+    <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 text-center mb-12">
+      Lo que dicen mis pacientes sobre mí
+    </h2>
+    <div class="grid md:grid-cols-3 gap-8 mb-16">
+      {reviews.map((review) => (
+        <div class="p-6 rounded-xl bg-white shadow-md border border-slate-100">
+          <div class="flex gap-1 mb-4">
+            {Array.from({ length: review.rating }).map(() => (
+              <span class="text-amber-400">★</span>
+            ))}
+          </div>
+          <p class="text-slate-700 italic mb-4 text-lg">"{review.text}"</p>
+          <p class="text-base text-slate-500">— {review.author}</p>
+        </div>
+      ))}
+    </div>
+    <div class="text-center">
+      <a
+        href={GOOGLE_REVIEWS_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        class="inline-flex items-center gap-2 text-teal-600 font-semibold hover:text-teal-700 hover:underline"
+      >
+        Ver más reseñas en Google
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        </svg>
+      </a>
+    </div>
+  </div>
+</section>

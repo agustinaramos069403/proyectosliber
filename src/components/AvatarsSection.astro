@@ -1,0 +1,37 @@
+---
+const avatars = [
+  {
+    title: 'Tu hijo vive con síntomas respiratorios o alergias',
+    description: 'Tos persistente, mocos constantes, crisis asmáticas o dificultad para dormir y jugar con normalidad.',
+    icon: '👶',
+  },
+  {
+    title: 'Convivís con alergia o tenés diagnóstico de asma',
+    description: 'Congestión, estornudos, falta de aire, silbidos en el pecho o cansancio que afecta tu trabajo, estudio o descanso.',
+    icon: '🧑',
+  },
+  {
+    title: 'Ya probaste distintos tratamientos y el problema sigue',
+    description: 'Pasaste por especialistas o medicación, pero los síntomas vuelven o no terminan de resolverse.',
+    icon: '🔄',
+  },
+];
+---
+<section class="py-16 lg:py-24 bg-slate-50">
+  <div class="max-w-6xl mx-auto px-6">
+    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-slate-900 text-center mb-12">
+      Este enfoque es para vos si:
+    </h2>
+    <div class="grid md:grid-cols-3 gap-8">
+      {avatars.map((avatar) => (
+        <div class="p-8 rounded-2xl bg-white shadow-md border border-slate-100 hover:shadow-lg transition-shadow">
+          <span class="text-5xl mb-4 block">{avatar.icon}</span>
+          <h3 class="font-display font-semibold text-xl text-slate-900 mb-3">
+            {avatar.title}
+          </h3>
+          <p class="text-slate-600 leading-relaxed text-lg">{avatar.description}</p>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>

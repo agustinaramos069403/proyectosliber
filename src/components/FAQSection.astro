@@ -1,0 +1,64 @@
+---
+const faqs = [
+  {
+    question: '¿Atiende por Obra Social?',
+    answer: 'Sí, trabajamos con diversas coberturas médicas y también en modalidad de consulta particular.',
+  },
+  {
+    question: '¿Dónde puedo atenderme?',
+    answer: 'Contamos con atención coordinada en Corrientes, Resistencia, Sáenz Peña y Formosa.',
+  },
+  {
+    question: '¿Es necesario esperar a una crisis para consultar?',
+    answer: 'No. El objetivo del Sistema 360™ es preventivo: lograr menos crisis y mejor calidad de vida a largo plazo.',
+  },
+  {
+    question: '¿La alergia se cura o solo se controla?',
+    answer: 'A través de la inmunoterapia personalizada, podemos lograr que el cuerpo tolere aquello que antes le hacía daño, reduciendo drásticamente la necesidad de medicación.',
+  },
+  {
+    question: '¿Es un tratamiento seguro para niños?',
+    answer: 'Es el camino más seguro. Evitar la progresión de la rinitis al asma es el mayor acto de medicina preventiva que podemos ofrecer a un hijo.',
+  },
+  {
+    question: '¿Atiende niños?',
+    answer: 'Sí.',
+  },
+  {
+    question: '¿Necesito estudios previos?',
+    answer: 'No.',
+  },
+  {
+    question: '¿Acepta obras sociales?',
+    answer: 'Sí / consultar',
+  },
+  {
+    question: '¿Cuánto dura la consulta?',
+    answer: 'Consultar por WhatsApp.',
+  },
+];
+---
+<section class="py-16 lg:py-24 bg-white">
+  <div class="max-w-3xl mx-auto px-6">
+    <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 text-center mb-12">
+      Preguntas frecuentes
+    </h2>
+    <div class="space-y-4">
+      {faqs.map((faq) => (
+        <details class="group rounded-xl border border-slate-200 overflow-hidden">
+          <summary class="flex items-center justify-between gap-4 px-6 py-4 cursor-pointer list-none font-medium text-slate-800 hover:bg-slate-50 transition-colors">
+            {faq.question}
+            <span class="text-teal-500 group-open:rotate-180 transition-transform">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              </svg>
+            </span>
+          </summary>
+          <div class="px-6 pb-4 pt-0 text-slate-600 text-lg">
+            {faq.answer}
+          </div>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>

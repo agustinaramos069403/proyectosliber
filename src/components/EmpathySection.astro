@@ -1,0 +1,31 @@
+---
+const symptoms = [
+  'Congestión nasal constante',
+  'Estornudos repetidos',
+  'Picazón en nariz, ojos o piel',
+  'Tos, silbidos en el pecho o falta de aire',
+  'Dermatitis, urticaria o brotes en la piel',
+  'Cansancio o mal descanso por los síntomas',
+  'Síntomas que aparecen y desaparecen sin explicación',
+];
+---
+<section class="py-16 lg:py-24 bg-slate-50">
+  <div class="max-w-4xl mx-auto px-6">
+    <div class="mb-12 p-6 sm:p-8 rounded-2xl bg-teal-50 border-l-4 border-teal-500">
+      <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-slate-900 text-center">
+        ¿Te pasa algo de esto con frecuencia?
+      </h2>
+    </div>
+    <ul class="space-y-4 mb-12">
+      {symptoms.map((symptom) => (
+        <li class="flex items-center gap-3 text-lg sm:text-xl text-slate-700">
+          <span class="flex-shrink-0 w-2 h-2 rounded-full bg-teal-500" />
+          {symptom}
+        </li>
+      ))}
+    </ul>
+    <p class="text-xl sm:text-2xl font-semibold text-slate-800 text-center py-4 px-6 rounded-xl bg-amber-50 border-b-4 border-amber-400">
+      Podría tratarse de una alergia mal diagnosticada o mal tratada.
+    </p>
+  </div>
+</section>
