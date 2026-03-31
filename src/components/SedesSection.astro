@@ -6,31 +6,61 @@ const LOCATIONS = [
   { city: 'Formosa', place: 'Instituto de Gastroenterología' },
 ];
 ---
-<section id="sedes" class="py-10 lg:py-12 bg-brand-breath" aria-labelledby="sedes-heading">
+<section
+  id="sedes"
+  class="py-12 lg:py-16 bg-gradient-to-b from-brand-breath via-white to-brand-breath"
+  aria-labelledby="sedes-heading"
+>
   <div class="max-w-6xl mx-auto px-6">
-    <h2 id="sedes-heading" class="font-display text-lg sm:text-xl font-semibold text-brand-authority text-center mb-6">
-      Consultorios
-    </h2>
-    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+    <div class="text-center mb-8 lg:mb-10">
+      <span class="inline-flex items-center gap-2 px-5 py-2 text-sm sm:text-base font-medium text-brand-authority bg-white/80 rounded-full shadow-sm ring-1 ring-brand-authority/10">
+        Consultorios
+      </span>
+      <h2
+        id="sedes-heading"
+        class="font-display mt-3 text-2xl sm:text-3xl font-semibold text-brand-authority tracking-tight"
+      >
+        Elegí tu sede más cercana
+      </h2>
+      <p class="mt-2 text-base sm:text-lg text-brand-technical/80 max-w-2xl mx-auto">
+        Coordiná tu consulta en la ciudad que te quede mejor.
+      </p>
+    </div>
+
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
       {LOCATIONS.map((Location) => (
-        <div class="p-3 sm:p-4 rounded-xl bg-white border border-brand-authority/10 text-center">
-          <p class="inline-flex items-center justify-center gap-2 font-semibold text-brand-authority text-sm sm:text-base">
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 24 24"
-              class="h-4 w-4 text-brand-authority/80"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11Z" />
-              <circle cx="12" cy="10" r="2.5" />
-            </svg>
-            <span>{Location.city}</span>
-          </p>
-          <p class="text-sm text-brand-technical/80">{Location.place}</p>
+        <div class="group relative overflow-hidden rounded-2xl bg-white/80 ring-1 ring-brand-authority/10 shadow-sm hover:shadow-line transition-shadow">
+          <div
+            class="pointer-events-none absolute inset-0 opacity-[0.7] bg-[radial-gradient(circle_at_20%_15%,rgba(79,183,167,0.18),transparent_55%),radial-gradient(circle_at_85%_30%,rgba(139,214,203,0.18),transparent_50%)]"
+            aria-hidden="true"
+          ></div>
+          <div class="relative p-4 sm:p-5">
+            <div class="flex items-start gap-3">
+              <div class="grid h-10 w-10 place-items-center rounded-2xl bg-brand-breath ring-1 ring-brand-authority/10 shadow-sm">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  class="h-5 w-5 text-brand-authority/85"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11Z" />
+                  <circle cx="12" cy="10" r="2.5" />
+                </svg>
+              </div>
+              <div class="min-w-0 text-left">
+                <p class="font-display font-semibold text-brand-authority text-base sm:text-lg leading-snug truncate">
+                  {Location.city}
+                </p>
+                <p class="text-sm sm:text-base text-brand-technical/80 leading-snug line-clamp-2">
+                  {Location.place}
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
       ))}
     </div>

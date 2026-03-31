@@ -9,18 +9,33 @@ const SYMPTOMS = [
   'Síntomas que aparecen y desaparecen sin explicación',
 ];
 ---
-<section class="py-16 lg:py-24 bg-brand-breath">
+<section class="py-16 lg:py-24 bg-gradient-to-b from-brand-breath via-white to-brand-breath">
   <div class="max-w-4xl mx-auto px-6">
-    <div class="mb-10 p-6 sm:p-8 rounded-2xl bg-white border border-brand-authority/10 shadow-sm">
-      <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority text-center">
+    <div class="relative overflow-hidden rounded-3xl bg-white/75 ring-1 ring-brand-authority/10 shadow-line backdrop-blur">
+      <div
+        class="pointer-events-none absolute inset-0 opacity-[0.7] bg-[radial-gradient(circle_at_12%_18%,rgba(79,183,167,0.16),transparent_55%),radial-gradient(circle_at_88%_28%,rgba(139,214,203,0.16),transparent_52%)]"
+        aria-hidden="true"
+      ></div>
+      <div class="relative p-6 sm:p-8">
+      <div class="mb-8 flex items-center justify-center gap-3">
+        <span class="grid h-10 w-10 place-items-center rounded-2xl bg-brand-breath ring-1 ring-brand-authority/10 shadow-sm">
+          <img
+            src="/icon-symptoms.png"
+            alt=""
+            class="h-6 w-6 object-contain opacity-90"
+            loading="lazy"
+            decoding="async"
+          />
+        </span>
+        <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority text-center">
         ¿Te pasa algo de esto con frecuencia?
-      </h2>
-    </div>
+        </h2>
+      </div>
 
-    <ul class="grid gap-3 sm:gap-4 sm:grid-cols-2 mb-10">
+    <ul class="grid gap-3 sm:gap-4 sm:grid-cols-2 mb-8">
       {SYMPTOMS.map((Symptom) => (
-        <li class="flex gap-3 rounded-xl bg-white/70 border border-brand-authority/10 px-4 py-3 text-base sm:text-lg text-brand-technical shadow-sm">
-          <span class="mt-0.5 grid h-6 w-6 place-items-center rounded-lg bg-brand-clinical/20 text-brand-authority ring-1 ring-brand-authority/10">
+        <li class="group flex gap-3 rounded-2xl bg-white/80 ring-1 ring-brand-authority/10 px-4 py-3 text-base sm:text-lg text-brand-technical shadow-sm transition-transform hover:-translate-y-[1px] hover:shadow-line">
+          <span class="mt-0.5 grid h-6 w-6 place-items-center rounded-lg bg-brand-clinical/25 text-brand-authority ring-1 ring-brand-authority/10 transition-colors group-hover:bg-brand-clinical/35">
             <svg
               aria-hidden="true"
               viewBox="0 0 24 24"
@@ -39,8 +54,12 @@ const SYMPTOMS = [
       ))}
     </ul>
 
-    <p class="text-lg sm:text-xl font-semibold text-brand-authority text-center py-4 px-6 rounded-2xl bg-white border border-brand-authority/10 shadow-sm">
-      Podría tratarse de una alergia mal diagnosticada o mal tratada.
-    </p>
+    <div class="rounded-2xl bg-gradient-to-r from-brand-breath via-white to-brand-breath ring-1 ring-brand-authority/10 p-[1px]">
+      <p class="text-lg sm:text-xl font-semibold text-brand-authority text-center py-4 px-6 rounded-2xl bg-white/90 shadow-sm">
+        Podría tratarse de una alergia mal diagnosticada o mal tratada.
+      </p>
+    </div>
+      </div>
+    </div>
   </div>
 </section>
