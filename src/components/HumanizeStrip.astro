@@ -1,0 +1,48 @@
+---
+/** Colocá imágenes en public/humanize/ (ej. vida-1.jpg) para humanizar la landing. Si no existen, los huecos se ocultan. */
+const slots = [
+  { file: 'vida-1.jpg', alt: 'Momentos de vida y familia' },
+  { file: 'vida-2.jpg', alt: 'Cuidado y bienestar' },
+  { file: 'vida-3.jpg', alt: 'Infancia y actividades' },
+];
+---
+<section
+  id="humanize-section"
+  class="py-12 lg:py-14 bg-white border-y border-brand-authority/10"
+  aria-label="Imágenes de contexto"
+>
+  <div class="max-w-6xl mx-auto px-6">
+    <p class="font-display text-center text-brand-authority/90 font-medium text-sm sm:text-base mb-8 max-w-2xl mx-auto">
+      Un enfoque que acompaña la vida real: familia, trabajo y descanso.
+    </p>
+    <div id="humanize-grid" class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {slots.map((slot) => (
+        <figure class="humanize-card relative aspect-[4/3] overflow-hidden rounded-xl border border-brand-authority/10 shadow-sm bg-brand-breath">
+          <img
+            src={`/humanize/${slot.file}`}
+            alt={slot.alt}
+            class="h-full w-full object-cover"
+            loading="lazy"
+            width="400"
+            height="300"
+            onerror="this.closest('figure')?.remove()"
+          />
+          <div
+            class="pointer-events-none absolute inset-0 bg-gradient-to-t from-brand-breath/70 via-transparent to-transparent"
+            aria-hidden="true"
+          />
+        </figure>
+      ))}
+    </div>
+  </div>
+</section>
+<script is:inline>
+  window.addEventListener('load', function () {
+    window.setTimeout(function () {
+      var grid = document.getElementById('humanize-grid');
+      var section = document.getElementById('humanize-section');
+      if (!grid || !section) return;
+      if (grid.querySelectorAll('figure').length === 0) section.remove();
+    }, 400);
+  });
+</script>

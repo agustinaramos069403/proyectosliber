@@ -1,28 +1,20 @@
 /** @type {import('tailwindcss').Config} */
+/** Manual de identidad visual Dr. Liber Acosta — 2026 */
 export default {
   content: ['./src/**/*.{astro,html,js,jsx,md,mdx,svelte,ts,tsx,vue}'],
   theme: {
     extend: {
       colors: {
-        primary: {
-          50: '#f0fdf4',
-          100: '#dcfce7',
-          200: '#bbf7d0',
-          300: '#86efac',
-          400: '#4ade80',
-          500: '#22c55e',
-          600: '#16a34a',
-          700: '#15803d',
-          800: '#166534',
-          900: '#14532d',
-        },
-        accent: {
-          teal: '#0d9488',
-          navy: '#0f172a',
+        brand: {
+          authority: '#0c3859',
+          clinical: '#7ab4d4',
+          immune: '#4db6a2',
+          technical: '#2a3b47',
+          breath: '#f5f9fa',
         },
       },
       fontFamily: {
-        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
         display: ['Outfit', 'system-ui', 'sans-serif'],
       },
     },

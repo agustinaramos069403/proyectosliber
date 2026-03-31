@@ -19,24 +19,21 @@ const reviews = [
   },
 ];
 ---
-<section class="py-16 lg:py-24 bg-slate-50">
+<section class="py-16 lg:py-24 bg-brand-breath">
   <div class="max-w-6xl mx-auto px-6">
-    <p class="text-slate-600 text-center mb-6 max-w-2xl mx-auto">
-      En el Nordeste argentino, las alergias son más frecuentes por el clima húmedo y los alérgenos del ambiente. Muchos pacientes viven con síntomas todo el año sin diagnóstico correcto.
-    </p>
-    <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 text-center mb-12">
+    <h2 class="font-display text-2xl sm:text-3xl font-semibold text-brand-authority text-center mb-12">
       Lo que dicen mis pacientes sobre mí
     </h2>
     <div class="grid md:grid-cols-3 gap-8 mb-16">
       {reviews.map((review) => (
-        <div class="p-6 rounded-xl bg-white shadow-md border border-slate-100">
+        <div class="p-6 rounded-xl bg-white shadow-md border border-brand-authority/10">
           <div class="flex gap-1 mb-4">
             {Array.from({ length: review.rating }).map(() => (
-              <span class="text-amber-400">★</span>
+              <span class="text-brand-clinical">★</span>
             ))}
           </div>
-          <p class="text-slate-700 italic mb-4 text-lg">"{review.text}"</p>
-          <p class="text-base text-slate-500">— {review.author}</p>
+          <p class="text-brand-technical italic mb-4 text-lg">"{review.text}"</p>
+          <p class="text-base text-brand-technical/60">— {review.author}</p>
         </div>
       ))}
     </div>
@@ -45,7 +42,7 @@ const reviews = [
         href={GOOGLE_REVIEWS_URL}
         target="_blank"
         rel="noopener noreferrer"
-        class="inline-flex items-center gap-2 text-teal-600 font-semibold hover:text-teal-700 hover:underline"
+        class="inline-flex items-center gap-2 text-brand-authority font-medium hover:text-brand-immune hover:underline"
       >
         Ver más reseñas en Google
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -15,17 +15,17 @@ import { WHATSAPP_NUMBER, WHATSAPP_MESSAGE_BASE, SEDES } from '../config';
     <button
       type="button"
       id="sede-modal-close"
-      class="absolute right-4 top-4 text-slate-400 hover:text-slate-600"
+      class="absolute right-4 top-4 text-brand-technical/40 hover:text-brand-authority"
       aria-label="Cerrar"
     >
       <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
       </svg>
     </button>
-    <h3 id="sede-modal-title" class="font-display text-xl font-bold text-slate-900 mb-2">
+    <h3 id="sede-modal-title" class="font-display text-xl font-semibold text-brand-authority mb-2">
       ¿A qué sede querés asistir?
     </h3>
-    <p class="text-slate-600 mb-6">
+    <p class="text-brand-technical/85 mb-6">
       Elegí tu sede para continuar a WhatsApp y agendar tu consulta.
     </p>
     <div class="space-y-3">
@@ -34,11 +34,11 @@ import { WHATSAPP_NUMBER, WHATSAPP_MESSAGE_BASE, SEDES } from '../config';
           href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`${WHATSAPP_MESSAGE_BASE} en ${sede}.`)}`}
           target="_blank"
           rel="noopener noreferrer"
-          class="sede-option flex items-center justify-between w-full px-4 py-3 rounded-xl border border-slate-200 hover:border-teal-500 hover:bg-teal-50 transition-colors text-left font-medium text-slate-800"
+          class="sede-option flex items-center justify-between w-full px-4 py-3 rounded-xl border border-brand-authority/15 hover:border-brand-authority hover:bg-brand-breath transition-colors text-left font-medium text-brand-technical"
           data-sede={sede}
         >
           {sede}
-          <svg class="w-5 h-5 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="w-5 h-5 text-brand-immune" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
           </svg>
         </a>

@@ -4,7 +4,10 @@ interface Props {
   description?: string;
 }
 
-const { title, description = 'Dr. Liber Acosta - Especialista en Alergia e Inmunología. Sistema de Transformación 360™. Recupera tu calidad de vida controlando tu alergia desde la raíz.' } = Astro.props;
+const {
+  title,
+  description = 'Dr. Liber Acosta — Precisión científica para tu bienestar diario. Asma, alergia e inmunología. Respirar no debería ser un esfuerzo.',
+} = Astro.props;
 ---
 <!DOCTYPE html>
 <html lang="es">
@@ -16,12 +19,12 @@ const { title, description = 'Dr. Liber Acosta - Especialista en Alergia e Inmun
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=Outfit:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <title>{title}</title>
   </head>
-  <body class="font-sans antialiased text-slate-800 bg-white">
+  <body class="font-sans antialiased text-brand-technical bg-white">
     <slot />
   </body>
 </html>

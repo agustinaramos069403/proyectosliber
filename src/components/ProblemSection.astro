@@ -19,21 +19,21 @@ const pains = [
 ---
 <section class="py-16 lg:py-24 bg-white">
   <div class="max-w-6xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-slate-900 text-center mb-12">
+    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority text-center mb-12">
       Lo que muchos pacientes viven durante años
     </h2>
     <div class="grid md:grid-cols-3 gap-8 mb-12">
       {pains.map((pain) => (
-        <div class="text-center p-6 rounded-2xl bg-slate-50 border border-slate-100">
+        <div class="text-center p-6 rounded-2xl bg-brand-breath border border-brand-authority/10">
           <span class="text-4xl mb-4 block">{pain.icon}</span>
-          <h4 class="font-display font-semibold text-xl text-slate-900 mb-2">
+          <h4 class="font-display font-semibold text-xl text-brand-authority mb-2">
             {pain.title}
           </h4>
-          <p class="text-slate-600 text-lg">{pain.description}</p>
+          <p class="text-brand-technical/85 text-lg">{pain.description}</p>
         </div>
       ))}
     </div>
-    <p class="text-xl font-bold text-slate-900 text-center">
+    <p class="text-xl font-semibold text-brand-authority text-center">
       El problema no es el síntoma.<br />
       El problema es no conocer la causa.
     </p>

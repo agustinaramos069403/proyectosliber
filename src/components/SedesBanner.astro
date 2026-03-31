@@ -1,0 +1,22 @@
+---
+const items = [
+  { city: 'Corrientes', place: 'Clínica del Pilar' },
+  { city: 'Resistencia', place: 'IMMI' },
+  { city: 'Sáenz Peña', place: 'Clínica Santa María' },
+  { city: 'Formosa', place: 'Instituto de Gastroenterología' },
+];
+const line = items
+  .map((item) => `${item.city} — ${item.place}`)
+  .join('  ·  ');
+---
+<div
+  class="border-y border-brand-authority/15 bg-white/80 backdrop-blur-sm"
+  aria-label="Sedes de atención"
+>
+  <div class="max-w-6xl mx-auto px-4 py-3 sm:py-3.5">
+    <p class="text-xs sm:text-sm text-brand-technical text-center leading-snug sm:leading-relaxed">
+      <span class="font-semibold text-brand-authority">Sedes: </span>
+      <span class="font-medium">{line}</span>
+    </p>
+  </div>
+</div>

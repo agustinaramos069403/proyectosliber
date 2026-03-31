@@ -17,19 +17,19 @@ const avatars = [
   },
 ];
 ---
-<section class="py-16 lg:py-24 bg-slate-50">
+<section class="py-16 lg:py-24 bg-brand-breath">
   <div class="max-w-6xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-bold text-slate-900 text-center mb-12">
+    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority text-center mb-12">
       Este enfoque es para vos si:
     </h2>
     <div class="grid md:grid-cols-3 gap-8">
       {avatars.map((avatar) => (
-        <div class="p-8 rounded-2xl bg-white shadow-md border border-slate-100 hover:shadow-lg transition-shadow">
+        <div class="p-8 rounded-2xl bg-white shadow-md border border-brand-authority/10 hover:border-brand-authority/25 transition-shadow">
           <span class="text-5xl mb-4 block">{avatar.icon}</span>
-          <h3 class="font-display font-semibold text-xl text-slate-900 mb-3">
+          <h3 class="font-display font-semibold text-xl text-brand-authority mb-3">
             {avatar.title}
           </h3>
-          <p class="text-slate-600 leading-relaxed text-lg">{avatar.description}</p>
+          <p class="text-brand-technical/85 leading-relaxed text-lg">{avatar.description}</p>
         </div>
       ))}
     </div>

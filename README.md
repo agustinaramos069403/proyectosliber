@@ -16,7 +16,7 @@ Edita `src/config.ts` y reemplaza `WHATSAPP_NUMBER` con el número real (formato
 
 ### Foto del Dr. Liber
 
-Coloca la foto principal en `public/dr-liber-acosta.jpg`. Si no existe, se mostrará un placeholder automáticamente.
+La foto principal está en `public/dr-liber-acosta.png`.
 
 ## Desarrollo
 

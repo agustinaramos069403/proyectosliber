@@ -18,19 +18,11 @@ const faqs = [
   },
   {
     question: '¿Es un tratamiento seguro para niños?',
-    answer: 'Es el camino más seguro. Evitar la progresión de la rinitis al asma es el mayor acto de medicina preventiva que podemos ofrecer a un hijo.',
-  },
-  {
-    question: '¿Atiende niños?',
-    answer: 'Sí.',
+    answer: 'Sí, atendemos niños y adultos. Es un enfoque seguro; evitar la progresión de la rinitis al asma es un acto de medicina preventiva muy importante en la infancia.',
   },
   {
     question: '¿Necesito estudios previos?',
     answer: 'No.',
-  },
-  {
-    question: '¿Acepta obras sociales?',
-    answer: 'Sí / consultar',
   },
   {
     question: '¿Cuánto dura la consulta?',
@@ -40,21 +32,21 @@ const faqs = [
 ---
 <section class="py-16 lg:py-24 bg-white">
   <div class="max-w-3xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 text-center mb-12">
+    <h2 class="font-display text-2xl sm:text-3xl font-semibold text-brand-authority text-center mb-12">
       Preguntas frecuentes
     </h2>
     <div class="space-y-4">
       {faqs.map((faq) => (
-        <details class="group rounded-xl border border-slate-200 overflow-hidden">
-          <summary class="flex items-center justify-between gap-4 px-6 py-4 cursor-pointer list-none font-medium text-slate-800 hover:bg-slate-50 transition-colors">
+        <details class="group rounded-xl border border-brand-authority/10 overflow-hidden bg-white">
+          <summary class="flex items-center justify-between gap-4 px-6 py-4 cursor-pointer list-none font-medium text-brand-technical hover:bg-brand-breath transition-colors">
             {faq.question}
-            <span class="text-teal-500 group-open:rotate-180 transition-transform">
+            <span class="text-brand-authority group-open:rotate-180 transition-transform">
               <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
               </svg>
             </span>
           </summary>
-          <div class="px-6 pb-4 pt-0 text-slate-600 text-lg">
+          <div class="px-6 pb-4 pt-0 text-brand-technical/85 text-lg">
             {faq.answer}
           </div>
         </details>

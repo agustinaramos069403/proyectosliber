@@ -1,3 +1,8 @@
 [build]
   command = "npm run build"
   publish = "dist"
+
+# WhatsApp Cloud API (Meta) webhook URL after deploy:
+# https://YOUR_SITE.netlify.app/.netlify/functions/meta-whatsapp-webhook
+[functions]
+  directory = "netlify/functions"

@@ -3,19 +3,19 @@ const locations = [
   { city: 'Corrientes', place: 'Clínica del Pilar' },
   { city: 'Resistencia', place: 'IMMI' },
   { city: 'Sáenz Peña', place: 'Clínica Santa María' },
-  { city: 'Formosa', place: 'Inst. de Gastroenterología' },
+  { city: 'Formosa', place: 'Instituto de Gastroenterología' },
 ];
 ---
-<section class="py-16 lg:py-24 bg-slate-50">
+<section id="sedes" class="py-10 lg:py-12 bg-brand-breath" aria-labelledby="sedes-heading">
   <div class="max-w-6xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl font-bold text-slate-900 text-center mb-10">
-      Sedes
+    <h2 id="sedes-heading" class="font-display text-lg sm:text-xl font-semibold text-brand-authority text-center mb-6">
+      Consultorios
     </h2>
-    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
       {locations.map((loc) => (
-        <div class="p-4 rounded-xl bg-white border border-slate-100 text-center">
-          <p class="font-semibold text-slate-900">{loc.city}</p>
-          <p class="text-base text-slate-600">{loc.place}</p>
+        <div class="p-3 sm:p-4 rounded-xl bg-white border border-brand-authority/10 text-center">
+          <p class="font-semibold text-brand-authority text-sm sm:text-base">{loc.city}</p>
+          <p class="text-sm text-brand-technical/80">{loc.place}</p>
         </div>
       ))}
     </div>

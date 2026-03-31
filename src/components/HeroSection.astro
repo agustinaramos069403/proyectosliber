@@ -4,30 +4,33 @@ import WhatsAppButton from './WhatsAppButton.astro';
 <section class="relative min-h-[100dvh] flex flex-col lg:flex-row lg:min-h-0 lg:pt-0 lg:pb-16 overflow-hidden">
   <div class="flex-1 flex flex-col justify-center items-center lg:items-start px-5 py-8 sm:py-12 lg:pt-0 lg:pb-16 lg:px-12 xl:px-20 order-2 lg:order-1 lg:-mt-16">
     <div class="w-full max-w-2xl flex flex-col justify-center">
-      <p class="text-sm sm:text-base font-medium text-teal-600 uppercase tracking-wider mb-2 sm:mb-4">
-        Corrientes · Resistencia · Formosa · Sáenz Peña
+      <p class="font-display font-light text-brand-immune text-sm sm:text-base mb-3 sm:mb-5">
+        Precisión científica para tu bienestar diario.
       </p>
-      <h1 class="font-display text-2xl sm:text-4xl lg:text-5xl xl:text-6xl font-bold text-slate-900 leading-tight mb-3 sm:mb-6">
+      <h1 class="font-display text-2xl sm:text-4xl lg:text-5xl xl:text-6xl font-semibold text-brand-authority leading-tight mb-3 sm:mb-6">
         Recupera tu calidad de vida controlando tu alergia desde la raíz.
       </h1>
-      <p class="text-lg sm:text-xl text-slate-600 max-w-2xl mb-6 sm:mb-8 leading-relaxed">
-        Más de 20 años ayudando a niños y adultos en el NEA a vivir sin síntomas, con un enfoque integral que conecta nariz, pulmón y piel.
+      <p class="text-lg sm:text-xl text-brand-technical/85 max-w-2xl mb-6 sm:mb-8 leading-relaxed font-normal">
+        Más de 20 años ayudando a niños y adultos en el NEA a vivir sin síntomas, con un enfoque médico integral.
       </p>
       <div>
         <WhatsAppButton>Quiero agendar mi consulta</WhatsAppButton>
       </div>
     </div>
   </div>
-  <div class="flex-1 lg:max-w-[45%] order-1 lg:order-2 flex items-center justify-center lg:justify-end shrink-0 bg-teal-600/5 lg:bg-transparent rounded-2xl lg:rounded-none mx-4 sm:mx-6 lg:mx-0 mb-6 lg:mb-0">
-    <div class="relative w-full aspect-square max-w-[220px] sm:max-w-[320px] lg:max-w-none lg:aspect-[4/5] overflow-hidden rounded-2xl shadow-xl">
+  <div class="flex-1 lg:max-w-[45%] order-1 lg:order-2 flex items-center justify-center lg:justify-end shrink-0 bg-brand-breath lg:bg-transparent rounded-2xl lg:rounded-none mx-4 sm:mx-6 lg:mx-0 mb-6 lg:mb-0 border border-brand-clinical/20 lg:border-0">
+    <div class="relative w-full aspect-square max-w-[220px] sm:max-w-[320px] lg:max-w-none lg:aspect-[4/5] overflow-hidden rounded-2xl shadow-xl ring-1 ring-brand-authority/10">
       <img
-        src="/dr-liber-acosta.jpg"
-        alt="Dr. Liber Acosta - Especialista en Alergia e Inmunología"
-        onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?w=600&h=750&fit=crop'"
-        class="object-cover w-full h-full"
+        src="/dr-liber-acosta.png"
+        alt="Dr. Liber Acosta - Especialista en Asma, Alergia e Inmunología"
+        class="object-cover w-full h-full relative z-0"
         width="600"
         height="750"
         fetchpriority="high"
+      />
+      <div
+        class="pointer-events-none absolute inset-0 z-10 rounded-2xl bg-gradient-to-t from-brand-breath via-brand-breath/20 to-transparent sm:from-brand-breath/80"
+        aria-hidden="true"
       />
     </div>
   </div>
