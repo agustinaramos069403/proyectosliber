@@ -9,20 +9,21 @@ const milestones = [
 <section class="py-16 lg:py-24 bg-white">
   <div class="max-w-6xl mx-auto px-6">
     <div class="flex flex-col lg:flex-row gap-12 items-center">
-      <div class="lg:w-1/3 flex justify-center">
+      <div class="lg:w-1/3 flex justify-center w-full">
         <img
-          src="/dr-liber-acosta.png"
-          alt="Dr. Liber Acosta"
-          class="w-64 h-64 object-cover rounded-2xl shadow-xl"
-          width="256"
-          height="256"
+          src="/dr-liber-authority.png"
+          alt="Dr. Liber Acosta en consultorio"
+          class="w-full max-w-[280px] sm:max-w-[320px] aspect-[3/4] object-cover object-center rounded-2xl shadow-line"
+          width="640"
+          height="853"
+          loading="lazy"
         />
       </div>
       <div class="lg:w-2/3">
         <h2 class="font-display text-2xl sm:text-3xl font-semibold text-brand-authority mb-2">
           Dr. Liber Acosta
         </h2>
-        <p class="text-brand-immune font-medium mb-1">
+        <p class="text-brand-authority font-medium mb-1">
           Especialista en Asma, Alergia e Inmunología
         </p>
         <p class="text-brand-technical/80 mb-4 text-lg">
@@ -34,7 +35,7 @@ const milestones = [
         <ul class="space-y-3">
           {milestones.map((milestone) => (
             <li class="flex items-start gap-3">
-              <svg class="w-5 h-5 text-brand-immune shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+              <svg class="w-5 h-5 text-brand-authority shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
                 <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
               </svg>
               <span class="text-brand-technical text-lg">{milestone}</span>
