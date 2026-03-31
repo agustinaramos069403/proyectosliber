@@ -7,13 +7,25 @@ import WhatsAppButton from './WhatsAppButton.astro';
   class="hero-offset-under-header hero-with-bottom-air scroll-mt-24 relative flex flex-col justify-center overflow-hidden hero-height"
   aria-labelledby="hero-heading"
 >
+  <div class="hero-scene" aria-hidden="true">
+    <img
+      src="/audience-adult.png"
+      alt=""
+      class="hero-scene__image"
+      loading="eager"
+      fetchpriority="high"
+      decoding="async"
+    />
+  </div>
   <div class="hero-wash-grey" aria-hidden="true"></div>
   <div class="hero-wash-navy" aria-hidden="true"></div>
   <div class="hero-wash-gradient" aria-hidden="true"></div>
   <div class="relative z-10 mx-auto w-full max-w-6xl px-5 py-14 sm:py-16 lg:px-12 xl:px-16">
-    <div class="grid items-center gap-10 lg:grid-cols-[1.15fr_0.85fr]">
-      <div class="max-w-2xl hero-content" style="
-    margin-top: 48%;">
+    <div class="hero-unified-card" style="
+    margin-top: 39%;
+">
+      <div class="grid items-center gap-8 lg:grid-cols-[1.15fr_0.85fr]">
+      <div class="hero-content">
         <p
           class="hero-text-glow font-display mb-3 text-sm font-light tracking-wide text-brand-breath sm:mb-5 sm:text-base"
         >
@@ -37,9 +49,7 @@ import WhatsAppButton from './WhatsAppButton.astro';
       </div>
 
       <div class="hidden lg:block">
-        <div class="hero-portrait-frame" style="
-    margin-top: 108%;
-">
+        <div class="hero-portrait-slot">
           <img
             src="/dr-liber-acosta-1920.png"
             srcset="/dr-liber-acosta-1920.png 1920w, /dr-liber-acosta-2880.png 2880w"
@@ -54,6 +64,7 @@ import WhatsAppButton from './WhatsAppButton.astro';
           />
         </div>
       </div>
+    </div>
     </div>
   </div>
 </section>
