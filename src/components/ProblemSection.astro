@@ -1,19 +1,22 @@
 ---
-const pains = [
+const PAINS = [
   {
     title: 'Automedicación',
     description: 'Alivio pasajero que oculta el problema real.',
-    icon: '💊',
+    iconKey: 'medication',
+    accentClass: 'from-emerald-500/12 via-emerald-500/0 to-transparent',
   },
   {
     title: 'Impacto Familiar',
     description: 'Noches sin dormir o niños que no pueden jugar por el asma o alergia.',
-    icon: '👨‍👩‍👧‍👦',
+    iconKey: 'family',
+    accentClass: 'from-sky-500/12 via-sky-500/0 to-transparent',
   },
   {
     title: 'El Laberinto Médico',
     description: 'Ir de especialista en especialista sin una respuesta clara ni un tratamiento que resuelva el problema.',
-    icon: '🔄',
+    iconKey: 'maze',
+    accentClass: 'from-indigo-500/12 via-indigo-500/0 to-transparent',
   },
 ];
 ---
@@ -23,13 +26,70 @@ const pains = [
       Lo que muchos pacientes viven durante años
     </h2>
     <div class="grid md:grid-cols-3 gap-8 mb-12">
-      {pains.map((pain) => (
-        <div class="text-center p-6 rounded-2xl bg-brand-breath border border-brand-authority/10">
-          <span class="text-4xl mb-4 block">{pain.icon}</span>
+      {PAINS.map((Pain) => (
+        <div class="relative overflow-hidden text-center p-6 rounded-2xl bg-brand-breath border border-brand-authority/10 shadow-sm">
+          <div class={`pointer-events-none absolute inset-0 bg-gradient-to-br ${Pain.accentClass}`} aria-hidden="true"></div>
+          <div class="relative mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-white/70 ring-1 ring-brand-authority/10 backdrop-blur">
+            {Pain.iconKey === 'medication' && (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                class="h-7 w-7 text-emerald-700"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M10.5 13.5 6 18a3.5 3.5 0 0 1-5-5l4.5-4.5" />
+                <path d="M13.5 10.5 18 6a3.5 3.5 0 0 1 5 5l-4.5 4.5" />
+                <path d="M8.5 8.5 15.5 15.5" />
+              </svg>
+            )}
+            {Pain.iconKey === 'family' && (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                class="h-7 w-7 text-sky-700"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M16 11a3 3 0 1 0-6 0" />
+                <path d="M8 14a4 4 0 0 0-4 4v2h8v-2a4 4 0 0 0-4-4Z" />
+                <path d="M16 14a4 4 0 0 1 4 4v2h-8v-2a4 4 0 0 1 4-4Z" />
+                <path d="M12 7a2.5 2.5 0 1 0-5 0" />
+                <path d="M17 7a2.5 2.5 0 1 0-5 0" />
+              </svg>
+            )}
+            {Pain.iconKey === 'maze' && (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                class="h-7 w-7 text-indigo-700"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M4 4h6v6H4z" />
+                <path d="M14 4h6v6h-6z" />
+                <path d="M4 14h6v6H4z" />
+                <path d="M14 14h6v6h-6z" />
+                <path d="M10 7h4" />
+                <path d="M7 10v4" />
+                <path d="M14 17h-4" />
+                <path d="M17 14v-4" />
+              </svg>
+            )}
+          </div>
           <h4 class="font-display font-semibold text-xl text-brand-authority mb-2">
-            {pain.title}
+            {Pain.title}
           </h4>
-          <p class="text-brand-technical/85 text-lg">{pain.description}</p>
+          <p class="text-brand-technical/85 text-lg">{Pain.description}</p>
         </div>
       ))}
     </div>

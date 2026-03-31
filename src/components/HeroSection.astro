@@ -3,38 +3,57 @@ import WhatsAppButton from './WhatsAppButton.astro';
 ---
 <section
   id="top"
-  class="scroll-mt-16 relative min-h-[100dvh] flex flex-col lg:flex-row lg:min-h-0 lg:pt-0 lg:pb-16 overflow-hidden"
+  data-hero="wash-css"
+  class="hero-offset-under-header hero-with-bottom-air scroll-mt-24 relative flex flex-col justify-center overflow-hidden hero-height"
+  aria-labelledby="hero-heading"
 >
-  <div class="flex-1 flex flex-col justify-center items-center lg:items-start px-5 py-8 sm:py-12 lg:pt-0 lg:pb-16 lg:px-12 xl:px-20 order-2 lg:order-1 lg:-mt-16">
-    <div class="w-full max-w-2xl flex flex-col justify-center">
-      <p class="font-display font-light text-brand-authority text-sm sm:text-base mb-3 sm:mb-5 tracking-wide">
-        Precisión científica para tu bienestar diario.
-      </p>
-      <h1 class="font-display text-2xl sm:text-4xl lg:text-5xl xl:text-6xl font-semibold text-brand-authority leading-tight mb-3 sm:mb-6">
-        Recupera tu calidad de vida controlando tu alergia desde la raíz.
-      </h1>
-      <p class="text-lg sm:text-xl text-brand-technical/85 max-w-2xl mb-6 sm:mb-8 leading-relaxed font-normal">
-        Más de 20 años ayudando a niños y adultos en el NEA a vivir sin síntomas, con un enfoque médico integral.
-      </p>
-      <div>
-        <WhatsAppButton>Quiero agendar mi consulta</WhatsAppButton>
+  <div class="hero-wash-grey" aria-hidden="true"></div>
+  <div class="hero-wash-navy" aria-hidden="true"></div>
+  <div class="hero-wash-gradient" aria-hidden="true"></div>
+  <div class="relative z-10 mx-auto w-full max-w-6xl px-5 py-14 sm:py-16 lg:px-12 xl:px-16">
+    <div class="grid items-center gap-10 lg:grid-cols-[1.15fr_0.85fr]">
+      <div class="max-w-2xl hero-content" style="
+    margin-top: 48%;">
+        <p
+          class="hero-text-glow font-display mb-3 text-sm font-light tracking-wide text-brand-breath sm:mb-5 sm:text-base"
+        >
+          Precisión científica para tu bienestar diario.
+        </p>
+        <h1
+          id="hero-heading"
+          class="hero-text-glow font-display mb-3 text-2xl font-semibold leading-tight text-white sm:mb-6 sm:text-4xl lg:text-5xl xl:text-6xl"
+        >
+          Recupera tu calidad de vida controlando tu alergia desde la raíz.
+        </h1>
+        <p
+          class="hero-text-glow mb-6 max-w-2xl text-lg font-normal leading-relaxed text-white sm:mb-8 sm:text-xl"
+        >
+          Más de 20 años ayudando a niños y adultos en el NEA a vivir sin síntomas, con un enfoque médico
+          integral.
+        </p>
+        <div>
+          <WhatsAppButton>Quiero agendar mi consulta</WhatsAppButton>
+        </div>
       </div>
-    </div>
-  </div>
-  <div class="flex-1 lg:max-w-[45%] order-1 lg:order-2 flex items-center justify-center lg:justify-end shrink-0 bg-brand-breath lg:bg-transparent rounded-2xl lg:rounded-none mx-4 sm:mx-6 lg:mx-0 mb-6 lg:mb-0 border border-brand-clinical/20 lg:border-0">
-    <div class="relative w-full aspect-square max-w-[220px] sm:max-w-[320px] lg:max-w-none lg:aspect-[4/5] overflow-hidden rounded-2xl shadow-xl ring-1 ring-brand-authority/10">
-      <img
-        src="/dr-liber-acosta.png"
-        alt="Dr. Liber Acosta - Especialista en Asma, Alergia e Inmunología"
-        class="object-cover w-full h-full relative z-0"
-        width="600"
-        height="750"
-        fetchpriority="high"
-      />
-      <div
-        class="pointer-events-none absolute inset-0 z-10 rounded-2xl bg-gradient-to-t from-brand-breath via-brand-breath/20 to-transparent sm:from-brand-breath/80"
-        aria-hidden="true"
-      />
+
+      <div class="hidden lg:block">
+        <div class="hero-portrait-frame" style="
+    margin-top: 108%;
+">
+          <img
+            src="/dr-liber-acosta-1920.png"
+            srcset="/dr-liber-acosta-1920.png 1920w, /dr-liber-acosta-2880.png 2880w"
+            alt="Foto del doctor"
+            sizes="(min-width: 1024px) 420px, 0px"
+            class="hero-portrait"
+            width="1920"
+            height="2400"
+            loading="eager"
+            fetchpriority="high"
+            decoding="async"
+          />
+        </div>
+      </div>
     </div>
   </div>
 </section>

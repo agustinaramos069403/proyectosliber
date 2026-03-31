@@ -2,6 +2,16 @@
   command = "npm run build"
   publish = "dist"
 
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
 # WhatsApp Cloud API (Meta) webhook URL after deploy:
 # https://YOUR_SITE.netlify.app/.netlify/functions/meta-whatsapp-webhook
 [functions]

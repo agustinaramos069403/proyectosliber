@@ -1,5 +1,5 @@
 ---
-const locations = [
+const LOCATIONS = [
   { city: 'Corrientes', place: 'Clínica del Pilar' },
   { city: 'Resistencia', place: 'IMMI' },
   { city: 'Sáenz Peña', place: 'Clínica Santa María' },
@@ -12,10 +12,25 @@ const locations = [
       Consultorios
     </h2>
     <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-      {locations.map((loc) => (
+      {LOCATIONS.map((Location) => (
         <div class="p-3 sm:p-4 rounded-xl bg-white border border-brand-authority/10 text-center">
-          <p class="font-semibold text-brand-authority text-sm sm:text-base">{loc.city}</p>
-          <p class="text-sm text-brand-technical/80">{loc.place}</p>
+          <p class="inline-flex items-center justify-center gap-2 font-semibold text-brand-authority text-sm sm:text-base">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              class="h-4 w-4 text-brand-authority/80"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11Z" />
+              <circle cx="12" cy="10" r="2.5" />
+            </svg>
+            <span>{Location.city}</span>
+          </p>
+          <p class="text-sm text-brand-technical/80">{Location.place}</p>
         </div>
       ))}
     </div>
