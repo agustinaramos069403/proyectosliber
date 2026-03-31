@@ -1,6 +1,7 @@
 ---
 import BaseLayout from '../layouts/BaseLayout.astro';
 import '../styles/global.css';
+import SiteHeader from '../components/SiteHeader.astro';
 import HeroSection from '../components/HeroSection.astro';
 import EmpathySection from '../components/EmpathySection.astro';
 import ProblemSection from '../components/ProblemSection.astro';
@@ -19,6 +20,7 @@ import SedeModal from '../components/SedeModal.astro';
   title="Dr. Liber Acosta | Precisión científica para tu bienestar diario"
   description="Respirar no debería ser un esfuerzo. Dr. Liber Acosta — asma, alergia e inmunología. Más de 20 años en el NEA. Corrientes, Resistencia, Formosa, Sáenz Peña."
 >
+  <SiteHeader />
   <main>
     <HeroSection />
     <SedesSection />
