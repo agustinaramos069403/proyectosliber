@@ -119,6 +119,25 @@ function buildLinkMessage(entry) {
   ].join('\n');
 }
 
+/**
+ * WhatsApp webhooks often send Argentine mobiles as 549 + area(3) + subscriber(7).
+ * Meta's API / allow-list for the same line may expect 54 + area + "15" + subscriber
+ * (equivalent to +54 9 … in the UI). Only rewrite when this exact 13-digit pattern matches.
+ */
+function normalizeRecipientDigitsForMetaGraphApi(recipientDigits) {
+  if (typeof recipientDigits !== 'string' || recipientDigits.length === 0) {
+    return recipientDigits;
+  }
+  const trimmed = recipientDigits.trim();
+  const matchArgentinaWebhookFormat = trimmed.match(/^549(\d{3})(\d{7})$/);
+  if (matchArgentinaWebhookFormat) {
+    const areaCodeDigits = matchArgentinaWebhookFormat[1];
+    const subscriberDigits = matchArgentinaWebhookFormat[2];
+    return `54${areaCodeDigits}15${subscriberDigits}`;
+  }
+  return trimmed;
+}
+
 async function sendWhatsAppText(toPhoneId, body) {
   const token =
     typeof process.env.WHATSAPP_ACCESS_TOKEN === 'string'
@@ -146,6 +165,17 @@ async function sendWhatsAppText(toPhoneId, body) {
     );
     return;
   }
+  const rawRecipientDigits =
+    typeof toPhoneId === 'string' ? toPhoneId.trim() : '';
+  const recipientDigitsForGraph = normalizeRecipientDigitsForMetaGraphApi(rawRecipientDigits);
+  if (recipientDigitsForGraph !== rawRecipientDigits) {
+    console.info(
+      'meta-whatsapp-webhook: normalized recipient for Graph API',
+      rawRecipientDigits,
+      '->',
+      recipientDigitsForGraph
+    );
+  }
   console.info('meta-whatsapp-webhook: Graph API auth', describeAccessTokenForLogs(token));
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
   const response = await fetch(url, {
@@ -156,28 +186,30 @@ async function sendWhatsAppText(toPhoneId, body) {
     },
     body: JSON.stringify({
       messaging_product: 'whatsapp',
-      to: toPhoneId,
+      to: recipientDigitsForGraph,
       type: 'text',
       text: { preview_url: true, body },
     }),
   });
   if (!response.ok) {
     const errText = await response.text();
-    const recipientLength = typeof toPhoneId === 'string' ? toPhoneId.length : 0;
+    const recipientLength = rawRecipientDigits.length;
     console.error(
       'Meta API error',
       response.status,
       errText,
       'tokenForLogs=',
       describeAccessTokenForLogs(token),
-      'graphRecipientDigits=',
-      toPhoneId,
+      'graphRecipientFromWebhook=',
+      rawRecipientDigits,
+      'graphRecipientSentToMeta=',
+      recipientDigitsForGraph,
       'graphRecipientLength=',
       recipientLength
     );
     if (String(errText).includes('131030')) {
       console.error(
-        'meta-whatsapp-webhook: 131030 — Meta allow-list must include the exact digits we send in "to" (graphRecipientDigits). Argentina: webhook often uses 549… (9 after country 54); Meta UI sometimes shows +54 9 379… Add that same international form in API setup recipients.'
+        'meta-whatsapp-webhook: 131030 — allow-list must match graphRecipientSentToMeta. For AR 549+3+7 webhook format we rewrite to 54+area+15+subscriber (Meta console style).'
       );
     }
   }
