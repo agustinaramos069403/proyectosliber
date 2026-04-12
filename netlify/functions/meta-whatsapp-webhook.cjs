@@ -218,6 +218,12 @@ exports.handler = async (event) => {
       rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
     }
     const payload = JSON.parse(rawBody || '{}');
+    console.log(
+      'meta-whatsapp-webhook: POST inbound object=',
+      payload.object,
+      'entryCount=',
+      Array.isArray(payload.entry) ? payload.entry.length : 0
+    );
     let processedTextMessageCount = 0;
     const entries = payload.entry || [];
     for (const ent of entries) {
@@ -241,10 +247,15 @@ exports.handler = async (event) => {
     }
     if (processedTextMessageCount === 0) {
       console.log(
-        'meta-whatsapp-webhook: POST received but no text messages handled. object=',
+        'meta-whatsapp-webhook: POST had no handled text messages (only statuses/templates/etc.?). object=',
         payload.object,
         'entryCount=',
         entries.length
+      );
+    } else {
+      console.log(
+        'meta-whatsapp-webhook: handled incoming text message(s) count=',
+        processedTextMessageCount
       );
     }
   } catch (error) {
