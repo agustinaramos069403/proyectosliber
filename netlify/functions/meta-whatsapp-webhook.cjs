@@ -163,13 +163,23 @@ async function sendWhatsAppText(toPhoneId, body) {
   });
   if (!response.ok) {
     const errText = await response.text();
+    const recipientLength = typeof toPhoneId === 'string' ? toPhoneId.length : 0;
     console.error(
       'Meta API error',
       response.status,
       errText,
       'tokenForLogs=',
-      describeAccessTokenForLogs(token)
+      describeAccessTokenForLogs(token),
+      'graphRecipientDigits=',
+      toPhoneId,
+      'graphRecipientLength=',
+      recipientLength
     );
+    if (String(errText).includes('131030')) {
+      console.error(
+        'meta-whatsapp-webhook: 131030 — Meta allow-list must include the exact digits we send in "to" (graphRecipientDigits). Argentina: webhook often uses 549… (9 after country 54); Meta UI sometimes shows +54 9 379… Add that same international form in API setup recipients.'
+      );
+    }
   }
 }
 
