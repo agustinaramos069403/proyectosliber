@@ -1,127 +1,83 @@
 ---
-const AUDIENCE_CARDS = [
+const AUDIENCES = [
   {
+    image: '/images/child-allergy.jpg',
     title: 'Tu hijo vive con síntomas respiratorios o alergias',
-    description: 'Tos persistente, mocos constantes, crisis asmáticas o dificultad para dormir y jugar con normalidad.',
-    mediaKey: 'child',
-    accentClass: 'from-rose-500/14 via-rose-500/0 to-transparent',
+    description:
+      'Tos persistente, mocos constantes, crisis asmáticas o dificultad para dormir y jugar con normalidad.',
+    accentClass: 'bg-brand-immune',
   },
   {
+    image: '/images/asma-alergia.jpg',
     title: 'Convivís con alergia o tenés diagnóstico de asma',
-    description: 'Congestión, estornudos, falta de aire, silbidos en el pecho o cansancio que afecta tu trabajo, estudio o descanso.',
-    mediaKey: 'adult',
-    accentClass: 'from-sky-500/14 via-sky-500/0 to-transparent',
+    description:
+      'Congestión, estornudos, falta de aire, silbidos en el pecho o cansancio que afecta tu trabajo, estudio o descanso.',
+    accentClass: 'bg-brand-clinical',
   },
   {
+    image: '/images/multiple-treatments.jpg',
     title: 'Ya probaste distintos tratamientos y el problema sigue',
     description: 'Pasaste por especialistas o medicación, pero los síntomas vuelven o no terminan de resolverse.',
-    mediaKey: 'loop',
-    accentClass: 'from-indigo-500/14 via-indigo-500/0 to-transparent',
+    accentClass: 'bg-brand-authority',
   },
 ];
 ---
-<section class="py-16 lg:py-24 bg-brand-breath">
-  <div class="max-w-6xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority text-center mb-12">
-      Este enfoque es para vos si:
-    </h2>
-    <div class="grid md:grid-cols-3 gap-8">
-      {AUDIENCE_CARDS.map((AudienceCard) => (
-        <div class="group overflow-hidden rounded-2xl bg-white shadow-md border border-brand-authority/10 hover:border-brand-authority/25 transition-shadow">
-          <div class="relative h-44 sm:h-48">
-            {AudienceCard.mediaKey === 'child' && (
-              <img
-                src="/audience-child.png"
-                alt=""
-                class="absolute inset-0 h-full w-full object-cover object-[50%_35%]"
-                loading="lazy"
-                decoding="async"
-              />
-            )}
-            {AudienceCard.mediaKey === 'adult' && (
-              <img
-                src="/audience-adult.png"
-                alt=""
-                class="absolute inset-0 h-full w-full object-cover object-[50%_35%]"
-                loading="lazy"
-                decoding="async"
-              />
-            )}
-            {AudienceCard.mediaKey === 'loop' && (
-              <img
-                src="/audience-treatment.png"
-                alt=""
-                class="absolute inset-0 h-full w-full object-cover object-[50%_55%]"
-                loading="lazy"
-                decoding="async"
-              />
-            )}
-            <div class={`absolute inset-0 bg-gradient-to-br ${AudienceCard.accentClass}`} aria-hidden="true"></div>
-            <div class="absolute inset-0 opacity-[0.07] bg-[radial-gradient(circle_at_10%_20%,rgba(0,51,85,1),transparent_55%),radial-gradient(circle_at_90%_10%,rgba(42,59,71,1),transparent_40%)]" aria-hidden="true"></div>
-            <div class="relative flex h-full items-end p-5">
-              {!['child', 'adult', 'loop'].includes(AudienceCard.mediaKey) && (
-                <div class="grid h-12 w-12 place-items-center rounded-2xl bg-white/80 ring-1 ring-brand-authority/10 backdrop-blur">
-                {AudienceCard.mediaKey === 'child' && (
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    class="h-6 w-6 text-rose-700"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M12 12a4 4 0 1 0-4-4" />
-                    <path d="M8 12a6 6 0 0 0-6 6v2h10" />
-                    <path d="M16 10a3 3 0 1 0-3-3" />
-                    <path d="M22 20v-2a5 5 0 0 0-5-5" />
-                  </svg>
-                )}
-                {AudienceCard.mediaKey === 'adult' && (
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    class="h-6 w-6 text-sky-700"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M12 12a4 4 0 1 0-4-4" />
-                    <path d="M4 22v-2a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v2" />
-                    <path d="M8 9h8" />
-                  </svg>
-                )}
-                {AudienceCard.mediaKey === 'loop' && (
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    class="h-6 w-6 text-indigo-700"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M3 12a9 9 0 0 1 15-6l2-2v6h-6l2-2A7 7 0 0 0 5 12" />
-                    <path d="M21 12a9 9 0 0 1-15 6l-2 2v-6h6l-2 2a7 7 0 0 0 11-4" />
-                  </svg>
-                )}
-                </div>
-              )}
+<section class="py-12 sm:py-16 lg:py-28 bg-background" aria-labelledby="target-audience-heading">
+  <div class="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div class="mb-16 text-center">
+      <h2
+        id="target-audience-heading"
+        class="font-sans text-3xl sm:text-4xl lg:text-5xl font-medium text-foreground text-balance"
+      >
+        Este enfoque es para vos si:
+      </h2>
+    </div>
+
+    <div class="grid gap-8 md:grid-cols-3">
+      {AUDIENCES.map((audience) => (
+        <article class="group overflow-hidden rounded-2xl border border-border bg-card shadow-sm transition-all duration-300 hover:border-brand-clinical/30 hover:shadow-xl">
+          <div class="relative h-56 overflow-hidden">
+            <img
+              src={audience.image}
+              alt={audience.title}
+              class="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+              width="640"
+              height="360"
+              loading="lazy"
+              decoding="async"
+            />
+            <div class="absolute inset-0 bg-gradient-to-t from-brand-authority/20 to-transparent" aria-hidden="true">
+            </div>
+            <div class={`absolute bottom-0 left-0 right-0 h-1 ${audience.accentClass}`} aria-hidden="true"></div>
+          </div>
+          <div class="p-6">
+            <h3 class="font-sans text-lg font-semibold text-foreground mb-3 leading-snug">{audience.title}</h3>
+            <p class="font-serif text-sm text-muted-foreground leading-relaxed">{audience.description}</p>
+          </div>
+          <div class="px-6 pb-6">
+            <div
+              class="flex items-center gap-2 text-brand-immune opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+            >
+              <span class="font-serif text-sm font-medium">Podemos ayudarte</span>
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+              </svg>
             </div>
           </div>
-
-          <div class="p-7">
-            <h3 class="font-display font-semibold text-xl text-brand-authority mb-3">
-              {AudienceCard.title}
-            </h3>
-            <p class="text-brand-technical/85 leading-relaxed text-lg">{AudienceCard.description}</p>
-          </div>
-        </div>
+        </article>
       ))}
+    </div>
+
+    <div class="mt-8 sm:mt-10 lg:mt-12 text-center">
+      <a
+        href="#contacto"
+        class="inline-flex items-center gap-2 rounded-full bg-brand-authority px-8 py-4 font-sans font-medium text-white transition-colors hover:bg-brand-authority/90"
+      >
+        Quiero una consulta
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3" />
+        </svg>
+      </a>
     </div>
   </div>
 </section>

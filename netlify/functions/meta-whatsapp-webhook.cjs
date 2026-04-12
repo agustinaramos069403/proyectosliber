@@ -19,7 +19,14 @@ const SEDE_ENTRIES = [
   },
   {
     displayName: 'Resistencia',
-    match: ['resistencia', '2', 'immi'],
+    match: [
+      'resistencia',
+      '2',
+      'immi',
+      'instituto modelo de medicina infantil',
+      'instituto modelo medicina infantil',
+      'modelo de medicina infantil',
+    ],
     envKey: 'CALENDLY_RESISTENCIA',
   },
   {
@@ -76,7 +83,7 @@ function buildAskSedeMessage() {
     'Elegí una opción (podés responder con el número o el nombre de la ciudad):',
     '',
     '1 — Corrientes (Clínica del Pilar)',
-    '2 — Resistencia (IMMI)',
+    '2 — Resistencia (Instituto Modelo de Medicina Infantil)',
     '3 — Sáenz Peña (Clínica Santa María)',
     '4 — Formosa (Inst. de Gastroenterología)',
     '',
@@ -124,20 +131,67 @@ async function sendWhatsAppText(toPhoneId, body) {
   }
 }
 
+/**
+ * Meta sends hub.mode, hub.verify_token, hub.challenge as query params.
+ * Merge queryStringParameters + multiValueQueryStringParameters + rawQuery when needed.
+ */
+function getMetaWebhookQueryParams(event) {
+  const merged = { ...(event.queryStringParameters || {}) };
+  const multi = event.multiValueQueryStringParameters || {};
+  for (const [key, values] of Object.entries(multi)) {
+    if (values && values[0] != null && merged[key] == null) {
+      merged[key] = values[0];
+    }
+  }
+  const rawQuery =
+    typeof event.rawQuery === 'string'
+      ? event.rawQuery
+      : typeof event.queryString === 'string'
+        ? event.queryString
+        : null;
+  if (rawQuery) {
+    const searchParams = new URLSearchParams(rawQuery.startsWith('?') ? rawQuery.slice(1) : rawQuery);
+    for (const key of ['hub.mode', 'hub.verify_token', 'hub.challenge']) {
+      if (merged[key] == null && searchParams.has(key)) {
+        merged[key] = searchParams.get(key);
+      }
+    }
+  }
+  return merged;
+}
+
 exports.handler = async (event) => {
-  if (event.httpMethod === 'GET') {
-    const params = event.queryStringParameters || {};
+  const method = (event.httpMethod || '').toUpperCase();
+  if (method === 'GET') {
+    const params = getMetaWebhookQueryParams(event);
     const mode = params['hub.mode'];
     const token = params['hub.verify_token'];
     const challenge = params['hub.challenge'];
     const verify = process.env.WHATSAPP_VERIFY_TOKEN;
-    if (mode === 'subscribe' && token === verify && challenge) {
-      return { statusCode: 200, headers: { 'Content-Type': 'text/plain' }, body: challenge };
+    const tokenNormalized = typeof token === 'string' ? token.trim() : '';
+    const verifyNormalized = typeof verify === 'string' ? verify.trim() : '';
+    if (
+      mode === 'subscribe' &&
+      tokenNormalized.length > 0 &&
+      verifyNormalized.length > 0 &&
+      tokenNormalized === verifyNormalized &&
+      challenge
+    ) {
+      return {
+        statusCode: 200,
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: String(challenge),
+      };
+    }
+    if (!verifyNormalized) {
+      console.error('Webhook verify failed: WHATSAPP_VERIFY_TOKEN is missing in Netlify environment');
+    } else {
+      console.error('Webhook verify failed: token mismatch or missing hub params');
     }
     return { statusCode: 403, body: 'Forbidden' };
   }
 
-  if (event.httpMethod !== 'POST') {
+  if (method !== 'POST') {
     return { statusCode: 405, body: 'Method Not Allowed' };
   }
 

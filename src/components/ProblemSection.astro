@@ -1,105 +1,79 @@
 ---
-const PAINS = [
+const PROBLEMS = [
   {
     title: 'Automedicación',
     description: 'Alivio pasajero que oculta el problema real.',
-    iconKey: 'medication',
-    accentClass: 'from-emerald-500/12 via-emerald-500/0 to-transparent',
+    icon: 'pill',
   },
   {
     title: 'Impacto Familiar',
     description: 'Noches sin dormir o niños que no pueden jugar por el asma o alergia.',
-    iconKey: 'family',
-    accentClass: 'from-sky-500/12 via-sky-500/0 to-transparent',
+    icon: 'moon',
   },
   {
     title: 'El Laberinto Médico',
-    description: 'Ir de especialista en especialista sin una respuesta clara ni un tratamiento que resuelva el problema.',
-    iconKey: 'maze',
-    accentClass: 'from-indigo-500/12 via-indigo-500/0 to-transparent',
+    description:
+      'Ir de especialista en especialista sin una respuesta clara ni un tratamiento que resuelva el problema.',
+    icon: 'compass',
   },
 ];
 ---
-<section class="relative py-16 lg:py-24 bg-gradient-to-b from-brand-breath via-white to-brand-breath overflow-hidden">
-  <div
-    class="pointer-events-none absolute inset-0 opacity-[0.92] bg-[radial-gradient(circle_at_18%_18%,rgba(79,183,167,0.24),transparent_58%),radial-gradient(circle_at_88%_28%,rgba(139,214,203,0.24),transparent_55%),radial-gradient(circle_at_52%_92%,rgba(11,63,60,0.14),transparent_62%)]"
-    aria-hidden="true"
-  ></div>
-  <div class="relative max-w-6xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority text-center mb-12">
-      Lo que muchos pacientes viven durante años
-    </h2>
-    <div class="grid md:grid-cols-3 gap-8 mb-12">
-      {PAINS.map((Pain) => (
-        <div class="relative overflow-hidden text-center p-6 rounded-2xl bg-brand-breath border border-brand-authority/10 shadow-sm">
-          <div class={`pointer-events-none absolute inset-0 bg-gradient-to-br ${Pain.accentClass}`} aria-hidden="true"></div>
-          <div class="relative mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-white/70 ring-1 ring-brand-authority/10 backdrop-blur">
-            {Pain.iconKey === 'medication' && (
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                class="h-7 w-7 text-emerald-700"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M10.5 13.5 6 18a3.5 3.5 0 0 1-5-5l4.5-4.5" />
-                <path d="M13.5 10.5 18 6a3.5 3.5 0 0 1 5 5l-4.5 4.5" />
-                <path d="M8.5 8.5 15.5 15.5" />
-              </svg>
-            )}
-            {Pain.iconKey === 'family' && (
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                class="h-7 w-7 text-sky-700"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M16 11a3 3 0 1 0-6 0" />
-                <path d="M8 14a4 4 0 0 0-4 4v2h8v-2a4 4 0 0 0-4-4Z" />
-                <path d="M16 14a4 4 0 0 1 4 4v2h-8v-2a4 4 0 0 1 4-4Z" />
-                <path d="M12 7a2.5 2.5 0 1 0-5 0" />
-                <path d="M17 7a2.5 2.5 0 1 0-5 0" />
-              </svg>
-            )}
-            {Pain.iconKey === 'maze' && (
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                class="h-7 w-7 text-indigo-700"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M4 4h6v6H4z" />
-                <path d="M14 4h6v6h-6z" />
-                <path d="M4 14h6v6H4z" />
-                <path d="M14 14h6v6h-6z" />
-                <path d="M10 7h4" />
-                <path d="M7 10v4" />
-                <path d="M14 17h-4" />
-                <path d="M17 14v-4" />
-              </svg>
-            )}
+<section class="py-20 lg:py-28 bg-background" aria-labelledby="problems-heading">
+  <div class="container mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <div class="mb-16 text-center">
+      <h2
+        id="problems-heading"
+        class="font-sans text-3xl sm:text-4xl lg:text-5xl font-medium text-foreground mb-4 text-balance"
+      >
+        Lo que muchos pacientes viven durante años
+      </h2>
+    </div>
+
+    <div class="mb-16 grid gap-8 md:grid-cols-3">
+      {PROBLEMS.map((problem) => (
+        <div class="relative group">
+          <div class="h-full rounded-2xl border border-border bg-card p-8 shadow-sm transition-shadow hover:shadow-md">
+            <div
+              class="mb-6 flex h-14 w-14 items-center justify-center rounded-xl bg-brand-clinical"
+              aria-hidden="true"
+            >
+              {problem.icon === 'pill' && (
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M10.5 13.5 6 18a3.5 3.5 0 0 1-5-5l4.5-4.5M13.5 10.5 18 6a3.5 3.5 0 0 1 5 5l-4.5 4.5M8.5 8.5 15.5 15.5"
+                  />
+                </svg>
+              )}
+              {problem.icon === 'moon' && (
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"
+                  />
+                </svg>
+              )}
+              {problem.icon === 'compass' && (
+                <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="10" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="m16.24 7.76-2.12 6.36-6.36 2.12 2.12-6.36 6.36-2.12z" />
+                </svg>
+              )}
+            </div>
+            <h3 class="font-sans text-xl font-semibold text-foreground mb-3">{problem.title}</h3>
+            <p class="font-serif text-muted-foreground leading-relaxed">{problem.description}</p>
           </div>
-          <h4 class="font-display font-semibold text-xl text-brand-authority mb-2">
-            {Pain.title}
-          </h4>
-          <p class="text-brand-technical/85 text-lg">{Pain.description}</p>
         </div>
       ))}
     </div>
-    <p class="text-xl font-semibold text-brand-authority text-center">
-      El problema no es el síntoma.<br />
-      El problema es no conocer la causa.
-    </p>
+
+    <div class="rounded-2xl bg-brand-authority p-8 text-center md:p-12">
+      <p class="font-sans text-xl md:text-2xl lg:text-3xl font-medium text-white mb-2 text-balance">
+        El problema no es el síntoma.
+      </p>
+      <p class="font-serif text-lg md:text-xl text-brand-clinical">El problema es no conocer la causa.</p>
+    </div>
   </div>
 </section>

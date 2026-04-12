@@ -1,32 +1,18 @@
 ---
 import WhatsAppButton from './WhatsAppButton.astro';
 ---
-<section
-  class="py-16 lg:py-24 bg-gradient-to-b from-brand-breath to-brand-clinical/15 border-t border-brand-authority/10"
-  aria-labelledby="cierre-heading"
->
-  <div class="max-w-6xl mx-auto px-6">
-    <div class="flex flex-col lg:flex-row gap-10 lg:gap-14 items-center">
-      <div class="w-full lg:w-[42%] flex justify-center lg:justify-start shrink-0">
-        <img
-          src="/dr-liber-cierre.png"
-          alt="Dr. Liber Acosta en consultorio"
-          class="w-full max-w-sm lg:max-w-none rounded-2xl shadow-xl ring-1 ring-brand-authority/10 object-cover aspect-[4/5] sm:aspect-[3/4] lg:aspect-[4/5] max-h-[420px] lg:max-h-[480px]"
-          width="480"
-          height="600"
-          loading="lazy"
-        />
-      </div>
-      <div class="w-full lg:flex-1 flex flex-col items-center lg:items-end text-center lg:text-right">
-        <h2
-          id="cierre-heading"
-          class="font-display text-2xl sm:text-3xl font-semibold text-brand-authority mb-8 lg:max-w-xl"
-        >
-          Si tenés síntomas frecuentes que afectan tu vida diaria, es momento de evaluarlo
-          correctamente.
-        </h2>
-        <WhatsAppButton>Agendar ahora por WhatsApp</WhatsAppButton>
-      </div>
+<section id="contacto" class="py-16 md:py-24 bg-brand-clinical/15" aria-labelledby="cierre-heading">
+  <div class="container mx-auto max-w-2xl px-4">
+    <div class="flex flex-col items-center text-center">
+      <h2
+        id="cierre-heading"
+        class="font-serif text-2xl md:text-3xl text-primary leading-snug mb-8 text-balance"
+      >
+        Si tenés <strong class="font-bold">síntomas frecuentes</strong> que afectan tu{' '}
+        <strong class="font-bold">vida diaria</strong>, es momento de evaluarlo{' '}
+        <strong class="font-bold">correctamente.</strong>
+      </h2>
+      <WhatsAppButton>Agendar ahora por WhatsApp</WhatsAppButton>
     </div>
   </div>
 </section>

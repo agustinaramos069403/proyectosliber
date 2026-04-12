@@ -5,4 +5,7 @@ export default defineConfig({
   integrations: [tailwind()],
   output: 'static',
   site: 'https://drliberacosta.com',
+  server: {
+    port: 4321,
+  },
 });

@@ -1,5 +1,5 @@
 ---
-import { WHATSAPP_NUMBER, WHATSAPP_MESSAGE_BASE, SEDES } from '../config';
+import { getWhatsAppUrl, SEDES } from '../config';
 ---
 <div
   id="sede-modal"
@@ -22,16 +22,16 @@ import { WHATSAPP_NUMBER, WHATSAPP_MESSAGE_BASE, SEDES } from '../config';
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
       </svg>
     </button>
-    <h3 id="sede-modal-title" class="font-display text-xl font-semibold text-brand-authority mb-2">
+    <h3 id="sede-modal-title" class="font-sans text-xl font-semibold text-brand-authority mb-2">
       ¿A qué sede querés asistir?
     </h3>
     <p class="text-brand-technical/85 mb-6">
-      Elegí tu sede para continuar a WhatsApp y agendar tu consulta.
+      Elegí una de las cuatro sedes. Se abrirá WhatsApp con un mensaje listo para enviar sobre el Sistema 360 y la sede que elijas.
     </p>
     <div class="space-y-3">
       {SEDES.map((sede) => (
         <a
-          href={`https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(`${WHATSAPP_MESSAGE_BASE} en ${sede}.`)}`}
+          href={getWhatsAppUrl(sede)}
           target="_blank"
           rel="noopener noreferrer"
           class="sede-option flex items-center justify-between w-full px-4 py-3 rounded-xl border border-brand-authority/15 hover:border-brand-authority hover:bg-brand-breath transition-colors text-left font-medium text-brand-technical"
@@ -47,38 +47,62 @@ import { WHATSAPP_NUMBER, WHATSAPP_MESSAGE_BASE, SEDES } from '../config';
   </div>
 </div>
 
-<script>
-  const modal = document.getElementById('sede-modal');
-  const closeBtn = document.getElementById('sede-modal-close');
+<script is:inline>
+  (function () {
+    if (document.documentElement.dataset.sedeModalScript === '1') return;
+    document.documentElement.dataset.sedeModalScript = '1';
 
-  function openModal() {
-    if (modal) {
+    var modal = document.getElementById('sede-modal');
+    var closeBtn = document.getElementById('sede-modal-close');
+    if (!modal) return;
+
+    function closeMobileHeaderMenuIfOpen() {
+      var mobileNav = document.getElementById('site-header-mobile-nav');
+      if (!mobileNav || mobileNav.classList.contains('hidden')) return;
+      var menuButton = document.querySelector('.site-header__menu-button');
+      var iconOpen = document.querySelector('.site-header__icon-open');
+      var iconClose = document.querySelector('.site-header__icon-close');
+      mobileNav.classList.add('hidden');
+      if (iconOpen) iconOpen.classList.remove('hidden');
+      if (iconClose) iconClose.classList.add('hidden');
+      if (menuButton) {
+        menuButton.setAttribute('aria-expanded', 'false');
+        menuButton.setAttribute('aria-label', 'Abrir menú');
+      }
+    }
+
+    function openModal() {
+      closeMobileHeaderMenuIfOpen();
       modal.classList.remove('hidden');
       modal.classList.add('flex');
       document.body.style.overflow = 'hidden';
     }
-  }
 
-  function closeModal() {
-    if (modal) {
+    function closeModal() {
       modal.classList.add('hidden');
       modal.classList.remove('flex');
       document.body.style.overflow = '';
     }
-  }
 
-  document.querySelectorAll('[data-open-sede-modal]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      openModal();
+    document.addEventListener(
+      'click',
+      function (event) {
+        var target = event.target;
+        if (!(target instanceof Element)) return;
+        var trigger = target.closest('[data-open-sede-modal]');
+        if (!trigger) return;
+        event.preventDefault();
+        openModal();
+      },
+      false
+    );
+
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', function (event) {
+      if (event.target === modal) closeModal();
     });
-  });
-
-  closeBtn?.addEventListener('click', closeModal);
-  modal?.addEventListener('click', (e) => {
-    if (e.target === modal) closeModal();
-  });
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal();
-  });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') closeModal();
+    });
+  })();
 </script>

@@ -1,43 +1,134 @@
 ---
+const navLinks = [
+  { href: '#servicios', label: 'Servicios' },
+  { href: '#sobre-mi', label: 'Sobre Mí' },
+  { href: '#testimonios', label: 'Testimonios' },
+  { href: '#contacto', label: 'Contacto' },
+];
 ---
 <header
-  class="site-header fixed inset-x-0 top-0 z-50"
+  class="site-header sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
   role="banner"
 >
-  <div class="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-3">
-    <a
-      href="#top"
-      class="flex items-center gap-2.5 sm:gap-3 min-w-0 rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-authority focus-visible:ring-offset-2 focus-visible:ring-offset-white"
-    >
-      <img
-        src="/brand-logo.png"
-        alt=""
-        class="site-header__logo h-9 w-9 sm:h-10 sm:w-10 rounded-lg object-contain shrink-0 ring-1 ring-brand-authority/20"
-        width="40"
-        height="40"
-        fetchpriority="high"
-      />
-      <div class="min-w-0 text-left">
-        <span class="site-header__title font-display font-semibold text-brand-authority text-sm sm:text-base tracking-tight block leading-snug truncate">
-          Dr. Liber Acosta
-        </span>
-        <span class="site-header__subtitle text-brand-technical/80 text-xs sm:text-sm font-normal leading-snug truncate block sm:max-w-[min(100%,24rem)]">
-          Asma · Alergia · Inmunología
-        </span>
+  <div class="mx-auto max-w-7xl px-6 lg:px-12">
+    <div class="flex h-16 items-center justify-between">
+      <a href="#hero" class="flex items-center gap-2 shrink-0">
+        <img
+          src="/images/logo-la.png"
+          alt="Dr. Liber Acosta"
+          class="h-10 w-auto"
+          width="48"
+          height="48"
+          fetchpriority="high"
+        />
+      </a>
+
+      <nav class="hidden md:flex items-center gap-8" aria-label="Principal">
+        {navLinks.map((link) => (
+          <a
+            href={link.href}
+            class="font-serif text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {link.label}
+          </a>
+        ))}
+      </nav>
+
+      <div class="hidden md:block">
+        <button
+          type="button"
+          data-open-sede-modal
+          class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full bg-primary px-6 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+            />
+          </svg>
+          Agendar Consulta
+        </button>
       </div>
-    </a>
+
+      <button
+        type="button"
+        class="site-header__menu-button md:hidden p-2 text-foreground"
+        aria-expanded="false"
+        aria-controls="site-header-mobile-nav"
+        aria-label="Abrir menú"
+      >
+        <svg class="site-header__icon-open h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+        <svg class="site-header__icon-close hidden h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+
+    <nav
+      id="site-header-mobile-nav"
+      class="site-header__mobile-nav hidden md:hidden py-4 border-t border-border/40"
+      aria-label="Móvil"
+    >
+      <div class="flex flex-col gap-4">
+        {navLinks.map((link) => (
+          <a
+            href={link.href}
+            class="site-header__mobile-link text-sm font-medium text-muted-foreground hover:text-foreground transition-colors py-2"
+          >
+            {link.label}
+          </a>
+        ))}
+        <button
+          type="button"
+          data-open-sede-modal
+          class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full bg-primary px-6 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 mt-2"
+        >
+          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+            />
+          </svg>
+          Agendar Consulta
+        </button>
+      </div>
+    </nav>
   </div>
 </header>
 
 <script>
-  const HEADER_SCROLLED_CLASS = 'site-header--scrolled';
-  const HeaderElement = document.querySelector('.site-header');
+  const MENU_BUTTON_SELECTOR = '.site-header__menu-button';
+  const MOBILE_NAV_SELECTOR = '.site-header__mobile-nav';
+  const ICON_OPEN_SELECTOR = '.site-header__icon-open';
+  const ICON_CLOSE_SELECTOR = '.site-header__icon-close';
+  const MOBILE_LINK_SELECTOR = '.site-header__mobile-link';
 
-  const UpdateHeaderState = () => {
-    if (!HeaderElement) return;
-    HeaderElement.classList.toggle(HEADER_SCROLLED_CLASS, window.scrollY > 8);
+  const MenuButton = document.querySelector(MENU_BUTTON_SELECTOR);
+  const MobileNav = document.querySelector(MOBILE_NAV_SELECTOR);
+  const IconOpen = document.querySelector(ICON_OPEN_SELECTOR);
+  const IconClose = document.querySelector(ICON_CLOSE_SELECTOR);
+
+  const SetMenuOpen = (isOpen) => {
+    if (!MenuButton || !MobileNav || !IconOpen || !IconClose) return;
+    MenuButton.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    MenuButton.setAttribute('aria-label', isOpen ? 'Cerrar menú' : 'Abrir menú');
+    MobileNav.classList.toggle('hidden', !isOpen);
+    IconOpen.classList.toggle('hidden', isOpen);
+    IconClose.classList.toggle('hidden', !isOpen);
   };
 
-  UpdateHeaderState();
-  window.addEventListener('scroll', UpdateHeaderState, { passive: true });
+  MenuButton?.addEventListener('click', () => {
+    const isOpen = MenuButton.getAttribute('aria-expanded') === 'true';
+    SetMenuOpen(!isOpen);
+  });
+
+  document.querySelectorAll(MOBILE_LINK_SELECTOR).forEach((anchor) => {
+    anchor.addEventListener('click', () => SetMenuOpen(false));
+  });
 </script>

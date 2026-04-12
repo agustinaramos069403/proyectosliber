@@ -1,87 +1,99 @@
 ---
-const stages = [
+const STEPS = [
   {
     number: 1,
     title: 'Diagnóstico preciso',
-    paragraphs: [
+    description:
       'Evaluamos al paciente de forma completa, integrando historia clínica, síntomas y contexto.',
+    detail:
       'Realizamos estudios específicos para identificar el alérgeno que desencadena el problema y dejar de tratar a ciegas.',
-    ],
   },
   {
     number: 2,
     title: 'Tratamiento dirigido a la causa',
-    paragraphs: [
+    description:
       'Definimos un tratamiento según el origen del problema, que puede incluir medicación, inmunoterapia y control ambiental.',
+    detail:
       'El objetivo es reducir la exposición a alérgenos y modificar la respuesta del sistema inmunológico.',
-    ],
   },
   {
     number: 3,
     title: 'Seguimiento y control',
-    paragraphs: [
+    description:
       'Acompañamos la evolución del paciente para lograr estabilidad en el tiempo, menos crisis y una mejor calidad de vida.',
-    ],
   },
 ];
 ---
-<section class="py-16 lg:py-24 bg-gradient-to-b from-brand-breath to-white">
-  <div class="max-w-6xl mx-auto px-6">
-    <div class="relative overflow-hidden rounded-3xl px-6 py-12 sm:px-10 sm:py-14 lg:px-14 lg:py-16 mb-16 bg-gradient-to-br from-brand-breath via-white to-brand-clinical/25">
+<section id="servicios" class="py-20 md:py-28" aria-labelledby="value-proposition-heading">
+  <div class="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div
+      class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-[#e8f4f8] via-[#f0f9f7] to-[#f5f9fa] p-8 md:p-12 lg:p-16"
+    >
       <div
-        class="pointer-events-none absolute inset-0 opacity-[0.18] bg-[radial-gradient(circle_at_10%_25%,rgba(79,183,167,0.55),transparent_55%),radial-gradient(circle_at_90%_20%,rgba(11,63,60,0.40),transparent_50%)]"
+        class="absolute left-0 top-0 h-64 w-64 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand-clinical/20 blur-3xl"
         aria-hidden="true"
-      ></div>
+      >
+      </div>
       <div
-        class="pointer-events-none absolute -top-20 -right-24 h-72 w-72 rounded-full bg-brand-authority/10 blur-3xl"
+        class="absolute bottom-0 right-0 h-64 w-64 translate-x-1/2 translate-y-1/2 rounded-full bg-brand-immune/20 blur-3xl"
         aria-hidden="true"
-      ></div>
-      <div
-        class="pointer-events-none absolute -bottom-24 -left-20 h-72 w-72 rounded-full bg-brand-immune/20 blur-3xl"
-        aria-hidden="true"
-      ></div>
+      >
+      </div>
 
-      <div class="relative text-center">
-        <span class="inline-flex items-center gap-2 px-5 py-2 text-sm sm:text-base font-medium text-brand-authority bg-brand-clinical/25 rounded-full mb-5 shadow-sm">
-          Propuesta de Valor
-        </span>
-
-        <h2 class="font-display text-3xl sm:text-4xl lg:text-5xl font-semibold text-brand-authority mb-3 tracking-tight">
-          Sistema de Transformación{' '}
-          <span class="inline-flex items-center gap-2 align-middle">
-            <span class="relative inline-flex items-center">
-              <span aria-hidden="true" class="absolute -inset-2 rounded-[999px] bg-brand-immune/22 blur-xl"></span>
-              <span class="relative text-brand-immune drop-shadow-sm">360™</span>
+      <div class="relative mx-auto max-w-4xl text-center">
+        <div class="mb-8 flex justify-center">
+          <span
+            class="inline-flex items-center justify-center gap-2 rounded-full border-2 border-brand-immune/70 bg-white/60 px-6 py-3 font-sans text-sm font-semibold tracking-wide text-brand-authority shadow-sm backdrop-blur"
+          >
+            <span class="leading-none">CONTROL DE ALERGIA</span>
+            <span class="relative inline-flex items-baseline text-base sm:text-lg leading-none">
+              <span class="relative inline-flex items-center">
+                <span aria-hidden="true" class="absolute -inset-2 rounded-[999px] bg-brand-immune/22 blur-xl"></span>
+                <span class="relative text-brand-immune drop-shadow-sm">360</span>
+              </span>
+              <sup class="relative -top-0.5 ml-px text-brand-immune text-[0.65em] font-semibold leading-none sm:text-[0.7em]"
+                >°</sup
+              >
             </span>
           </span>
+        </div>
+        <h2
+          id="value-proposition-heading"
+          class="sr-only"
+        >
+          CONTROL DE ALERGIA 360°
         </h2>
 
-        <h3 class="text-lg sm:text-xl font-normal text-brand-authority/70 mb-4">
-          ¿Cómo se aborda cada caso?
-        </h3>
+        <p class="font-serif text-lg text-brand-technical mb-4">¿Cómo se aborda cada caso?</p>
 
-        <p class="text-lg font-medium text-brand-immune mb-4">
-          Abordaje clínico sistémico del asma y alergia
+        <p class="font-sans text-lg sm:text-xl font-medium text-brand-immune mb-6">
+          A través de una evaluación completa que puede incluir test de alergia, espirometría y estudios específicos para
+          diagnosticar asma, rinitis y otras enfermedades alérgicas.
         </p>
 
-        <p class="text-lg text-brand-technical/85 max-w-3xl mx-auto">
-          El Dr. Liber aborda el asma y la alergia de forma integral: una sola lectura clínica que une síntomas, historia y contexto, en lugar de tratar cada manifestación por separado.
-        </p>
       </div>
     </div>
-    <div class="space-y-8 lg:space-y-12">
-      {stages.map((stage) => (
-        <div class="relative pl-14 sm:pl-16 p-6 rounded-2xl bg-white shadow-md border border-brand-authority/10">
-          <span class="absolute left-4 top-6 w-10 h-10 flex items-center justify-center rounded-full bg-brand-authority text-brand-breath font-semibold text-lg">
-            {stage.number}
-          </span>
-          <h3 class="font-display font-semibold text-xl text-brand-authority mb-4">
-            {stage.title}
-          </h3>
-          <div class="space-y-3">
-            {stage.paragraphs.map((paragraph) => (
-              <p class="text-brand-technical/85 text-lg">{paragraph}</p>
-            ))}
+  </div>
+</section>
+
+<section class="py-16 md:py-24 bg-brand-breath" aria-label="Etapas del proceso">
+  <div class="container mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+    <div class="space-y-6">
+      {STEPS.map((step) => (
+        <div class="rounded-2xl border border-border/50 bg-card p-6 shadow-sm transition-shadow hover:shadow-md md:p-8">
+          <div class="flex gap-5">
+            <div class="shrink-0">
+              <div class="flex h-10 w-10 items-center justify-center rounded-full bg-brand-authority">
+                <span class="font-sans text-lg font-semibold text-white">{step.number}</span>
+              </div>
+            </div>
+            <div class="flex-1">
+              <h3 class="font-sans text-xl font-semibold text-brand-authority mb-3">{step.title}</h3>
+              <p class="font-serif text-brand-technical leading-relaxed">{step.description}</p>
+              {'detail' in step && step.detail ? (
+                <p class="font-serif text-brand-immune leading-relaxed mt-3">{step.detail}</p>
+              ) : null}
+            </div>
           </div>
         </div>
       ))}

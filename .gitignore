@@ -3,4 +3,8 @@ dist
 .env
 .env.*
 *.log
+curl-out.txt
 .DS_Store
+
+# Local Netlify folder
+.netlify

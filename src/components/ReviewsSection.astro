@@ -1,110 +1,320 @@
 ---
-// Reemplazá con reseñas reales de Google My Business. Formato: { text, author, rating }
 import { GOOGLE_REVIEWS_URL } from '../config';
-const reviews = [
+
+const testimonials = [
   {
-    text: 'Excelente atención. Por fin encontré un diagnóstico claro después de años de síntomas.',
-    author: 'Paciente de Corrientes',
+    name: 'Andrea P.',
+    content:
+      'Tengo 44 años. Sufría de alergias desde los 5 años. El año pasado comencé el tratamiento y en verdad cambió mi calidad de vida. He mejorado muchísimo. Gracias al doctor por la responsabilidad y el acompañamiento brindado. Excelente médico.',
     rating: 5,
   },
   {
-    text: 'Mi hijo dejó de tener crisis de asma. El Dr. Liber cambió nuestra vida.',
-    author: 'Madre de paciente pediátrico',
+    name: 'Cinthia G.',
+    content:
+      'En el año 2022 me recomendaron al Dr. Liber Acosta. Mi hija tenía 10 años. Antes nos recorrimos todo.. Gracias a Dios dimos con él. Un excelente médico, mi hija hoy en día se encuentra muy bien siguiendo su tratamiento... especialista de los mejores!',
     rating: 5,
   },
   {
-    text: 'Profesional, empático y con un enfoque integral. Muy recomendable.',
-    author: 'Paciente de Resistencia',
+    name: 'Hugo P.',
+    content:
+      'Muy buena atención, soy de Castelli, es un profesional muy comprometido, fue el único médico que dio respuestas y encontró el problema. Hoy mi hija está tratada con el señor Dr. Acosta Liber, y nos da confianza y tranquilidad, que es algo sumamente importante cuando uno necesita respuestas ante una enfermedad.',
+    rating: 5,
+  },
+  {
+    name: 'Carolina Z.',
+    content:
+      'Excelente su atención Dr. Liber Acosta, ya hace 4 años del tratamiento y noto que ya no hay episodios como lo era antes, siempre muy atento en mis consultas telefónicas. Nada malo que decir. Gracias por su amabilidad siempre.',
+    rating: 5,
+  },
+  {
+    name: 'Aylen F.',
+    content:
+      'Tuve una muy buena experiencia en las consultas. El doctor siempre me atendió con mucha educación y profesionalismo. Se toma el tiempo para escuchar y explicar las cosas con claridad, lo que genera mucha confianza. Me sentí muy cómoda en cada visita.',
+    rating: 5,
+  },
+  {
+    name: 'Gisella P.',
+    content:
+      'Muy buena atención y efectivo en su tratamiento, gracias a él pude dejar de sufrir todos los días por mi alergia.',
+    rating: 5,
+  },
+  {
+    name: 'Florencio G.',
+    content:
+      'Muy buen médico, atención amable y completa. Mi hijo comenzó el tratamiento para la alergia hace 2 años y mejoró mucho su salud. Totalmente recomendado.',
     rating: 5,
   },
 ];
 ---
-<section class="relative py-16 lg:py-24 overflow-hidden bg-gradient-to-b from-brand-breath via-white to-brand-breath">
-  <div
-    class="pointer-events-none absolute inset-0 opacity-[0.8] bg-[radial-gradient(circle_at_10%_15%,rgba(79,183,167,0.18),transparent_55%),radial-gradient(circle_at_90%_25%,rgba(139,214,203,0.16),transparent_55%),radial-gradient(circle_at_45%_90%,rgba(11,63,60,0.10),transparent_62%)]"
-    aria-hidden="true"
-  ></div>
-
-  <div class="pointer-events-none absolute inset-0" aria-hidden="true">
-    <img
-      src="/audience-child.png"
-      alt=""
-      class="absolute -top-24 left-1/2 h-[520px] w-[820px] -translate-x-1/2 rotate-3 object-cover opacity-[0.10] blur-2xl saturate-110 contrast-105"
-      loading="lazy"
-      decoding="async"
-    />
-    <div class="absolute inset-0 bg-gradient-to-b from-white/40 via-transparent to-brand-breath/70"></div>
-  </div>
-
-  <div class="relative max-w-6xl mx-auto px-6">
-    <div class="mx-auto max-w-3xl text-center mb-12 lg:mb-16">
-      <span class="inline-flex items-center gap-2 px-5 py-2 text-sm sm:text-base font-medium text-brand-authority bg-white/80 rounded-full shadow-sm ring-1 ring-brand-authority/10">
-        Testimonios
-      </span>
-      <h2 class="font-display mt-3 text-2xl sm:text-3xl lg:text-4xl font-semibold text-brand-authority tracking-tight">
-        Lo que dicen mis pacientes sobre mí
+<section id="testimonios" class="py-24 bg-brand-clinical/20">
+  <div class="mx-auto max-w-7xl px-6 lg:px-12">
+    <div class="mx-auto mb-16 max-w-2xl text-center">
+      <p class="mb-4 text-sm uppercase tracking-widest text-primary">Testimonios</p>
+      <h2 class="font-sans text-3xl sm:text-4xl lg:text-5xl font-medium text-foreground mb-6 text-balance">
+        Lo que dicen mis pacientes
       </h2>
-      <p class="mt-3 text-base sm:text-lg text-brand-technical/80">
-        Historias reales de personas que recuperaron tranquilidad y control de sus síntomas.
+      <p class="font-serif text-lg leading-relaxed text-muted-foreground">
+        La satisfacción de mis pacientes es mi mejor aval.
       </p>
     </div>
 
-    <div class="grid gap-6 md:grid-cols-3 md:gap-7 mb-12 lg:mb-14">
-      {reviews.map((review) => (
-        <article class="group relative overflow-hidden rounded-3xl bg-white/85 ring-1 ring-brand-authority/10 shadow-md backdrop-blur transition-transform duration-200 hover:-translate-y-[2px] hover:shadow-line">
-          <div
-            class="pointer-events-none absolute inset-0 opacity-[0.75] bg-[radial-gradient(circle_at_18%_15%,rgba(79,183,167,0.10),transparent_55%),radial-gradient(circle_at_92%_30%,rgba(139,214,203,0.10),transparent_52%)]"
-            aria-hidden="true"
-          ></div>
-          <div
-            class="pointer-events-none absolute inset-x-0 top-0 h-[5px] bg-gradient-to-r from-brand-immune/35 via-brand-clinical/35 to-transparent"
-            aria-hidden="true"
-          ></div>
-          <div class="relative p-6 sm:p-7">
-            <div class="flex items-start justify-between gap-4 mb-4">
-              <div class="inline-flex items-center gap-1 rounded-full bg-brand-breath/80 px-3 py-1 ring-1 ring-brand-authority/10">
-                {Array.from({ length: review.rating }).map(() => (
-                  <span class="text-brand-clinical/95 drop-shadow-[0_1px_0_rgba(255,255,255,0.9)]">★</span>
-                ))}
+    <div
+      class="reviews-carousel relative mx-auto max-w-6xl px-10 sm:px-14 outline-none"
+      data-reviews-carousel
+      aria-roledescription="carrusel"
+      tabindex="0"
+    >
+      <div class="overflow-hidden rounded-2xl">
+        <div
+          class="reviews-carousel__track flex transition-transform duration-500 ease-out will-change-transform"
+          style="transform: translateX(0px)"
+        >
+          {testimonials.map((testimonial, slideIndex) => (
+            <article
+              class="reviews-carousel__slide w-full shrink-0 basis-full px-1 sm:px-2 md:basis-1/2 lg:basis-1/3"
+              role="group"
+              aria-roledescription="diapositiva"
+              aria-label={`${slideIndex + 1} de ${testimonials.length}`}
+            >
+              <div class="flex h-full min-h-[220px] flex-col rounded-2xl border border-border/50 bg-card p-6 shadow-sm sm:min-h-[260px] sm:p-8">
+                <div class="mb-4 flex gap-1">
+                  {Array.from({ length: testimonial.rating }).map(() => (
+                    <svg class="h-5 w-5 fill-primary text-primary" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+                      />
+                    </svg>
+                  ))}
+                </div>
+                <p class="reviews-carousel__text mb-5 font-serif leading-relaxed text-foreground">
+                  &ldquo;{testimonial.content}&rdquo;
+                </p>
+                <div class="mt-auto flex items-center gap-4 border-t border-border/40 pt-5">
+                  <div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                    <span class="text-lg font-semibold text-primary">{testimonial.name.charAt(0)}</span>
+                  </div>
+                  <div>
+                    <p class="font-medium text-foreground">{testimonial.name}</p>
+                    <p class="text-sm text-muted-foreground">Paciente</p>
+                  </div>
+                </div>
               </div>
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                class="h-7 w-7 text-brand-authority/16"
-                fill="currentColor"
-              >
-                <path d="M7.3 17.4c-1.5 0-2.8-.5-3.8-1.5S2 13.6 2 12.1c0-1 .2-2 .7-3s1.2-2 2.2-2.9c1-.9 2.2-1.6 3.6-2.1l1 1.9c-1.2.6-2.2 1.3-3 2.1-.8.8-1.3 1.6-1.5 2.5.4-.2.9-.3 1.5-.3 1.1 0 2 .4 2.7 1.1.7.7 1.1 1.6 1.1 2.7 0 1.2-.4 2.2-1.2 3-.8.8-1.8 1.2-3 1.2Zm12.7 0c-1.5 0-2.8-.5-3.8-1.5s-1.5-2.3-1.5-3.8c0-1 .2-2 .7-3s1.2-2 2.2-2.9c1-.9 2.2-1.6 3.6-2.1l1 1.9c-1.2.6-2.2 1.3-3 2.1-.8.8-1.3 1.6-1.5 2.5.4-.2.9-.3 1.5-.3 1.1 0 2 .4 2.7 1.1.7.7 1.1 1.6 1.1 2.7 0 1.2-.4 2.2-1.2 3-.8.8-1.8 1.2-3 1.2Z" />
-              </svg>
-            </div>
+            </article>
+          ))}
+        </div>
+      </div>
 
-            <p class="text-brand-technical/90 italic mb-5 text-base sm:text-lg leading-relaxed">
-              “{review.text}”
-            </p>
+      <button
+        type="button"
+        class="reviews-carousel__prev absolute left-0 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-md transition-colors hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="Reseña anterior"
+      >
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="reviews-carousel__next absolute right-0 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-card text-foreground shadow-md transition-colors hover:bg-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label="Reseña siguiente"
+      >
+        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
 
-            <div class="mt-auto flex items-center gap-3 pt-4 border-t border-brand-authority/10">
-              <div class="grid h-9 w-9 place-items-center rounded-full bg-brand-breath ring-1 ring-brand-authority/10 text-brand-authority/70 text-sm font-semibold">
-                {review.author.slice(0, 1)}
-              </div>
-              <p class="text-sm sm:text-base text-brand-technical/70">
-                <span class="font-medium text-brand-technical/80">{review.author}</span>
-              </p>
-            </div>
-          </div>
-        </article>
-      ))}
+      <div
+        class="reviews-carousel__dots mt-8 flex justify-center gap-2"
+        role="tablist"
+        aria-label="Seleccionar grupo de reseñas"
+      ></div>
     </div>
-    <div class="text-center">
+
+    <div class="mt-12 text-center">
       <a
         href={GOOGLE_REVIEWS_URL}
         target="_blank"
         rel="noopener noreferrer"
-        class="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-white/80 ring-1 ring-brand-authority/10 shadow-sm text-brand-authority font-medium hover:text-brand-immune hover:shadow-line transition-shadow"
+        class="inline-flex items-center gap-2 rounded-full border border-border bg-background px-8 py-3 font-sans font-medium text-foreground transition-colors hover:bg-muted"
       >
         Ver más reseñas en Google
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+          />
         </svg>
       </a>
     </div>
   </div>
 </section>
+
+<style>
+  @media (max-width: 640px) {
+    .reviews-carousel__text {
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+  }
+</style>
+
+<script is:inline>
+  (function () {
+    const ROOT_SELECTOR = '[data-reviews-carousel]';
+    const AUTO_PLAY_INTERVAL_MS = 5500;
+
+    function updateDots(dots, activePageIndex) {
+      dots.forEach(function (dot, index) {
+        const isActive = index === activePageIndex;
+        dot.classList.toggle('bg-primary', isActive);
+        dot.classList.toggle('bg-border', !isActive);
+        dot.classList.toggle('hover:bg-muted-foreground/40', !isActive);
+        dot.setAttribute('aria-current', isActive ? 'true' : 'false');
+      });
+    }
+
+    function getSlidesPerView(root) {
+      if (!root) return 1;
+      const width = root.getBoundingClientRect().width;
+      if (width >= 1024) return 3;
+      if (width >= 768) return 2;
+      return 1;
+    }
+
+    function initCarousel(root) {
+      const track = root.querySelector('.reviews-carousel__track');
+      const previousButton = root.querySelector('.reviews-carousel__prev');
+      const nextButton = root.querySelector('.reviews-carousel__next');
+      const dotsContainer = root.querySelector('.reviews-carousel__dots');
+      const slides = root.querySelectorAll('.reviews-carousel__slide');
+      if (!track || !previousButton || !nextButton || !dotsContainer || slides.length === 0) return;
+
+      const prefersReducedMotion =
+        typeof window !== 'undefined' &&
+        window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      let activeIndex = 0;
+      let autoPlayTimerId = null;
+      let isPaused = false;
+      let slidesPerView = getSlidesPerView(root);
+      let totalSlides = slides.length;
+      let totalPages = Math.max(1, Math.ceil(totalSlides / slidesPerView));
+      let dots = [];
+
+      function clampIndex(nextIndex) {
+        const maxIndex = Math.max(0, totalSlides - slidesPerView);
+        return Math.max(0, Math.min(nextIndex, maxIndex));
+      }
+
+      function getSlideWidthPx() {
+        const firstSlide = slides[0];
+        if (!firstSlide) return 0;
+        return firstSlide.getBoundingClientRect().width;
+      }
+
+      function getActivePageIndex() {
+        if (slidesPerView <= 0) return 0;
+        return Math.floor(activeIndex / slidesPerView);
+      }
+
+      function goToSlide(nextIndex) {
+        activeIndex = clampIndex(nextIndex);
+        const slideWidthPx = getSlideWidthPx();
+        track.style.transform = 'translateX(-' + activeIndex * slideWidthPx + 'px)';
+        updateDots(dots, getActivePageIndex());
+      }
+
+      function buildDots() {
+        dotsContainer.innerHTML = '';
+        dots = [];
+        for (let pageIndex = 0; pageIndex < totalPages; pageIndex += 1) {
+          const dot = document.createElement('button');
+          dot.type = 'button';
+          dot.className =
+            'reviews-carousel__dot h-2.5 w-2.5 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring';
+          dot.classList.add(pageIndex === 0 ? 'bg-primary' : 'bg-border', 'hover:bg-muted-foreground/40');
+          dot.setAttribute('aria-label', 'Ir al grupo de reseñas ' + (pageIndex + 1));
+          dot.setAttribute('aria-current', pageIndex === 0 ? 'true' : 'false');
+          dot.setAttribute('data-page-index', String(pageIndex));
+          dot.addEventListener('click', function () {
+            goToSlide(pageIndex * slidesPerView);
+          });
+          dotsContainer.appendChild(dot);
+          dots.push(dot);
+        }
+      }
+
+      function pauseAutoPlay() {
+        isPaused = true;
+      }
+
+      function resumeAutoPlay() {
+        isPaused = false;
+      }
+
+      function startAutoPlay() {
+        if (prefersReducedMotion) return;
+        if (autoPlayTimerId) return;
+        autoPlayTimerId = window.setInterval(function () {
+          if (isPaused) return;
+          goToSlide(activeIndex + slidesPerView);
+        }, AUTO_PLAY_INTERVAL_MS);
+      }
+
+      function stopAutoPlay() {
+        if (!autoPlayTimerId) return;
+        window.clearInterval(autoPlayTimerId);
+        autoPlayTimerId = null;
+      }
+
+      previousButton.addEventListener('click', function () {
+        goToSlide(activeIndex - slidesPerView);
+      });
+      nextButton.addEventListener('click', function () {
+        goToSlide(activeIndex + slidesPerView);
+      });
+
+      root.addEventListener('mouseenter', pauseAutoPlay);
+      root.addEventListener('mouseleave', resumeAutoPlay);
+      root.addEventListener('focusin', pauseAutoPlay);
+      root.addEventListener('focusout', resumeAutoPlay);
+
+      root.addEventListener('keydown', function (event) {
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          goToSlide(activeIndex - slidesPerView);
+        }
+        if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          goToSlide(activeIndex + slidesPerView);
+        }
+      });
+
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) stopAutoPlay();
+        else startAutoPlay();
+      });
+
+      function recalc() {
+        slidesPerView = getSlidesPerView(root);
+        totalPages = Math.max(1, Math.ceil(totalSlides / slidesPerView));
+        buildDots();
+        goToSlide(activeIndex);
+      }
+
+      window.addEventListener('resize', function () {
+        recalc();
+      });
+
+      recalc();
+      startAutoPlay();
+    }
+
+    document.querySelectorAll(ROOT_SELECTOR).forEach(initCarousel);
+  })();
+</script>

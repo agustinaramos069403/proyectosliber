@@ -1,64 +1,61 @@
 ---
 const LOCATIONS = [
-  { city: 'Corrientes', place: 'Clínica del Pilar' },
-  { city: 'Resistencia', place: 'IMMI' },
-  { city: 'Sáenz Peña', place: 'Clínica Santa María' },
-  { city: 'Formosa', place: 'Instituto de Gastroenterología' },
+  { city: 'Corrientes', clinic: 'Clínica del Pilar' },
+  { city: 'Resistencia', clinic: 'Instituto Modelo de Medicina Infantil' },
+  { city: 'Sáenz Peña', clinic: 'Clínica Santa María' },
+  { city: 'Formosa', clinic: 'Instituto de Gastroenterología' },
 ];
 ---
-<section
-  id="sedes"
-  class="py-12 lg:py-16 bg-gradient-to-b from-brand-breath via-white to-brand-breath"
-  aria-labelledby="sedes-heading"
->
-  <div class="max-w-6xl mx-auto px-6">
-    <div class="text-center mb-8 lg:mb-10">
-      <span class="inline-flex items-center gap-2 px-5 py-2 text-sm sm:text-base font-medium text-brand-authority bg-white/80 rounded-full shadow-sm ring-1 ring-brand-authority/10">
+<section id="consultorios" class="py-20 bg-background" aria-labelledby="sedes-heading">
+  <div class="container mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+    <div class="mb-6 flex justify-center">
+      <span
+        class="inline-flex items-center rounded-full border border-border bg-card px-4 py-1.5 font-serif text-sm text-foreground"
+      >
         Consultorios
       </span>
-      <h2
-        id="sedes-heading"
-        class="font-display mt-3 text-2xl sm:text-3xl font-semibold text-brand-authority tracking-tight"
-      >
+    </div>
+
+    <div class="mx-auto mb-12 max-w-2xl text-center">
+      <h2 id="sedes-heading" class="font-sans text-3xl sm:text-4xl font-medium text-foreground mb-4 text-balance">
         Elegí tu sede más cercana
       </h2>
-      <p class="mt-2 text-base sm:text-lg text-brand-technical/80 max-w-2xl mx-auto">
+      <p class="font-serif text-lg text-muted-foreground">
         Coordiná tu consulta en la ciudad que te quede mejor.
       </p>
     </div>
 
-    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
-      {LOCATIONS.map((Location) => (
-        <div class="group relative overflow-hidden rounded-2xl bg-white/80 ring-1 ring-brand-authority/10 shadow-sm hover:shadow-line transition-shadow">
-          <div
-            class="pointer-events-none absolute inset-0 opacity-[0.7] bg-[radial-gradient(circle_at_20%_15%,rgba(79,183,167,0.18),transparent_55%),radial-gradient(circle_at_85%_30%,rgba(139,214,203,0.18),transparent_50%)]"
-            aria-hidden="true"
-          ></div>
-          <div class="relative p-4 sm:p-5">
-            <div class="flex items-start gap-3">
-              <div class="grid h-10 w-10 place-items-center rounded-2xl bg-brand-breath ring-1 ring-brand-authority/10 shadow-sm">
-                <svg
-                  aria-hidden="true"
-                  viewBox="0 0 24 24"
-                  class="h-5 w-5 text-brand-authority/85"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path d="M12 21s7-4.5 7-11a7 7 0 1 0-14 0c0 6.5 7 11 7 11Z" />
-                  <circle cx="12" cy="10" r="2.5" />
-                </svg>
-              </div>
-              <div class="min-w-0 text-left">
-                <p class="font-display font-semibold text-brand-authority text-base sm:text-lg leading-snug truncate">
-                  {Location.city}
-                </p>
-                <p class="text-sm sm:text-base text-brand-technical/80 leading-snug line-clamp-2">
-                  {Location.place}
-                </p>
-              </div>
+    <div class="mx-auto grid max-w-5xl grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {LOCATIONS.map((location) => (
+        <div
+          class="group flex cursor-pointer items-center gap-4 rounded-2xl border border-border bg-card p-5 transition-all duration-200 hover:border-accent/50 hover:shadow-md"
+        >
+          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent/10">
+            <svg
+              class="h-5 w-5 text-accent"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
+              />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </div>
+          <div>
+            <h3 class="font-sans font-semibold text-foreground transition-colors group-hover:text-primary">
+              {location.city}
+            </h3>
+            <div class="font-serif text-sm text-muted-foreground">
+              <p class="leading-snug">{location.clinic}</p>
+              {'clinicDetail' in location && location.clinicDetail ? (
+                <p class="mt-0.5 leading-snug text-muted-foreground/90">{location.clinicDetail}</p>
+              ) : null}
             </div>
           </div>
         </div>

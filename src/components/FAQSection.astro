@@ -1,54 +1,69 @@
 ---
 const faqs = [
   {
+    question: '¿Por qué sigo con síntomas si ya estoy en tratamiento?',
+    answer:
+      'Porque muchas veces se están tratando solo los síntomas y no la causa. Es común usar medicación que alivia momentáneamente, pero si no se identifica qué está generando la alergia, el problema sigue presente. Por eso los síntomas vuelven o nunca terminan de controlarse.',
+  },
+  {
     question: '¿Atiende por Obra Social?',
     answer: 'Sí, trabajamos con diversas coberturas médicas y también en modalidad de consulta particular.',
+  },
+  {
+    question: '¿El asma puede estar relacionado con una alergia?',
+    answer:
+      'Sí. En muchos casos, el asma tiene un componente alérgico. Esto significa que hay factores del ambiente (como ácaros, polvo o pólenes) que generan inflamación constante en las vías respiratorias. Si no se trata esa causa, el asma tiende a repetirse o a no controlarse del todo.',
+  },
+  {
+    question: '¿Qué es la rinitis alérgica?',
+    answer:
+      'Es una inflamación de la nariz causada por una alergia. Puede generar congestión, secreción nasal, estornudos y picazón. Muchas personas la confunden con resfríos frecuentes, pero en realidad es una condición alérgica que puede volverse crónica si no se trata correctamente.',
+  },
+  {
+    question: '¿La alergia se cura o solo se controla?',
+    answer:
+      'La alergia es una enfermedad crónica. Sin embargo, a través de la inmunoterapia, podemos lograr que el cuerpo tolere aquello que antes le hacía daño, reduciendo drásticamente la necesidad de medicación.',
+  },
+  {
+    question: '¿Atiende niños?',
+    answer:
+      'El Dr. Liber tiene amplia experiencia en el tratamiento de alergias en niños, incluyendo asma, rinitis y afecciones en la piel.',
   },
   {
     question: '¿Dónde puedo atenderme?',
     answer: 'Contamos con atención coordinada en Corrientes, Resistencia, Sáenz Peña y Formosa.',
   },
   {
-    question: '¿Es necesario esperar a una crisis para consultar?',
-    answer: 'No. El objetivo del Sistema 360™ es preventivo: lograr menos crisis y mejor calidad de vida a largo plazo.',
-  },
-  {
-    question: '¿La alergia se cura o solo se controla?',
-    answer: 'A través de la inmunoterapia personalizada, podemos lograr que el cuerpo tolere aquello que antes le hacía daño, reduciendo drásticamente la necesidad de medicación.',
-  },
-  {
-    question: '¿Es un tratamiento seguro para niños?',
-    answer: 'Sí, atendemos niños y adultos. Es un enfoque seguro; evitar la progresión de la rinitis al asma es un acto de medicina preventiva muy importante en la infancia.',
-  },
-  {
-    question: '¿Necesito estudios previos?',
-    answer: 'No.',
-  },
-  {
-    question: '¿Cuánto dura la consulta?',
-    answer: 'Consultar por WhatsApp.',
+    question: '¿Se puede hacer solo una espirometría sin consulta?',
+    answer:
+      'Sí, en algunos casos se puede realizar el estudio de forma puntual. Sin embargo, lo más importante es interpretar correctamente el resultado dentro del contexto clínico para tomar decisiones adecuadas.',
   },
 ];
 ---
-<section class="py-16 lg:py-24 bg-white">
-  <div class="max-w-3xl mx-auto px-6">
-    <h2 class="font-display text-2xl sm:text-3xl font-semibold text-brand-authority text-center mb-12">
-      Preguntas frecuentes
-    </h2>
-    <div class="space-y-4">
+<section id="faq" class="py-24 bg-background">
+  <div class="mx-auto max-w-3xl px-6 lg:px-12">
+    <div class="mx-auto mb-16 max-w-2xl text-center">
+      <p class="mb-4 text-sm uppercase tracking-widest text-primary">Preguntas Frecuentes</p>
+      <h2 class="font-sans text-3xl sm:text-4xl lg:text-5xl font-medium text-foreground mb-6 text-balance">
+        Resolvemos tus dudas
+      </h2>
+      <p class="font-serif text-lg leading-relaxed text-muted-foreground">
+        Encontrá respuestas a las consultas más comunes de nuestros pacientes.
+      </p>
+    </div>
+
+    <div class="divide-y divide-border/50 border-b border-border/50">
       {faqs.map((faq) => (
-        <details class="group rounded-xl border border-brand-authority/10 overflow-hidden bg-white">
-          <summary class="flex items-center justify-between gap-4 px-6 py-4 cursor-pointer list-none font-medium text-brand-technical hover:bg-brand-breath transition-colors">
-            {faq.question}
-            <span class="text-brand-authority group-open:rotate-180 transition-transform">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <details class="group py-2">
+          <summary class="flex cursor-pointer list-none items-center justify-between gap-4 py-6 text-left font-medium text-foreground transition-colors hover:text-primary">
+            <span class="text-base sm:text-lg">{faq.question}</span>
+            <span class="shrink-0 text-primary transition-transform group-open:rotate-180">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
               </svg>
             </span>
           </summary>
-          <div class="px-6 pb-4 pt-0 text-brand-technical/85 text-lg">
-            {faq.answer}
-          </div>
+          <div class="pb-6 font-serif text-base leading-relaxed text-muted-foreground">{faq.answer}</div>
         </details>
       ))}
     </div>

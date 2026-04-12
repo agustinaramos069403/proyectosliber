@@ -1,0 +1,26 @@
+---
+const currentYear = new Date().getFullYear();
+---
+<footer class="py-12 bg-foreground text-background">
+  <div class="mx-auto max-w-7xl px-6 lg:px-12">
+    <div class="flex flex-col items-center justify-between gap-6 md:flex-row">
+      <div>
+        <span class="font-sans text-xl font-medium">Dr. Liber Acosta</span>
+        <p class="mt-1 font-serif text-sm text-background/70">Especialista en Asma, Alergia e Inmunología</p>
+      </div>
+
+      <nav class="flex flex-wrap justify-center gap-6" aria-label="Pie de página">
+        <a href="#servicios" class="text-sm text-background/70 transition-colors hover:text-background">Servicios</a>
+        <a href="#sobre-mi" class="text-sm text-background/70 transition-colors hover:text-background">Sobre Mí</a>
+        <a href="#testimonios" class="text-sm text-background/70 transition-colors hover:text-background">Testimonios</a>
+        <a href="#contacto" class="text-sm text-background/70 transition-colors hover:text-background">Contacto</a>
+      </nav>
+    </div>
+
+    <div class="mt-8 border-t border-background/10 pt-8 text-center">
+      <p class="text-sm text-background/50">
+        © {currentYear} Dr. Liber Acosta. Todos los derechos reservados.
+      </p>
+    </div>
+  </div>
+</footer>

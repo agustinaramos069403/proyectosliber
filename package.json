@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "astro dev",
+    "dev:netlify": "netlify dev --offline --no-open",
+    "dev:functions": "netlify functions:serve --offline --port 8889 --functions netlify/functions",
     "build": "astro build",
     "preview": "astro preview",
     "deploy": "npm run build && netlify deploy --prod"
