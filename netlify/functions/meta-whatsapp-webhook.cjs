@@ -124,12 +124,26 @@ async function sendWhatsAppText(toPhoneId, body) {
     typeof process.env.WHATSAPP_ACCESS_TOKEN === 'string'
       ? process.env.WHATSAPP_ACCESS_TOKEN.trim()
       : '';
-  const phoneNumberId =
+  let phoneNumberId =
     typeof process.env.WHATSAPP_PHONE_NUMBER_ID === 'string'
       ? process.env.WHATSAPP_PHONE_NUMBER_ID.trim()
       : '';
+  if (phoneNumberId.startsWith('+')) {
+    phoneNumberId = phoneNumberId.slice(1);
+  }
   if (!token || !phoneNumberId) {
     console.error('Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID');
+    return;
+  }
+  const digitsOnlyPhoneNumberId = /^\d+$/.test(phoneNumberId);
+  const metaPhoneNumberIdMinLength = 14;
+  if (!digitsOnlyPhoneNumberId || phoneNumberId.length < metaPhoneNumberIdMinLength) {
+    console.error(
+      'WHATSAPP_PHONE_NUMBER_ID must be the long numeric "Phone number ID" from Meta (WhatsApp > API setup), not the customer WhatsApp number (e.g. not 15556489769). Current value length:',
+      phoneNumberId.length,
+      'digitsOnly=',
+      digitsOnlyPhoneNumberId
+    );
     return;
   }
   console.info('meta-whatsapp-webhook: Graph API auth', describeAccessTokenForLogs(token));
