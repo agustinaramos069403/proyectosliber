@@ -6,7 +6,7 @@
  * - WHATSAPP_ACCESS_TOKEN     (temporary or system user token from Meta)
  * - WHATSAPP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
  * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
- *   (full URLs to book; if missing, bot sends text asking to confirm by phone)
+ *   (full URLs to book; if missiccng, bot sends text asking to confirm by phone)
  */
 
 const crypto = require('crypto');
