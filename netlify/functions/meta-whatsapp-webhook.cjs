@@ -133,8 +133,28 @@ async function sendWhatsAppText(toPhoneId, body) {
 
 /**
  * Meta sends hub.mode, hub.verify_token, hub.challenge as query params.
- * Merge queryStringParameters + multiValueQueryStringParameters + rawQuery when needed.
+ * Some gateways omit dotted keys in queryStringParameters; parse from raw query when possible.
  */
+function getRawQueryStringFromEvent(event) {
+  const candidates = [
+    typeof event.rawQuery === 'string' ? event.rawQuery : null,
+    typeof event.queryString === 'string' ? event.queryString : null,
+    typeof event.path === 'string' && event.path.includes('?') ? event.path.split('?')[1] : null,
+    event.requestContext &&
+    typeof event.requestContext.path === 'string' &&
+    event.requestContext.path.includes('?')
+      ? event.requestContext.path.split('?')[1]
+      : null,
+    typeof event.rawUrl === 'string' && event.rawUrl.includes('?') ? event.rawUrl.split('?')[1] : null,
+  ];
+  for (const candidate of candidates) {
+    if (candidate != null && String(candidate).length > 0) {
+      return String(candidate).startsWith('?') ? String(candidate).slice(1) : String(candidate);
+    }
+  }
+  return null;
+}
+
 function getMetaWebhookQueryParams(event) {
   const merged = { ...(event.queryStringParameters || {}) };
   const multi = event.multiValueQueryStringParameters || {};
@@ -143,17 +163,13 @@ function getMetaWebhookQueryParams(event) {
       merged[key] = values[0];
     }
   }
-  const rawQuery =
-    typeof event.rawQuery === 'string'
-      ? event.rawQuery
-      : typeof event.queryString === 'string'
-        ? event.queryString
-        : null;
-  if (rawQuery) {
-    const searchParams = new URLSearchParams(rawQuery.startsWith('?') ? rawQuery.slice(1) : rawQuery);
+  const rawQueryString = getRawQueryStringFromEvent(event);
+  if (rawQueryString) {
+    const searchParams = new URLSearchParams(rawQueryString);
     for (const key of ['hub.mode', 'hub.verify_token', 'hub.challenge']) {
-      if (merged[key] == null && searchParams.has(key)) {
-        merged[key] = searchParams.get(key);
+      const value = searchParams.get(key);
+      if (value != null && value !== '') {
+        merged[key] = value;
       }
     }
   }
@@ -169,7 +185,8 @@ exports.handler = async (event) => {
     const challenge = params['hub.challenge'];
     const verify = process.env.WHATSAPP_VERIFY_TOKEN;
     const tokenNormalized = typeof token === 'string' ? token.trim() : '';
-    const verifyNormalized = typeof verify === 'string' ? verify.trim() : '';
+    const verifyNormalized =
+      typeof verify === 'string' ? verify.trim().replace(/^\uFEFF/, '') : '';
     if (
       mode === 'subscribe' &&
       tokenNormalized.length > 0 &&
