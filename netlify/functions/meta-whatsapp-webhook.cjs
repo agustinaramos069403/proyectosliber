@@ -213,7 +213,12 @@ exports.handler = async (event) => {
   }
 
   try {
-    const payload = JSON.parse(event.body || '{}');
+    let rawBody = event.body == null ? '{}' : String(event.body);
+    if (event.isBase64Encoded) {
+      rawBody = Buffer.from(rawBody, 'base64').toString('utf8');
+    }
+    const payload = JSON.parse(rawBody || '{}');
+    let processedTextMessageCount = 0;
     const entries = payload.entry || [];
     for (const ent of entries) {
       const changes = ent.changes || [];
@@ -222,6 +227,7 @@ exports.handler = async (event) => {
         const messages = value.messages || [];
         for (const msg of messages) {
           if (msg.type !== 'text' || !msg.text?.body) continue;
+          processedTextMessageCount += 1;
           const from = msg.from;
           const bodyText = msg.text.body;
           const sede = findSedeFromText(bodyText);
@@ -232,6 +238,14 @@ exports.handler = async (event) => {
           }
         }
       }
+    }
+    if (processedTextMessageCount === 0) {
+      console.log(
+        'meta-whatsapp-webhook: POST received but no text messages handled. object=',
+        payload.object,
+        'entryCount=',
+        entries.length
+      );
     }
   } catch (error) {
     console.error('Webhook error', error);
