@@ -9,7 +9,22 @@
  *   (full URLs to book; if missing, bot sends text asking to confirm by phone)
  */
 
+const crypto = require('crypto');
+
 const GRAPH_VERSION = 'v21.0';
+
+/** Safe log line to confirm Netlify picked up a new token (never log the raw token). */
+function describeAccessTokenForLogs(secret) {
+  if (secret == null || typeof secret !== 'string' || secret.length === 0) {
+    return 'missing';
+  }
+  const trimmed = secret.trim();
+  if (trimmed.length === 0) {
+    return 'missing-after-trim';
+  }
+  const fingerprint = crypto.createHash('sha256').update(trimmed).digest('hex').slice(0, 16);
+  return `length=${trimmed.length} fingerprint=${fingerprint}`;
+}
 
 const SEDE_ENTRIES = [
   {
@@ -105,12 +120,19 @@ function buildLinkMessage(entry) {
 }
 
 async function sendWhatsAppText(toPhoneId, body) {
-  const token = process.env.WHATSAPP_ACCESS_TOKEN;
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const token =
+    typeof process.env.WHATSAPP_ACCESS_TOKEN === 'string'
+      ? process.env.WHATSAPP_ACCESS_TOKEN.trim()
+      : '';
+  const phoneNumberId =
+    typeof process.env.WHATSAPP_PHONE_NUMBER_ID === 'string'
+      ? process.env.WHATSAPP_PHONE_NUMBER_ID.trim()
+      : '';
   if (!token || !phoneNumberId) {
     console.error('Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID');
     return;
   }
+  console.info('meta-whatsapp-webhook: Graph API auth', describeAccessTokenForLogs(token));
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
   const response = await fetch(url, {
     method: 'POST',
@@ -127,7 +149,13 @@ async function sendWhatsAppText(toPhoneId, body) {
   });
   if (!response.ok) {
     const errText = await response.text();
-    console.error('Meta API error', response.status, errText);
+    console.error(
+      'Meta API error',
+      response.status,
+      errText,
+      'tokenForLogs=',
+      describeAccessTokenForLogs(token)
+    );
   }
 }
 
