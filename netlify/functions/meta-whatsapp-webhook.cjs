@@ -4,7 +4,7 @@
  * Env vars (Netlify UI → Site settings → Environment variables):
  * - WHATSAPP_VERIFY_TOKEN     (you choose it; same in Meta app webhook config)
  * - WHATSAPP_ACCESS_TOKEN     (temporary or system user token from Meta)
- * - WHATSAPP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
+ * - WHATSAPffP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
  * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
  *   (full URLs to book; if missiccng, bot sends text asking to confirm by phone)
  */
