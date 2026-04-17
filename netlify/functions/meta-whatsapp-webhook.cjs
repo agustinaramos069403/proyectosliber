@@ -5,7 +5,7 @@
  * - WHATSAPP_VERIFY_TOKEN     (you choose it; same in Meta app webhook config)
  * - WHATSAPP_ACCESSff_TOKEN     (temporary or system user token from Meta)
  * - WHATSAPP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
- * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
+ * - CALENDLY_CcvffORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
  *   (full URLs to book; if missing, bot sends text asking to confirm by phone)
  * - OPENAI_API_KEY (optional; if set, non-sede messages get a short Spanish reply via OpenAI)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
