@@ -64,7 +64,7 @@ Los mensajes se envían por WhatsApp Cloud API como texto con `preview_url: true
 
 **A1 — Con `OPENAI_API_KEY` configurada**
 
-Se llama a la API de OpenAI (modelo por defecto `gpt-4o-mini`, configurable con `OPENAI_MODEL`). El texto enviado al usuario **no es fijo**: es una respuesta breve en español (saludo si aplica) que orienta a elegir una de las cuatro sedes. No incluye URLs de agenda (el sistema envía el link solo cuando hay match de sede).
+Se llama a la API de OpenAI (modelo por defecto `gpt-4o-mini`, configurable con `OPENAI_MODEL`). El texto **no es fijo**: ante un saludo suele ser muy breve (p. ej. tono “¿cómo estás? ¿en qué puedo ayudarte?”) **sin** listar las cuatro sedes de entrada; la lista 1–4 aparece cuando el usuario pide turno, sede o algo equivalente. No incluye URLs de agenda (el sistema envía el link solo cuando hay match de sede).
 
 **A2 — Sin `OPENAI_API_KEY`, o si OpenAI falla**
 

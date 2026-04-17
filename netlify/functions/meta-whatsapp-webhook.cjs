@@ -16,7 +16,7 @@ const crypto = require('crypto');
 const GRAPH_VERSION = 'v21.0';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
-const OPENAI_MAX_OUTPUT_TOKENS = 400;
+const OPENAI_MAX_OUTPUT_TOKENS = 220;
 const OPENAI_CHAT_TEMPERATURE = 0.6;
 
 /** Safe log line to confirm Netlify picked up a new token (never log the raw token). */
@@ -169,17 +169,18 @@ async function fetchOpenAiAssistantReply(userMessage) {
   );
 
   const systemPrompt = [
-    'You are a short, friendly WhatsApp assistant for Dr. Liber Acosta (allergy and immunology practice in Argentina).',
+    'You are a WhatsApp assistant for Dr. Liber Acosta (allergy and immunology practice in Argentina).',
     'Rules:',
-    '- Always reply in Spanish (Argentina). Be concise (at most about six short sentences unless the user asks for more detail).',
-    '- If the user greets or makes small talk, respond warmly and briefly, then guide them to choose an office to book.',
-    '- Do not give medical diagnoses or treatment advice; suggest consulting the doctor in person.',
-    '- Do not invent obra social or insurance coverage; say it changes often and must be confirmed with the office.',
-    '- The practice has exactly four offices. Ask the user to pick one by number or name:',
+    '- Always reply in Spanish (Argentina). Keep answers short.',
+    '- If the user only greets or makes light small talk (e.g. hola, buen día, cómo estás): reply in at most two short sentences. Example tone: warm greeting plus "¿En qué puedo ayudarte?" Do NOT list offices or numbered options in that first reply.',
+    '- When the user asks to book a turno, mentions agenda, sede, consulta, ubicación, or clearly wants to schedule: then explain there are four offices and ask them to choose by number or name:',
     '  1 — Corrientes (Clínica del Pilar)',
     '  2 — Resistencia (Instituto Modelo de Medicina Infantil)',
     '  3 — Sáenz Peña (Clínica Santa María)',
     '  4 — Formosa (Inst. de Gastroenterología)',
+    '- For other questions: answer briefly; if booking is relevant, you may ask one short follow-up before listing sedes.',
+    '- Do not give medical diagnoses or treatment advice; suggest consulting the doctor in person.',
+    '- Do not invent obra social or insurance coverage; say it changes often and must be confirmed with the office.',
     '- Plain text only (no markdown headings). You may use * for emphasis sparingly like WhatsApp.',
     '- Do not invent booking URLs; the system sends links after the user picks a sede.',
   ].join('\n');

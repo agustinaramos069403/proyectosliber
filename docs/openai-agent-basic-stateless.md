@@ -65,11 +65,11 @@ Estas reglas **no** dependen del modelo:
 
 El *system prompt* (en inglés en el código) instruye al modelo para que, en **español (Argentina)**:
 
-- Responda **breve** (~hasta seis oraciones cortas salvo que pidan más detalle).
-- Ante **saludos / small talk**: respuesta **cálida y corta**, luego orientar a **elegir sede**.
+- Ante **solo saludos / small talk ligero**: como máximo **dos oraciones cortas** (p. ej. saludo + “¿en qué puedo ayudarte?”), **sin** enumerar las cuatro sedes.
+- Cuando el usuario pida **turno, agenda, sede o consulta**: entonces listar las **cuatro sedes** (1–4) o pedir que elijan por nombre.
 - **No** dar diagnósticos ni consejos médicos de tratamiento; derivar a consulta presencial.
 - **No** inventar cobertura de obras sociales; indicar que cambia y debe confirmarse con el consultorio.
-- Listar **exactamente cuatro** sedes con los nombres acordados (número + nombre de institución).
+- Cuando toque hablar de sedes para agendar, listar **exactamente cuatro** opciones con los nombres acordados (número + nombre de institución).
 - Texto **plano** (sin markdown de encabezados); uso esporádico de `*` estilo WhatsApp.
 - **No** inventar URLs de reserva; el sistema envía el link cuando el usuario elige sede.
 
@@ -82,7 +82,10 @@ Referencia literal en código: arreglo `systemPrompt` dentro de `fetchOpenAiAssi
 No son plantillas fijas de salida (el modelo varía el wording), pero ilustran el **comportamiento esperado**:
 
 **Entrada usuario:** `Hola, ¿cómo estás?`  
-**Salida esperada (estilo):** saludo breve + invitación a decir en qué sede quiere turno + lista 1–4 o nombres.
+**Salida esperada (estilo):** una o dos frases (p. ej. “¿En qué puedo ayudarte?”) **sin** lista 1–4.
+
+**Entrada usuario:** `Quiero agendar un turno`  
+**Salida esperada (estilo):** mencionar las cuatro sedes o pedir que elijan por número o nombre.
 
 **Entrada usuario:** `¿Me cubre OSDE el consultorio?`  
 **Salida esperada (estilo):** no afirmar cobertura; decir que depende del plan y que lo confirmen con administración/recepción; ofrecer elegir sede para agendar.
