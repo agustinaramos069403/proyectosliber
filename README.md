@@ -47,6 +47,8 @@ En Meta (App → WhatsApp → Configuration) configurá:
 | `CALENDLY_RESISTENCIA` | Igual. |
 | `CALENDLY_SAENZ_PENA` | Igual. |
 | `CALENDLY_FORMOSA` | Igual. |
+| `OPENAI_API_KEY` | Opcional. Si está definida, cuando el usuario no elige sede el bot responde con un texto breve vía OpenAI (modelo por defecto `gpt-4o-mini`) y orienta a elegir sede. |
+| `OPENAI_MODEL` | Opcional. Sobrescribe el modelo de OpenAI (por defecto `gpt-4o-mini`). |
 
 Si falta alguna URL de Calendly, el bot igual confirma la sede y pide que escriban horario por chat.
 

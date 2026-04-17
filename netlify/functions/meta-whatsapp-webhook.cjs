@@ -4,14 +4,20 @@
  * Env vars (Netlify UI → Site settings → Environment variables):
  * - WHATSAPP_VERIFY_TOKEN     (you choose it; same in Meta app webhook config)
  * - WHATSAPP_ACCESS_TOKEN     (temporary or system user token from Meta)
- * - WHATSAPffP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
+ * - WHATSAPP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
  * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
- *   (full URLs to book; if missiccng, bot sends text asking to confirm by phone)
+ *   (full URLs to book; if missing, bot sends text asking to confirm by phone)
+ * - OPENAI_API_KEY (optional; if set, non-sede messages get a short Spanish reply via OpenAI)
+ * - OPENAI_MODEL (optional; default gpt-4o-mini)
  */
 
 const crypto = require('crypto');
 
 const GRAPH_VERSION = 'v21.0';
+const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
+const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const OPENAI_MAX_OUTPUT_TOKENS = 400;
+const OPENAI_CHAT_TEMPERATURE = 0.6;
 
 /** Safe log line to confirm Netlify picked up a new token (never log the raw token). */
 function describeAccessTokenForLogs(secret) {
@@ -117,6 +123,100 @@ function buildLinkMessage(entry) {
     'El link de agenda online todavía no está configurado.',
     'Escribinos el horario preferido y te confirmamos por este chat.',
   ].join('\n');
+}
+
+function describeOpenAiApiKeyForLogs(secret) {
+  if (secret == null || typeof secret !== 'string' || secret.length === 0) {
+    return 'missing';
+  }
+  const trimmed = secret.trim();
+  if (trimmed.length === 0) {
+    return 'missing-after-trim';
+  }
+  const fingerprint = crypto.createHash('sha256').update(trimmed).digest('hex').slice(0, 16);
+  return `length=${trimmed.length} fingerprint=${fingerprint}`;
+}
+
+function getOpenAiModelName() {
+  const fromEnvironment = process.env.OPENAI_MODEL;
+  if (typeof fromEnvironment === 'string' && fromEnvironment.trim().length > 0) {
+    return fromEnvironment.trim();
+  }
+  return DEFAULT_OPENAI_MODEL;
+}
+
+function getOpenAiApiKey() {
+  const raw = process.env.OPENAI_API_KEY;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+/**
+ * Short conversational reply when the user did not match a sede keyword.
+ * Returns null if OpenAI is not configured or the request fails.
+ */
+async function fetchOpenAiAssistantReply(userMessage) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) {
+    return null;
+  }
+  const modelName = getOpenAiModelName();
+  console.info(
+    'meta-whatsapp-webhook: OpenAI request',
+    'model=',
+    modelName,
+    'keyForLogs=',
+    describeOpenAiApiKeyForLogs(apiKey)
+  );
+
+  const systemPrompt = [
+    'You are a short, friendly WhatsApp assistant for Dr. Liber Acosta (allergy and immunology practice in Argentina).',
+    'Rules:',
+    '- Always reply in Spanish (Argentina). Be concise (at most about six short sentences unless the user asks for more detail).',
+    '- If the user greets or makes small talk, respond warmly and briefly, then guide them to choose an office to book.',
+    '- Do not give medical diagnoses or treatment advice; suggest consulting the doctor in person.',
+    '- Do not invent obra social or insurance coverage; say it changes often and must be confirmed with the office.',
+    '- The practice has exactly four offices. Ask the user to pick one by number or name:',
+    '  1 — Corrientes (Clínica del Pilar)',
+    '  2 — Resistencia (Instituto Modelo de Medicina Infantil)',
+    '  3 — Sáenz Peña (Clínica Santa María)',
+    '  4 — Formosa (Inst. de Gastroenterología)',
+    '- Plain text only (no markdown headings). You may use * for emphasis sparingly like WhatsApp.',
+    '- Do not invent booking URLs; the system sends links after the user picks a sede.',
+  ].join('\n');
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: OPENAI_CHAT_TEMPERATURE,
+        max_tokens: OPENAI_MAX_OUTPUT_TOKENS,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI API error', response.status, errorText.slice(0, 800));
+      return null;
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || text.trim().length === 0) {
+      console.error('OpenAI empty content', JSON.stringify(data).slice(0, 600));
+      return null;
+    }
+    return text.trim();
+  } catch (error) {
+    console.error('OpenAI request failed', error);
+    return null;
+  }
 }
 
 /**
@@ -324,7 +424,12 @@ exports.handler = async (event) => {
           if (sede) {
             await sendWhatsAppText(from, buildLinkMessage(sede));
           } else {
-            await sendWhatsAppText(from, buildAskSedeMessage());
+            const openAiReply = await fetchOpenAiAssistantReply(bodyText);
+            if (openAiReply) {
+              await sendWhatsAppText(from, openAiReply);
+            } else {
+              await sendWhatsAppText(from, buildAskSedeMessage());
+            }
           }
         }
       }
