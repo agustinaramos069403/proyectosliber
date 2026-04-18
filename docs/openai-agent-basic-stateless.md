@@ -63,7 +63,7 @@ Estas reglas **no** dependen del modelo:
 
 ### 3.2 Reglas blandas (system prompt → modelo)
 
-El *system prompt* (en inglés en el código) instruye al modelo para que, en **español (Argentina)**:
+El *system prompt* vive en `netlify/functions/agente-liber-system-prompt.txt` (extraído de `docs/agente-liber-reglas.md`, PARTE 2, más una nota sobre limitaciones Netlify). Instruye al modelo en **español (Argentina)**. Resumen de intención:
 
 - Ante **solo saludos / small talk ligero**: como máximo **dos oraciones cortas** (p. ej. saludo + “¿en qué puedo ayudarte?”), **sin** enumerar las cuatro sedes.
 - Cuando el usuario pida **turno, agenda, sede o consulta**: entonces listar las **cuatro sedes** (1–4) o pedir que elijan por nombre.
@@ -159,6 +159,9 @@ Donde \(P_{\text{in}}\) y \(P_{\text{out}}\) son el precio por millón de tokens
 
 | Recurso | Ubicación |
 |---------|-----------|
-| Llamada OpenAI y system prompt | `netlify/functions/meta-whatsapp-webhook.cjs` → `fetchOpenAiAssistantReply` |
+| Texto completo del system prompt | `netlify/functions/agente-liber-system-prompt.txt` |
+| Reglas de negocio / conversación (fuente) | `docs/agente-liber-reglas.md` |
+| Llamada OpenAI | `netlify/functions/meta-whatsapp-webhook.cjs` → `fetchOpenAiAssistantReply` |
+| Emergencias y Chaco ambiguo (código) | mismo archivo, antes del LLM |
 | Flujo webhook + ramas | mismo archivo → `exports.handler` |
 | Flujo funcional resumido | `docs/whatsapp-bot-flow.md` |

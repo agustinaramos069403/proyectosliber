@@ -3,20 +3,24 @@
  *
  * Env vars (Netlify UI → Site settings → Environment variables):
  * - WHATSAPP_VERIFY_TOKEN     (you choose it; same in Meta app webhook config)
- * - WHATSAPP_ACCESSff_TOKEN     (temporary or system user token from Meta)
+ * - WHATSAPP_ACCESS_TOKEN     (temporary or system user token from Meta)
  * - WHATSAPP_PHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
- * - CALENDLY_CcvffORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
+ * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
  *   (full URLs to book; if missing, bot sends text asking to confirm by phone)
- * - OPENAI_API_KEY (optional; if set, non-sede messages get a short Spanish reply via OpenAI)
+ * - OPENAI_API_KEY (optional; if set, non-sede messages use OpenAI with docs/agente-liber-reglas.md prompt file)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
+ *
+ * Conversational rules: docs/agente-liber-reglas.md — system prompt text: agente-liber-system-prompt.txt (same folder)
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const GRAPH_VERSION = 'v21.0';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
-const OPENAI_MAX_OUTPUT_TOKENS = 220;
+const OPENAI_MAX_OUTPUT_TOKENS = 380;
 const OPENAI_CHAT_TEMPERATURE = 0.6;
 
 /** Safe log line to confirm Netlify picked up a new token (never log the raw token). */
@@ -35,7 +39,15 @@ function describeAccessTokenForLogs(secret) {
 const SEDE_ENTRIES = [
   {
     displayName: 'Corrientes',
-    match: ['corrientes', '1', 'clinica del pilar', 'clínica del pilar', 'pilar'],
+    match: [
+      'corrientes',
+      '1',
+      'clinica del pilar',
+      'clínica del pilar',
+      'pilar',
+      'ctes',
+      'capital corrientes',
+    ],
     envKey: 'CALENDLY_CORRIENTES',
   },
   {
@@ -47,20 +59,73 @@ const SEDE_ENTRIES = [
       'instituto modelo de medicina infantil',
       'instituto modelo medicina infantil',
       'modelo de medicina infantil',
+      'rcia',
+      'capital chaco',
+      'capital del chaco',
     ],
     envKey: 'CALENDLY_RESISTENCIA',
   },
   {
     displayName: 'Sáenz Peña',
-    match: ['sáenz peña', 'saenz pena', 'saenz', '3', 'santa maria', 'santa maría'],
+    match: [
+      'sáenz peña',
+      'saenz pena',
+      'saenz',
+      '3',
+      'santa maria',
+      'santa maría',
+      'presidencia roca',
+      'pcia roca',
+      'pres roca',
+      'presidente roca',
+      'saenzpena',
+    ],
     envKey: 'CALENDLY_SAENZ_PENA',
   },
   {
     displayName: 'Formosa',
-    match: ['formosa', '4', 'gastroenterologia', 'gastroenterología'],
+    match: ['formosa', '4', 'gastroenterologia', 'gastroenterología', 'fsa'],
     envKey: 'CALENDLY_FORMOSA',
   },
 ];
+
+/** Normalized substrings; must match after normalizeForMatch (no accents). */
+const EMERGENCY_NORMALIZED_SUBSTRINGS = [
+  'no puedo respirar',
+  'me falta el aire',
+  'me ahogo',
+  'me hincho la garganta',
+  'se me hincho la garganta',
+  'me hincho la cara',
+  'se me hincho la cara',
+  'reaccion alergica fuerte',
+  'me desmaye',
+  'me pico una abeja',
+  'me pico una avispa',
+  'anafilaxia',
+  'anafilaxis',
+  'urticaria muy fuerte',
+  'me salio todo el cuerpo',
+  'no aguanto mas',
+  'es urgente',
+  'es una emergencia',
+  'emergencia medica',
+  'necesito urgencia',
+];
+
+const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
+  'llamá al 107 o andá a la guardia más cercana ahora. no esperes.';
+
+const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
+  'estás en Resistencia o en Sáenz Peña?';
+
+const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
+  'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
+
+const FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT =
+  'Sos la asistente del consultorio del Dr. Liber Acosta (alergista). Respondé en español argentino, texto plano, sin markdown ni asteriscos, máximo 2 oraciones. No des diagnósticos ni montos. Si pueden decir ciudad o 1-4 para sede, mejor. Reglas completas no cargadas en el servidor.';
+
+let cachedAgenteLiberSystemPrompt = undefined;
 
 function normalizeForMatch(text) {
   return text
@@ -90,6 +155,89 @@ function findSedeFromText(rawText) {
     }
   }
   return null;
+}
+
+function textMatchesMedicalEmergency(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  for (const phrase of EMERGENCY_NORMALIZED_SUBSTRINGS) {
+    if (normalized.includes(phrase)) return true;
+  }
+  return false;
+}
+
+/**
+ * "Chaco" without Resistencia vs Sáenz Peña disambiguation (see docs/agente-liber-reglas.md).
+ */
+function needsChacoProvinceClarification(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  if (!normalized.includes('chaco')) return false;
+  if (findSedeFromText(rawText)) return false;
+  const hasResistenciaOrSaenzHint =
+    /resistencia|\brcia\b|saenz|pena|presidencia|presidente(\s*roca)?|pcia\s*roca|\broca\b|inmi|imm|capital(\s*del)?\s*chaco/.test(
+      normalized
+    );
+  if (hasResistenciaOrSaenzHint) return false;
+  return true;
+}
+
+function resolveWhatsAppProfileDisplayName(value, fromPhoneId) {
+  const contacts = value.contacts;
+  if (!Array.isArray(contacts)) return '';
+  const fromDigits = typeof fromPhoneId === 'string' ? fromPhoneId.trim() : '';
+  for (const contact of contacts) {
+    const wide = contact?.wa_id != null ? String(contact.wa_id).trim() : '';
+    if (fromDigits.length > 0 && wide.length > 0 && wide !== fromDigits) continue;
+    const name = contact?.profile?.name;
+    if (typeof name !== 'string') continue;
+    const trimmedName = name.trim();
+    if (trimmedName.length === 0) continue;
+    if (/^\d+$/.test(trimmedName)) continue;
+    if (/^(user|usuario|test)$/i.test(trimmedName)) continue;
+    return trimmedName;
+  }
+  return '';
+}
+
+function loadAgenteLiberSystemPrompt() {
+  if (cachedAgenteLiberSystemPrompt !== undefined) {
+    return cachedAgenteLiberSystemPrompt;
+  }
+  try {
+    const promptFilePath = path.join(__dirname, 'agente-liber-system-prompt.txt');
+    cachedAgenteLiberSystemPrompt = fs.readFileSync(promptFilePath, 'utf8');
+  } catch (error) {
+    console.error('meta-whatsapp-webhook: could not read agente-liber-system-prompt.txt', error);
+    cachedAgenteLiberSystemPrompt = null;
+  }
+  return cachedAgenteLiberSystemPrompt;
+}
+
+function buildOpenAiUserContent(userMessage, profileDisplayName) {
+  const parts = [];
+  if (typeof profileDisplayName === 'string' && profileDisplayName.trim().length > 0) {
+    parts.push(`Nombre de perfil de WhatsApp del paciente (opcional): ${profileDisplayName.trim()}.`);
+  }
+  parts.push(`Mensaje del paciente:\n${userMessage}`);
+  return parts.join('\n');
+}
+
+/**
+ * [DERIVAR] is handled in code: patient sees handoff text; secretary channel not wired here.
+ */
+function processAssistantReplyForPatient(rawModelText) {
+  if (rawModelText == null || typeof rawModelText !== 'string') {
+    return rawModelText;
+  }
+  if (/\[DERIVAR\]/i.test(rawModelText)) {
+    console.warn(
+      'meta-whatsapp-webhook: model requested [DERIVAR]; secretary notification not implemented',
+      rawModelText.slice(0, 500)
+    );
+    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+  }
+  return rawModelText.trim();
 }
 
 function getAgendaUrl(entry) {
@@ -151,10 +299,12 @@ function getOpenAiApiKey() {
 }
 
 /**
- * Short conversational reply when the user did not match a sede keyword.
+ * Conversational reply when the user did not match a sede keyword (docs/agente-liber-reglas.md).
  * Returns null if OpenAI is not configured or the request fails.
  */
-async function fetchOpenAiAssistantReply(userMessage) {
+async function fetchOpenAiAssistantReply(userMessage, options = {}) {
+  const profileDisplayName =
+    typeof options.profileDisplayName === 'string' ? options.profileDisplayName : '';
   const apiKey = getOpenAiApiKey();
   if (!apiKey) {
     return null;
@@ -168,22 +318,12 @@ async function fetchOpenAiAssistantReply(userMessage) {
     describeOpenAiApiKeyForLogs(apiKey)
   );
 
-  const systemPrompt = [
-    'You are a WhatsApp assistant for Dr. Liber Acosta (allergy and immunology practice in Argentina).',
-    'Rules:',
-    '- Always reply in Spanish (Argentina). Keep answers short.',
-    '- If the user only greets or makes light small talk (e.g. hola, buen día, cómo estás): reply in at most two short sentences. Example tone: warm greeting plus "¿En qué puedo ayudarte?" Do NOT list offices or numbered options in that first reply.',
-    '- When the user asks to book a turno, mentions agenda, sede, consulta, ubicación, or clearly wants to schedule: then explain there are four offices and ask them to choose by number or name:',
-    '  1 — Corrientes (Clínica del Pilar)',
-    '  2 — Resistencia (Instituto Modelo de Medicina Infantil)',
-    '  3 — Sáenz Peña (Clínica Santa María)',
-    '  4 — Formosa (Inst. de Gastroenterología)',
-    '- For other questions: answer briefly; if booking is relevant, you may ask one short follow-up before listing sedes.',
-    '- Do not give medical diagnoses or treatment advice; suggest consulting the doctor in person.',
-    '- Do not invent obra social or insurance coverage; say it changes often and must be confirmed with the office.',
-    '- Plain text only (no markdown headings). You may use * for emphasis sparingly like WhatsApp.',
-    '- Do not invent booking URLs; the system sends links after the user picks a sede.',
-  ].join('\n');
+  const systemPromptFromFile = loadAgenteLiberSystemPrompt();
+  const systemPrompt =
+    typeof systemPromptFromFile === 'string' && systemPromptFromFile.trim().length > 0
+      ? systemPromptFromFile.trim()
+      : FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT;
+  const userContent = buildOpenAiUserContent(userMessage, profileDisplayName);
 
   try {
     const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
@@ -198,7 +338,7 @@ async function fetchOpenAiAssistantReply(userMessage) {
         max_tokens: OPENAI_MAX_OUTPUT_TOKENS,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage },
+          { role: 'user', content: userContent },
         ],
       }),
     });
@@ -421,13 +561,26 @@ exports.handler = async (event) => {
           processedTextMessageCount += 1;
           const from = msg.from;
           const bodyText = msg.text.body;
+          const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
+
+          if (textMatchesMedicalEmergency(bodyText)) {
+            await sendWhatsAppText(from, MEDICAL_EMERGENCY_RESPONSE_MESSAGE);
+            continue;
+          }
+          if (needsChacoProvinceClarification(bodyText)) {
+            await sendWhatsAppText(from, CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE);
+            continue;
+          }
+
           const sede = findSedeFromText(bodyText);
           if (sede) {
             await sendWhatsAppText(from, buildLinkMessage(sede));
           } else {
-            const openAiReply = await fetchOpenAiAssistantReply(bodyText);
+            const openAiReply = await fetchOpenAiAssistantReply(bodyText, {
+              profileDisplayName,
+            });
             if (openAiReply) {
-              await sendWhatsAppText(from, openAiReply);
+              await sendWhatsAppText(from, processAssistantReplyForPatient(openAiReply));
             } else {
               await sendWhatsAppText(from, buildAskSedeMessage());
             }
