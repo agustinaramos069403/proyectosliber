@@ -695,10 +695,7 @@ function buildMicroCommitmentMessage(entry) {
   if (!optionNumber) {
     return 'querés que te pase el link para ver horarios disponibles y reservar?';
   }
-  return (
-    `${entry.displayName}. querés que te pase el link para ver horarios disponibles y reservar? ` +
-    `si es así, respondé ${optionNumber}.`
-  );
+  return `querés que te pase el link para ver horarios disponibles y reservar? si es así, respondé ${optionNumber}.`;
 }
 
 function buildGreetingSentence(profileDisplayName) {
