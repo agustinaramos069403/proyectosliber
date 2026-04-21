@@ -132,10 +132,10 @@ const EMERGENCY_NORMALIZED_SUBSTRINGS = [
 ];
 
 const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
-  'llamá al 107 o andá a la guardia más cercana ahora. no esperes.';
+  'Llamá al 107 o andá a la guardia más cercana ahora. No esperes.';
 
 const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
-  'estás en Resistencia o en Sáenz Peña?';
+  '¿Estás en Resistencia o en Sáenz Peña?';
 
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
@@ -654,7 +654,7 @@ function processAssistantReplyForPatient(rawModelText) {
     normalized.includes('traigas la') ||
     normalized.includes('trae la');
   if (mentionsDocumentation) {
-    return 'entendido, para avanzar necesito saber desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+    return 'Entendido. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
   }
   const suggestsContactingThirdParty =
     normalized.includes('comunicate') ||
@@ -671,7 +671,7 @@ function processAssistantReplyForPatient(rawModelText) {
     normalized.includes('directamente con la obra social') ||
     normalized.includes('con tu obra social');
   if (suggestsContactingThirdParty) {
-    return 'entendido, para avanzar necesito saber desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+    return 'Entendido. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
   }
   return trimmed;
 }
@@ -683,7 +683,7 @@ function getAgendaUrl(entry) {
 
 function buildAskSedeMessage() {
   return (
-    'desde qué ciudad consultás? podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.'
+    '¿Desde qué ciudad consultás? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.'
   );
 }
 
@@ -693,17 +693,17 @@ function buildMicroCommitmentMessage(entry) {
       ? entry.optionNumber
       : '';
   if (!optionNumber) {
-    return 'querés que te pase el link para ver horarios disponibles y reservar?';
+    return '¿Querés que te pase el link para ver horarios disponibles y reservar?';
   }
-  return `querés que te pase el link para ver horarios disponibles y reservar? si es así, respondé ${optionNumber}.`;
+  return `¿Querés que te pase el link para ver horarios disponibles y reservar? Si es así, respondé ${optionNumber}.`;
 }
 
 function buildGreetingSentence(profileDisplayName) {
   const hasName = typeof profileDisplayName === 'string' && profileDisplayName.trim().length > 0;
   if (hasName) {
-    return `hola ${profileDisplayName.trim()}, soy la asistente del Dr. Liber Acosta 😊.`;
+    return `Hola ${profileDisplayName.trim()}, soy la asistente del Dr. Liber Acosta 😊.`;
   }
-  return 'hola, soy la asistente del Dr. Liber Acosta 😊.';
+  return 'Hola, soy la asistente del Dr. Liber Acosta 😊.';
 }
 
 function normalizeToSingleLine(text) {
@@ -717,14 +717,14 @@ function normalizeToSingleLine(text) {
 
 function buildAutoReplyWithGreetingIfNeeded(body, profileDisplayName, priorState) {
   const reply = normalizeToSingleLine(body);
-  const greeted = priorState && typeof priorState === 'object' ? Boolean(priorState.greeted) : false;
+  const greeted = shouldTreatAsAlreadyGreeted(priorState, Date.now());
   if (greeted) {
     return { messageText: reply, nextStatePatch: null };
   }
   const greeting = buildGreetingSentence(profileDisplayName);
   return {
     messageText: `${greeting} ${reply}`,
-    nextStatePatch: { greeted: true },
+    nextStatePatch: { greeted: true, lastSeenAtMs: Date.now() },
   };
 }
 
@@ -795,7 +795,7 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
       (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
       (cityNormalized.includes('formosa') && (isOsde || isSancor));
     if (isKnownNoPlus) {
-      return `en ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. querés que te pase el link para ver horarios disponibles y reservar?`;
+      return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
     }
     return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
   }
@@ -803,9 +803,9 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
   const osDisplayName = healthInsuranceName;
   if (!plusRule.isAccepted) {
     if (privatePriceFormatted) {
-      return `en ${cityEntry.displayName} no trabajamos con ${osDisplayName}. la consulta particular sale $${privatePriceFormatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
+      return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. La consulta particular sale $${privatePriceFormatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
     }
-    return `en ${cityEntry.displayName} no trabajamos con ${osDisplayName}. querés que te pase el link para ver horarios disponibles y reservar?`;
+    return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
   }
 
   if (plusRule.hasPlus) {
@@ -814,16 +814,16 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
         ? formatArsAmount(plusRule.plusAmountArs)
         : null;
     if (plusFormatted) {
-      return `en ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
+      return `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
     }
     return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
   }
 
-  return `en ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus. querés que te pase el link para ver horarios disponibles y reservar?`;
+  return `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
 }
 
 function buildAskHealthInsuranceNameMessage() {
-  return 'qué obra social tenés?';
+  return '¿Qué obra social tenés?';
 }
 
 function messageLooksLikePrivatePriceQuestion(rawText) {
@@ -890,7 +890,7 @@ async function buildPrivatePriceReply(entry) {
   if (!formatted) {
     return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
   }
-  return `en ${entry.displayName} la consulta particular sale $${formatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
+  return `En ${entry.displayName} la consulta particular sale $${formatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
 }
 
 function buildLinkMessage(entry) {
