@@ -903,6 +903,30 @@ async function buildPrivatePriceReply(entry) {
   return `En ${entry.displayName} la consulta particular sale $${formatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
 }
 
+function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('?') ||
+    normalized.includes('que dia') ||
+    normalized.includes('que dias') ||
+    normalized.includes('cuando atiende') ||
+    normalized.includes('dias atiende') ||
+    normalized.includes('horarios') ||
+    normalized.includes('horario') ||
+    normalized.includes('disponible') ||
+    normalized.includes('disponibilidad')
+  );
+}
+
+function buildScheduleQuestionLinkMessage(entry) {
+  const url = getAgendaUrl(entry);
+  if (url) {
+    return `Te dejo la agenda para que veas días y horarios disponibles en ${entry.displayName}:\n${url}`;
+  }
+  return buildLinkMessage(entry);
+}
+
 function buildLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
@@ -1305,6 +1329,19 @@ exports.handler = async (event) => {
                   wrapped.nextStatePatch
                 )
               );
+              await sendWhatsAppText(from, wrapped.messageText);
+            } else if (messageLooksLikeScheduleAvailabilityQuestion(bodyText)) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildScheduleQuestionLinkMessage(sede),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                );
+              }
               await sendWhatsAppText(from, wrapped.messageText);
             } else {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
