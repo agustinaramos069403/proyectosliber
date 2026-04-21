@@ -394,7 +394,7 @@ async function getConversationState(fromPhoneId) {
     const value = data?.result;
     if (typeof value !== 'string' || value.trim().length === 0) return null;
     const parsed = tryParseJson(value);
-    return parsed && typeof parsed.state === 'string' ? parsed.state : null;
+    return parsed && typeof parsed === 'object' ? parsed : null;
   }
   const key = getConversationStateKey(fromPhoneId);
   if (!key) return null;
@@ -412,7 +412,7 @@ async function setConversationState(fromPhoneId, state) {
     const storageKey = buildConversationStateStorageKey(fromPhoneId);
     if (!storageKey) return;
     const ttlSeconds = getConversationStateTtlSeconds();
-    const payload = JSON.stringify({ state });
+    const payload = JSON.stringify(state);
     await fetchUpstashJson(
       `set/${encodeURIComponent(storageKey)}/${encodeURIComponent(payload)}?EX=${ttlSeconds}`
     );
@@ -636,7 +636,19 @@ function processAssistantReplyForPatient(rawModelText) {
     );
     return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
   }
-  return rawModelText.trim();
+  const trimmed = rawModelText.trim();
+  const normalized = normalizeForMatch(trimmed);
+  const mentionsDocumentation =
+    normalized.includes('documentacion') ||
+    normalized.includes('documentación') ||
+    normalized.includes('documentos') ||
+    normalized.includes('traigas') ||
+    normalized.includes('traigas la') ||
+    normalized.includes('trae la');
+  if (mentionsDocumentation) {
+    return 'entendido, para avanzar necesito saber desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+  }
+  return trimmed;
 }
 
 function getAgendaUrl(entry) {
@@ -681,6 +693,42 @@ function formatArsAmount(amount) {
   const integerAmount = Math.round(Number(amount));
   if (!Number.isFinite(integerAmount)) return null;
   return new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 }).format(integerAmount);
+}
+
+function messageConfirmsLinkSend(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return /^(si|sí|dale|ok|oka|de una|manda|mandalo|mandame|pasalo|pasame|quiero|ya|listo)$/.test(
+    normalized
+  );
+}
+
+function buildAwaitingLinkConfirmationState(entry, reason) {
+  return {
+    state: 'awaiting_link_confirmation',
+    sedeEnvKey: entry.envKey,
+    sedeDisplayName: entry.displayName,
+    sedeOptionNumber: entry.optionNumber,
+    reason,
+  };
+}
+
+function stateLooksLikeAwaitingLinkConfirmation(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_link_confirmation' &&
+    typeof state.sedeEnvKey === 'string' &&
+    typeof state.sedeDisplayName === 'string'
+  );
+}
+
+function resolveSedeEntryFromState(state) {
+  if (!stateLooksLikeAwaitingLinkConfirmation(state)) return null;
+  for (const entry of SEDE_ENTRIES) {
+    if (entry.envKey === state.sedeEnvKey) return entry;
+  }
+  return null;
 }
 
 async function buildPrivatePriceReply(entry) {
@@ -1008,21 +1056,35 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
+            const entryFromState = resolveSedeEntryFromState(priorState);
+            if (entryFromState) {
+              await clearConversationState(from);
+              await sendWhatsAppText(from, buildLinkMessage(entryFromState));
+              continue;
+            }
+          }
+
           const sede = findSedeFromText(bodyText);
           if (sede) {
-            if (priorState === 'awaiting_private_price_city') {
+            if (priorState && priorState.state === 'awaiting_private_price_city') {
               await clearConversationState(from);
-              await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
+              const reply = await buildPrivatePriceReply(sede);
+              await setConversationState(from, buildAwaitingLinkConfirmationState(sede, 'after_private_price'));
+              await sendWhatsAppText(from, reply);
             } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
-              await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
+              const reply = await buildPrivatePriceReply(sede);
+              await setConversationState(from, buildAwaitingLinkConfirmationState(sede, 'after_private_price'));
+              await sendWhatsAppText(from, reply);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
+              await setConversationState(from, buildAwaitingLinkConfirmationState(sede, 'after_booking_intent'));
               await sendWhatsAppText(from, buildMicroCommitmentMessage(sede));
             } else {
               await sendWhatsAppText(from, buildLinkMessage(sede));
             }
           } else {
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
-              await setConversationState(from, 'awaiting_private_price_city');
+              await setConversationState(from, { state: 'awaiting_private_price_city' });
               await sendWhatsAppText(from, buildAskSedeMessage());
               continue;
             }
