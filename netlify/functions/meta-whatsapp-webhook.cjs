@@ -16,12 +16,26 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { GoogleAuth } = require('google-auth-library');
 
 const GRAPH_VERSION = 'v21.0';
 const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const OPENAI_MAX_OUTPUT_TOKENS = 380;
 const OPENAI_CHAT_TEMPERATURE = 0.6;
+
+const GOOGLE_SHEETS_API_BASE_URL = 'https://sheets.googleapis.com/v4/spreadsheets';
+const GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
+
+let cachedGoogleSheetsData = null;
+let cachedGoogleSheetsDataExpiresAtMs = 0;
+
+const PRIVATE_PRICE_CITY_KEY_BY_DISPLAY_NAME = {
+  Corrientes: 'Corrientes',
+  Resistencia: 'Resistencia',
+  Formosa: 'Formosa',
+  'Sáenz Peña': 'Saenz Pena',
+};
 
 /** Safe log line to confirm Netlify picked up a new token (never log the raw token). */
 function describeAccessTokenForLogs(secret) {
@@ -41,7 +55,6 @@ const SEDE_ENTRIES = [
     displayName: 'Corrientes',
     match: [
       'corrientes',
-      '1',
       'clinica del pilar',
       'clínica del pilar',
       'pilar',
@@ -49,12 +62,12 @@ const SEDE_ENTRIES = [
       'capital corrientes',
     ],
     envKey: 'CALENDLY_CORRIENTES',
+    optionNumber: '1',
   },
   {
     displayName: 'Resistencia',
     match: [
       'resistencia',
-      '2',
       'immi',
       'instituto modelo de medicina infantil',
       'instituto modelo medicina infantil',
@@ -64,6 +77,7 @@ const SEDE_ENTRIES = [
       'capital del chaco',
     ],
     envKey: 'CALENDLY_RESISTENCIA',
+    optionNumber: '2',
   },
   {
     displayName: 'Sáenz Peña',
@@ -71,7 +85,6 @@ const SEDE_ENTRIES = [
       'sáenz peña',
       'saenz pena',
       'saenz',
-      '3',
       'santa maria',
       'santa maría',
       'presidencia roca',
@@ -81,11 +94,13 @@ const SEDE_ENTRIES = [
       'saenzpena',
     ],
     envKey: 'CALENDLY_SAENZ_PENA',
+    optionNumber: '3',
   },
   {
     displayName: 'Formosa',
-    match: ['formosa', '4', 'gastroenterologia', 'gastroenterología', 'fsa'],
+    match: ['formosa', 'gastroenterologia', 'gastroenterología', 'fsa'],
     envKey: 'CALENDLY_FORMOSA',
+    optionNumber: '4',
   },
 ];
 
@@ -223,6 +238,274 @@ function buildOpenAiUserContent(userMessage, profileDisplayName) {
   return parts.join('\n');
 }
 
+function getGoogleServiceAccountJson() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function getGoogleSheetsPlusCsvUrl() {
+  const raw = process.env.GOOGLE_SHEETS_PLUS_CSV_URL;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function getGoogleSheetsPrivatePricesCsvUrl() {
+  const raw = process.env.GOOGLE_SHEETS_PRIVATE_PRICES_CSV_URL;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function getGoogleSheetsSpreadsheetId() {
+  const raw = process.env.GOOGLE_SHEETS_SPREADSHEET_ID;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function getGoogleSheetsPlusSpreadsheetId() {
+  const raw = process.env.GOOGLE_SHEETS_PLUS_SPREADSHEET_ID;
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  return trimmed.length > 0 ? trimmed : getGoogleSheetsSpreadsheetId();
+}
+
+function getGoogleSheetsPrivatePricesSpreadsheetId() {
+  const raw = process.env.GOOGLE_SHEETS_PRIVATE_PRICES_SPREADSHEET_ID;
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  return trimmed.length > 0 ? trimmed : getGoogleSheetsSpreadsheetId();
+}
+
+function getGoogleSheetsPlusRange() {
+  const raw = process.env.GOOGLE_SHEETS_PLUS_RANGE;
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : 'HealthInsurancePlus!A:F';
+}
+
+function getGoogleSheetsPrivatePricesRange() {
+  const raw = process.env.GOOGLE_SHEETS_PRIVATE_PRICES_RANGE;
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : 'PrivatePrices!A:C';
+}
+
+function tryParseJson(rawJson) {
+  try {
+    return JSON.parse(rawJson);
+  } catch {
+    return null;
+  }
+}
+
+function parseCsvLine(line) {
+  const cells = [];
+  let current = '';
+  let insideQuotes = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === '"') {
+      const next = line[index + 1];
+      if (insideQuotes && next === '"') {
+        current += '"';
+        index += 1;
+        continue;
+      }
+      insideQuotes = !insideQuotes;
+      continue;
+    }
+    if (char === ',' && !insideQuotes) {
+      cells.push(current);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current);
+  return cells.map((cell) => String(cell).trim());
+}
+
+function parseCsvToRows(csvText) {
+  if (typeof csvText !== 'string' || csvText.trim().length === 0) return [];
+  const lines = csvText
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .filter((line) => line.trim().length > 0);
+  return lines.map(parseCsvLine);
+}
+
+async function fetchCsvRows(csvUrl) {
+  if (!csvUrl) return null;
+  try {
+    const response = await fetch(csvUrl, { method: 'GET' });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('meta-whatsapp-webhook: CSV fetch failed', response.status, text.slice(0, 300));
+      return null;
+    }
+    const csvText = await response.text();
+    return parseCsvToRows(csvText);
+  } catch (error) {
+    console.error('meta-whatsapp-webhook: CSV fetch error', error);
+    return null;
+  }
+}
+
+async function getGoogleSheetsAccessToken() {
+  const serviceAccountRaw = getGoogleServiceAccountJson();
+  const serviceAccount = tryParseJson(serviceAccountRaw);
+  if (!serviceAccount) {
+    console.error('meta-whatsapp-webhook: GOOGLE_SERVICE_ACCOUNT_JSON missing or invalid JSON');
+    return null;
+  }
+  const auth = new GoogleAuth({
+    credentials: serviceAccount,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly'],
+  });
+  const client = await auth.getClient();
+  const tokenResponse = await client.getAccessToken();
+  const token =
+    typeof tokenResponse === 'string' ? tokenResponse : tokenResponse?.token;
+  return typeof token === 'string' && token.trim().length > 0 ? token.trim() : null;
+}
+
+async function fetchGoogleSheetsValues(spreadsheetId, rangeA1) {
+  const accessToken = await getGoogleSheetsAccessToken();
+  if (!accessToken) return null;
+  const url = `${GOOGLE_SHEETS_API_BASE_URL}/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(
+    rangeA1
+  )}?majorDimension=ROWS`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    console.error('meta-whatsapp-webhook: Sheets API error', response.status, text.slice(0, 800));
+    return null;
+  }
+  const data = await response.json();
+  return Array.isArray(data?.values) ? data.values : null;
+}
+
+function normalizeCityKeyForSheets(displayName) {
+  return PRIVATE_PRICE_CITY_KEY_BY_DISPLAY_NAME[displayName] || displayName;
+}
+
+function normalizeHealthInsuranceNameForKey(value) {
+  return normalizeForMatch(String(value || '')).replace(/\s+/g, ' ').trim();
+}
+
+function buildPlusLookupMap(rows) {
+  const map = new Map();
+  if (!Array.isArray(rows) || rows.length < 2) return map;
+  const header = rows[0].map((h) => normalizeForMatch(String(h || '')));
+  const cityIndex = header.indexOf('city');
+  const nameIndex = header.indexOf('healthinsurancename');
+  const isAcceptedIndex = header.indexOf('isaccepted');
+  const hasPlusIndex = header.indexOf('hasplus');
+  const plusAmountIndex = header.indexOf('plusamountars');
+  const notesIndex = header.indexOf('notes');
+  for (const row of rows.slice(1)) {
+    const city = row[cityIndex] != null ? String(row[cityIndex]).trim() : '';
+    const name = row[nameIndex] != null ? String(row[nameIndex]).trim() : '';
+    if (!city || !name) continue;
+    const key = `${normalizeForMatch(city)}::${normalizeHealthInsuranceNameForKey(name)}`;
+    const isAcceptedRaw = row[isAcceptedIndex] != null ? String(row[isAcceptedIndex]).trim() : '';
+    const hasPlusRaw = row[hasPlusIndex] != null ? String(row[hasPlusIndex]).trim() : '';
+    const plusAmountRaw = row[plusAmountIndex] != null ? String(row[plusAmountIndex]).trim() : '';
+    const notes = notesIndex >= 0 && row[notesIndex] != null ? String(row[notesIndex]).trim() : '';
+    const isAccepted = /^(true|1|yes|si|sí)$/i.test(isAcceptedRaw);
+    const hasPlus = /^(true|1|yes|si|sí)$/i.test(hasPlusRaw);
+    const plusAmountArs = Number(plusAmountRaw.replace(/[^\d.]/g, ''));
+    map.set(key, {
+      city,
+      name,
+      isAccepted,
+      hasPlus,
+      plusAmountArs: Number.isFinite(plusAmountArs) ? plusAmountArs : null,
+      notes,
+    });
+  }
+  return map;
+}
+
+function buildPrivatePriceMap(rows) {
+  const map = new Map();
+  if (!Array.isArray(rows) || rows.length < 2) return map;
+  const header = rows[0].map((h) => normalizeForMatch(String(h || '')));
+  const cityIndex = header.indexOf('city');
+  const priceIndex = header.indexOf('privatepricears');
+  for (const row of rows.slice(1)) {
+    const city = row[cityIndex] != null ? String(row[cityIndex]).trim() : '';
+    const priceRaw = row[priceIndex] != null ? String(row[priceIndex]).trim() : '';
+    if (!city || !priceRaw) continue;
+    const cityKey = normalizeForMatch(city);
+    const priceArs = Number(priceRaw.replace(/[^\d.]/g, ''));
+    if (!Number.isFinite(priceArs)) continue;
+    map.set(cityKey, priceArs);
+  }
+  return map;
+}
+
+async function getGoogleSheetsData() {
+  const now = Date.now();
+  if (cachedGoogleSheetsData && now < cachedGoogleSheetsDataExpiresAtMs) {
+    return cachedGoogleSheetsData;
+  }
+
+  const plusCsvUrl = getGoogleSheetsPlusCsvUrl();
+  const privatePricesCsvUrl = getGoogleSheetsPrivatePricesCsvUrl();
+  if (plusCsvUrl || privatePricesCsvUrl) {
+    const [plusRows, privatePriceRows] = await Promise.all([
+      plusCsvUrl ? fetchCsvRows(plusCsvUrl) : null,
+      privatePricesCsvUrl ? fetchCsvRows(privatePricesCsvUrl) : null,
+    ]);
+    if (!plusRows && !privatePriceRows) {
+      return null;
+    }
+    cachedGoogleSheetsData = {
+      plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
+      privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
+    };
+    cachedGoogleSheetsDataExpiresAtMs = now + GOOGLE_SHEETS_CACHE_TTL_MS;
+    return cachedGoogleSheetsData;
+  }
+
+  const plusSpreadsheetId = getGoogleSheetsPlusSpreadsheetId();
+  const privatePricesSpreadsheetId = getGoogleSheetsPrivatePricesSpreadsheetId();
+  if (!plusSpreadsheetId && !privatePricesSpreadsheetId) {
+    console.error(
+      'meta-whatsapp-webhook: missing GOOGLE_SHEETS_SPREADSHEET_ID (or the specific *_SPREADSHEET_ID overrides)'
+    );
+    return null;
+  }
+  const plusRange = getGoogleSheetsPlusRange();
+  const privatePricesRange = getGoogleSheetsPrivatePricesRange();
+  const [plusRows, privatePriceRows] = await Promise.all([
+    plusSpreadsheetId ? fetchGoogleSheetsValues(plusSpreadsheetId, plusRange) : null,
+    privatePricesSpreadsheetId
+      ? fetchGoogleSheetsValues(privatePricesSpreadsheetId, privatePricesRange)
+      : null,
+  ]);
+  if (!plusRows && !privatePriceRows) {
+    return null;
+  }
+  cachedGoogleSheetsData = {
+    plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
+    privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
+  };
+  cachedGoogleSheetsDataExpiresAtMs = now + GOOGLE_SHEETS_CACHE_TTL_MS;
+  return cachedGoogleSheetsData;
+}
+
+async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
+  const data = await getGoogleSheetsData();
+  if (!data) return null;
+  const cityKey = normalizeForMatch(normalizeCityKeyForSheets(cityDisplayName));
+  const osKey = normalizeHealthInsuranceNameForKey(healthInsuranceName);
+  const key = `${cityKey}::${osKey}`;
+  return data.plusLookup.get(key) || null;
+}
+
+async function lookupPrivatePrice(cityDisplayName) {
+  const data = await getGoogleSheetsData();
+  if (!data) return null;
+  const cityKey = normalizeForMatch(normalizeCityKeyForSheets(cityDisplayName));
+  return data.privatePriceLookup.get(cityKey) ?? null;
+}
+
 /**
  * [DERIVAR] is handled in code: patient sees handoff text; secretary channel not wired here.
  */
@@ -246,27 +529,63 @@ function getAgendaUrl(entry) {
 }
 
 function buildAskSedeMessage() {
-  return [
-    'No indiqué en qué sede querés agendar.',
-    '',
-    'Elegí una opción (podés responder con el número o el nombre de la ciudad):',
-    '',
-    '1 — Corrientes (Clínica del Pilar)',
-    '2 — Resistencia (Instituto Modelo de Medicina Infantil)',
-    '3 — Sáenz Peña (Clínica Santa María)',
-    '4 — Formosa (Inst. de Gastroenterología)',
-    '',
-    'Cuando elijas, te envío el link para reservar turno.',
-  ].join('\n');
+  return (
+    'desde qué ciudad consultás? podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.'
+  );
+}
+
+function buildMicroCommitmentMessage(entry) {
+  const optionNumber =
+    entry && typeof entry.optionNumber === 'string' && entry.optionNumber.length > 0
+      ? entry.optionNumber
+      : '';
+  if (!optionNumber) {
+    return 'querés que te pase el link para ver horarios disponibles y reservar?';
+  }
+  return (
+    `anotado, ${entry.displayName}. querés que te pase el link para ver horarios disponibles y reservar? ` +
+    `si es así, respondé ${optionNumber}.`
+  );
+}
+
+function messageLooksLikePrivatePriceQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('precio') ||
+    normalized.includes('cuanto sale') ||
+    normalized.includes('cuanto cuesta') ||
+    normalized.includes('consulta particular') ||
+    normalized.includes('particular') ||
+    normalized.includes('valor consulta')
+  );
+}
+
+function formatArsAmount(amount) {
+  const integerAmount = Math.round(Number(amount));
+  if (!Number.isFinite(integerAmount)) return null;
+  return new Intl.NumberFormat('es-AR', { maximumFractionDigits: 0 }).format(integerAmount);
+}
+
+async function buildPrivatePriceReply(entry) {
+  const priceArs = await lookupPrivatePrice(entry.displayName);
+  if (!Number.isFinite(priceArs)) {
+    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+  }
+  const formatted = formatArsAmount(priceArs);
+  if (!formatted) {
+    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+  }
+  return `anotado, en ${entry.displayName} la consulta particular sale $${formatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
 }
 
 function buildLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
-    return `Perfecto, sede *${entry.displayName}*.\n\nAgendá tu turno acá:\n${url}`;
+    return `Perfecto, sede ${entry.displayName}.\n\nAgendá tu turno acá:\n${url}`;
   }
   return [
-    `Recibimos tu preferencia por *${entry.displayName}*.`,
+    `Recibimos tu preferencia por ${entry.displayName}.`,
     '',
     'El link de agenda online todavía no está configurado.',
     'Escribinos el horario preferido y te confirmamos por este chat.',
@@ -574,8 +893,18 @@ exports.handler = async (event) => {
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
-            await sendWhatsAppText(from, buildLinkMessage(sede));
+            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+              await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
+            } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
+              await sendWhatsAppText(from, buildMicroCommitmentMessage(sede));
+            } else {
+              await sendWhatsAppText(from, buildLinkMessage(sede));
+            }
           } else {
+            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+              await sendWhatsAppText(from, buildAskSedeMessage());
+              continue;
+            }
             const openAiReply = await fetchOpenAiAssistantReply(bodyText, {
               profileDisplayName,
             });
