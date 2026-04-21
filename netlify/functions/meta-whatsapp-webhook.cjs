@@ -1203,7 +1203,13 @@ exports.handler = async (event) => {
               profileDisplayName,
             });
             if (openAiReply) {
-              await sendWhatsAppText(from, processAssistantReplyForPatient(openAiReply));
+              const processed = processAssistantReplyForPatient(openAiReply);
+              // If we sent any assistant reply, we consider the chat greeted to avoid repeating greeting wrappers.
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, { greeted: true })
+              );
+              await sendWhatsAppText(from, processed);
             } else {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildAskSedeMessage(),
