@@ -500,7 +500,15 @@ function normalizeCityKeyForSheets(displayName) {
 }
 
 function normalizeHealthInsuranceNameForKey(value) {
-  return normalizeForMatch(String(value || '')).replace(/\s+/g, ' ').trim();
+  const normalized = normalizeForMatch(String(value || '')).replace(/\s+/g, ' ').trim();
+  // Make common user variants match sheet canonical names.
+  // Examples: "Sancor Salud" -> "sancor", "OSDE Salud" -> "osde"
+  return normalized
+    .replace(/\bobra social\b/g, '')
+    .replace(/\bprepaga\b/g, '')
+    .replace(/\bsalud\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function buildPlusLookupMap(rows) {
@@ -778,6 +786,20 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
     Number.isFinite(privatePriceArs) ? formatArsAmount(privatePriceArs) : null;
 
   if (!plusRule) {
+    // Fallback (hard rule) for the stable no-plus set, to avoid unnecessary derivations when
+    // the plus sheet is temporarily unavailable or does not match the exact naming.
+    const cityNormalized = normalizeForMatch(cityEntry.displayName);
+    const osNormalized = normalizeForMatch(healthInsuranceName);
+    const isOsde = osNormalized.includes('osde');
+    const isIsunne = osNormalized.includes('isunne');
+    const isSancor = osNormalized.includes('sancor');
+    const isKnownNoPlus =
+      (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
+      (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
+      (cityNormalized.includes('formosa') && (isOsde || isSancor));
+    if (isKnownNoPlus) {
+      return `en ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. querés que te pase el link para ver horarios disponibles y reservar?`;
+    }
     return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
   }
 
