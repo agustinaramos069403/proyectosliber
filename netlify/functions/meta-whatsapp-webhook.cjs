@@ -706,6 +706,16 @@ function buildGreetingSentence(profileDisplayName) {
   return 'Hola, soy la asistente del Dr. Liber Acosta 😊.';
 }
 
+const GREETING_SESSION_RESET_MS = 20 * 60 * 1000;
+
+function shouldTreatAsAlreadyGreeted(priorState, nowMs) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (!priorState.greeted) return false;
+  const lastSeenAtMs = Number(priorState.lastSeenAtMs);
+  if (!Number.isFinite(lastSeenAtMs) || lastSeenAtMs <= 0) return true;
+  return nowMs - lastSeenAtMs <= GREETING_SESSION_RESET_MS;
+}
+
 function normalizeToSingleLine(text) {
   return String(text || '')
     .replace(/\r\n/g, ' ')
