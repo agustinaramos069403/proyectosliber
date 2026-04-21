@@ -140,6 +140,9 @@ const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
 
+const MISSING_INFORMATION_CALL_OFFICE_MESSAGE =
+  'No cuento con esa información en este momento. Por favor, llamá al consultorio y te lo confirman.';
+
 const FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT =
   'Sos la asistente del consultorio del Dr. Liber Acosta (alergista). Respondé en español argentino, texto plano, sin markdown ni asteriscos, máximo 2 oraciones. No des diagnósticos ni montos. Si pueden decir ciudad o 1-4 para sede, mejor. Reglas completas no cargadas en el servidor.';
 
@@ -803,11 +806,12 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
     const isKnownNoPlus =
       (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
       (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
-      (cityNormalized.includes('formosa') && (isOsde || isSancor));
+      (cityNormalized.includes('formosa') && (isOsde || isSancor)) ||
+      (cityNormalized.includes('saenz pena') && (isOsde || isIsunne || isSancor));
     if (isKnownNoPlus) {
       return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
     }
-    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
 
   const osDisplayName = healthInsuranceName;
@@ -826,7 +830,7 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
     if (plusFormatted) {
       return `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
     }
-    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
 
   return `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
@@ -894,11 +898,11 @@ function resolveSedeEntryFromState(state) {
 async function buildPrivatePriceReply(entry) {
   const priceArs = await lookupPrivatePrice(entry.displayName);
   if (!Number.isFinite(priceArs)) {
-    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
   const formatted = formatArsAmount(priceArs);
   if (!formatted) {
-    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
   return `En ${entry.displayName} la consulta particular sale $${formatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
 }

@@ -80,7 +80,7 @@ REGLAS DE OBRAS SOCIALES (sin plus, por ciudad)
 Corrientes capital: OSDE, Isunne, Sancor. No se cobra plus y acepta solo esas obras sociales.
 Resistencia (Chaco): OSDE, Isunne, Sancor. No se cobra plus y acepta solo esas obras sociales.
 Formosa capital: OSDE, Sancor. No se cobra plus y acepta solo esas obras sociales.
-Sáenz Peña (Chaco): no confirmado en este prompt. Si preguntan por Sáenz Peña y obras sociales, usá [DERIVAR].
+Sáenz Peña (Chaco): OSDE, Isunne, Sancor. No se cobra plus y acepta solo esas obras sociales.
 
 REGLA CRÍTICA
 Nunca confirmes obras sociales sin ciudad confirmada primero. Si preguntan por obra social sin decir ciudad, primero preguntá la ciudad.
