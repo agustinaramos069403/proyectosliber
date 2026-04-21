@@ -676,6 +676,36 @@ function buildMicroCommitmentMessage(entry) {
   );
 }
 
+function buildGreetingSentence(profileDisplayName) {
+  const hasName = typeof profileDisplayName === 'string' && profileDisplayName.trim().length > 0;
+  if (hasName) {
+    return `hola ${profileDisplayName.trim()}, soy la asistente del Dr. Liber Acosta 😊.`;
+  }
+  return 'hola, soy la asistente del Dr. Liber Acosta 😊.';
+}
+
+function normalizeToSingleLine(text) {
+  return String(text || '')
+    .replace(/\r\n/g, ' ')
+    .replace(/\r/g, ' ')
+    .replace(/\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildAutoReplyWithGreetingIfNeeded(body, profileDisplayName, priorState) {
+  const reply = normalizeToSingleLine(body);
+  const greeted = priorState && typeof priorState === 'object' ? Boolean(priorState.greeted) : false;
+  if (greeted) {
+    return { messageText: reply, nextStatePatch: null };
+  }
+  const greeting = buildGreetingSentence(profileDisplayName);
+  return {
+    messageText: `${greeting} ${reply}`,
+    nextStatePatch: { greeted: true },
+  };
+}
+
 function messageLooksLikePrivatePriceQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -1048,11 +1078,27 @@ exports.handler = async (event) => {
           const priorState = await getConversationState(from);
 
           if (textMatchesMedicalEmergency(bodyText)) {
-            await sendWhatsAppText(from, MEDICAL_EMERGENCY_RESPONSE_MESSAGE);
+            const emergencyWrapped = buildAutoReplyWithGreetingIfNeeded(
+              MEDICAL_EMERGENCY_RESPONSE_MESSAGE,
+              profileDisplayName,
+              priorState
+            );
+            if (emergencyWrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...emergencyWrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, emergencyWrapped.messageText);
             continue;
           }
           if (needsChacoProvinceClarification(bodyText)) {
-            await sendWhatsAppText(from, CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE);
+            const chacoWrapped = buildAutoReplyWithGreetingIfNeeded(
+              CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE,
+              profileDisplayName,
+              priorState
+            );
+            if (chacoWrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...chacoWrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, chacoWrapped.messageText);
             continue;
           }
 
@@ -1060,7 +1106,15 @@ exports.handler = async (event) => {
             const entryFromState = resolveSedeEntryFromState(priorState);
             if (entryFromState) {
               await clearConversationState(from);
-              await sendWhatsAppText(from, buildLinkMessage(entryFromState));
+              const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildLinkMessage(entryFromState),
+                profileDisplayName,
+                priorState
+              );
+              if (linkWrapped.nextStatePatch) {
+                await setConversationState(from, { ...(priorState || {}), ...linkWrapped.nextStatePatch });
+              }
+              await sendWhatsAppText(from, linkWrapped.messageText);
               continue;
             }
           }
@@ -1070,22 +1124,52 @@ exports.handler = async (event) => {
             if (priorState && priorState.state === 'awaiting_private_price_city') {
               await clearConversationState(from);
               const reply = await buildPrivatePriceReply(sede);
-              await setConversationState(from, buildAwaitingLinkConfirmationState(sede, 'after_private_price'));
-              await sendWhatsAppText(from, reply);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(from, {
+                ...(buildAwaitingLinkConfirmationState(sede, 'after_private_price') || {}),
+                ...(wrapped.nextStatePatch || {}),
+              });
+              await sendWhatsAppText(from, wrapped.messageText);
             } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               const reply = await buildPrivatePriceReply(sede);
-              await setConversationState(from, buildAwaitingLinkConfirmationState(sede, 'after_private_price'));
-              await sendWhatsAppText(from, reply);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(from, {
+                ...(buildAwaitingLinkConfirmationState(sede, 'after_private_price') || {}),
+                ...(wrapped.nextStatePatch || {}),
+              });
+              await sendWhatsAppText(from, wrapped.messageText);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
-              await setConversationState(from, buildAwaitingLinkConfirmationState(sede, 'after_booking_intent'));
-              await sendWhatsAppText(from, buildMicroCommitmentMessage(sede));
+              const micro = buildMicroCommitmentMessage(sede);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
+              await setConversationState(from, {
+                ...(buildAwaitingLinkConfirmationState(sede, 'after_booking_intent') || {}),
+                ...(wrapped.nextStatePatch || {}),
+              });
+              await sendWhatsAppText(from, wrapped.messageText);
             } else {
-              await sendWhatsAppText(from, buildLinkMessage(sede));
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildLinkMessage(sede),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
             }
           } else {
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               await setConversationState(from, { state: 'awaiting_private_price_city' });
-              await sendWhatsAppText(from, buildAskSedeMessage());
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskSedeMessage(),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(from, {
+                state: 'awaiting_private_price_city',
+                ...(wrapped.nextStatePatch || {}),
+              });
+              await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
             const openAiReply = await fetchOpenAiAssistantReply(bodyText, {
@@ -1094,7 +1178,15 @@ exports.handler = async (event) => {
             if (openAiReply) {
               await sendWhatsAppText(from, processAssistantReplyForPatient(openAiReply));
             } else {
-              await sendWhatsAppText(from, buildAskSedeMessage());
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskSedeMessage(),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
             }
           }
         }
