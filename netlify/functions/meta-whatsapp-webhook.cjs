@@ -706,6 +706,19 @@ function buildAutoReplyWithGreetingIfNeeded(body, profileDisplayName, priorState
   };
 }
 
+function mergeConversationStatePreservingGreeting(priorState, nextState, patch) {
+  const priorGreeted =
+    priorState && typeof priorState === 'object' ? Boolean(priorState.greeted) : false;
+  const merged = { ...(nextState || {}) };
+  if (patch && typeof patch === 'object') {
+    Object.assign(merged, patch);
+  }
+  if (priorGreeted) {
+    merged.greeted = true;
+  }
+  return merged;
+}
+
 function messageLooksLikePrivatePriceQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -1105,15 +1118,14 @@ exports.handler = async (event) => {
           if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
             const entryFromState = resolveSedeEntryFromState(priorState);
             if (entryFromState) {
-              await clearConversationState(from);
               const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildLinkMessage(entryFromState),
                 profileDisplayName,
                 priorState
               );
-              if (linkWrapped.nextStatePatch) {
-                await setConversationState(from, { ...(priorState || {}), ...linkWrapped.nextStatePatch });
-              }
+              // Keep greeted flag for subsequent messages.
+              const afterLinkState = mergeConversationStatePreservingGreeting(priorState, {}, linkWrapped.nextStatePatch);
+              await setConversationState(from, afterLinkState);
               await sendWhatsAppText(from, linkWrapped.messageText);
               continue;
             }
@@ -1125,26 +1137,38 @@ exports.handler = async (event) => {
               await clearConversationState(from);
               const reply = await buildPrivatePriceReply(sede);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-              await setConversationState(from, {
-                ...(buildAwaitingLinkConfirmationState(sede, 'after_private_price') || {}),
-                ...(wrapped.nextStatePatch || {}),
-              });
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sede, 'after_private_price'),
+                  wrapped.nextStatePatch
+                )
+              );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               const reply = await buildPrivatePriceReply(sede);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-              await setConversationState(from, {
-                ...(buildAwaitingLinkConfirmationState(sede, 'after_private_price') || {}),
-                ...(wrapped.nextStatePatch || {}),
-              });
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sede, 'after_private_price'),
+                  wrapped.nextStatePatch
+                )
+              );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
               const micro = buildMicroCommitmentMessage(sede);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
-              await setConversationState(from, {
-                ...(buildAwaitingLinkConfirmationState(sede, 'after_booking_intent') || {}),
-                ...(wrapped.nextStatePatch || {}),
-              });
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sede, 'after_booking_intent'),
+                  wrapped.nextStatePatch
+                )
+              );
               await sendWhatsAppText(from, wrapped.messageText);
             } else {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -1153,22 +1177,25 @@ exports.handler = async (event) => {
                 priorState
               );
               if (wrapped.nextStatePatch) {
-                await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+                await setConversationState(from, mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch));
               }
               await sendWhatsAppText(from, wrapped.messageText);
             }
           } else {
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
-              await setConversationState(from, { state: 'awaiting_private_price_city' });
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildAskSedeMessage(),
                 profileDisplayName,
                 priorState
               );
-              await setConversationState(from, {
-                state: 'awaiting_private_price_city',
-                ...(wrapped.nextStatePatch || {}),
-              });
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_private_price_city' },
+                  wrapped.nextStatePatch
+                )
+              );
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
@@ -1184,7 +1211,7 @@ exports.handler = async (event) => {
                 priorState
               );
               if (wrapped.nextStatePatch) {
-                await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+                await setConversationState(from, mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch));
               }
               await sendWhatsAppText(from, wrapped.messageText);
             }
