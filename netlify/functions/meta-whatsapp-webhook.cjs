@@ -30,7 +30,7 @@ const GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
 let cachedGoogleSheetsData = null;
 let cachedGoogleSheetsDataExpiresAtMs = 0;
 
-const CONVERSATION_STATE_TTL_MS = 10 * 60 * 1000;
+const DEFAULT_CONVERSATION_STATE_TTL_SECONDS = 30 * 60;
 const conversationStateByPhoneNumber = new Map();
 
 const PRIVATE_PRICE_CITY_KEY_BY_DISPLAY_NAME = {
@@ -328,12 +328,74 @@ function parseCsvToRows(csvText) {
   return lines.map(parseCsvLine);
 }
 
+function getConversationStateTtlSeconds() {
+  const raw = process.env.CONVERSATION_STATE_TTL_SECONDS;
+  const parsed = raw != null ? Number(String(raw).trim()) : NaN;
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return Math.min(parsed, 24 * 60 * 60);
+  }
+  return DEFAULT_CONVERSATION_STATE_TTL_SECONDS;
+}
+
+function getUpstashRedisRestUrl() {
+  const raw = process.env.UPSTASH_REDIS_REST_URL;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function getUpstashRedisRestToken() {
+  const raw = process.env.UPSTASH_REDIS_REST_TOKEN;
+  return typeof raw === 'string' ? raw.trim() : '';
+}
+
+function isUpstashConfigured() {
+  return getUpstashRedisRestUrl().length > 0 && getUpstashRedisRestToken().length > 0;
+}
+
+function buildConversationStateStorageKey(fromPhoneId) {
+  const raw = typeof fromPhoneId === 'string' ? fromPhoneId.trim() : '';
+  return raw.length > 0 ? `wa:${raw}` : null;
+}
+
 function getConversationStateKey(fromPhoneId) {
   const raw = typeof fromPhoneId === 'string' ? fromPhoneId.trim() : '';
   return raw.length > 0 ? raw : null;
 }
 
-function getConversationState(fromPhoneId) {
+async function fetchUpstashJson(pathname) {
+  const baseUrl = getUpstashRedisRestUrl();
+  const token = getUpstashRedisRestToken();
+  if (!baseUrl || !token) return null;
+  const url = `${baseUrl.replace(/\/+$/, '')}/${pathname.replace(/^\/+/, '')}`;
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'Mozilla/5.0 (Netlify Function) meta-whatsapp-webhook',
+      },
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('meta-whatsapp-webhook: Upstash error', response.status, text.slice(0, 300));
+      return null;
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('meta-whatsapp-webhook: Upstash fetch error', error);
+    return null;
+  }
+}
+
+async function getConversationState(fromPhoneId) {
+  if (isUpstashConfigured()) {
+    const storageKey = buildConversationStateStorageKey(fromPhoneId);
+    if (!storageKey) return null;
+    const data = await fetchUpstashJson(`get/${encodeURIComponent(storageKey)}`);
+    const value = data?.result;
+    if (typeof value !== 'string' || value.trim().length === 0) return null;
+    const parsed = tryParseJson(value);
+    return parsed && typeof parsed.state === 'string' ? parsed.state : null;
+  }
   const key = getConversationStateKey(fromPhoneId);
   if (!key) return null;
   const entry = conversationStateByPhoneNumber.get(key);
@@ -345,16 +407,32 @@ function getConversationState(fromPhoneId) {
   return entry.state;
 }
 
-function setConversationState(fromPhoneId, state) {
+async function setConversationState(fromPhoneId, state) {
+  if (isUpstashConfigured()) {
+    const storageKey = buildConversationStateStorageKey(fromPhoneId);
+    if (!storageKey) return;
+    const ttlSeconds = getConversationStateTtlSeconds();
+    const payload = JSON.stringify({ state });
+    await fetchUpstashJson(
+      `set/${encodeURIComponent(storageKey)}/${encodeURIComponent(payload)}?EX=${ttlSeconds}`
+    );
+    return;
+  }
   const key = getConversationStateKey(fromPhoneId);
   if (!key) return;
   conversationStateByPhoneNumber.set(key, {
     state,
-    expiresAtMs: Date.now() + CONVERSATION_STATE_TTL_MS,
+    expiresAtMs: Date.now() + getConversationStateTtlSeconds() * 1000,
   });
 }
 
-function clearConversationState(fromPhoneId) {
+async function clearConversationState(fromPhoneId) {
+  if (isUpstashConfigured()) {
+    const storageKey = buildConversationStateStorageKey(fromPhoneId);
+    if (!storageKey) return;
+    await fetchUpstashJson(`del/${encodeURIComponent(storageKey)}`);
+    return;
+  }
   const key = getConversationStateKey(fromPhoneId);
   if (!key) return;
   conversationStateByPhoneNumber.delete(key);
@@ -919,7 +997,7 @@ exports.handler = async (event) => {
           const from = msg.from;
           const bodyText = msg.text.body;
           const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
-          const priorState = getConversationState(from);
+          const priorState = await getConversationState(from);
 
           if (textMatchesMedicalEmergency(bodyText)) {
             await sendWhatsAppText(from, MEDICAL_EMERGENCY_RESPONSE_MESSAGE);
@@ -933,7 +1011,7 @@ exports.handler = async (event) => {
           const sede = findSedeFromText(bodyText);
           if (sede) {
             if (priorState === 'awaiting_private_price_city') {
-              clearConversationState(from);
+              await clearConversationState(from);
               await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
             } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
@@ -944,7 +1022,7 @@ exports.handler = async (event) => {
             }
           } else {
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
-              setConversationState(from, 'awaiting_private_price_city');
+              await setConversationState(from, 'awaiting_private_price_city');
               await sendWhatsAppText(from, buildAskSedeMessage());
               continue;
             }
