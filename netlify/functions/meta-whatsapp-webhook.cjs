@@ -648,6 +648,23 @@ function processAssistantReplyForPatient(rawModelText) {
   if (mentionsDocumentation) {
     return 'entendido, para avanzar necesito saber desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
   }
+  const suggestsContactingThirdParty =
+    normalized.includes('comunicate') ||
+    normalized.includes('comunícate') ||
+    normalized.includes('contactes') ||
+    normalized.includes('contactate') ||
+    normalized.includes('contactar') ||
+    normalized.includes('llama a') ||
+    normalized.includes('llamá a') ||
+    normalized.includes('llame a') ||
+    normalized.includes('te recomiendo que te comuniques') ||
+    normalized.includes('directamente con sancor') ||
+    normalized.includes('directamente con osde') ||
+    normalized.includes('directamente con la obra social') ||
+    normalized.includes('con tu obra social');
+  if (suggestsContactingThirdParty) {
+    return 'entendido, para avanzar necesito saber desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+  }
   return trimmed;
 }
 
@@ -717,6 +734,77 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
     merged.greeted = true;
   }
   return merged;
+}
+
+function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('obra social') ||
+    normalized.includes('osde') ||
+    normalized.includes('isunne') ||
+    normalized.includes('sancor') ||
+    normalized.includes('swiss') ||
+    normalized.includes('ioscor') ||
+    normalized.includes('galeno') ||
+    normalized.includes('medicus') ||
+    normalized.includes('omint') ||
+    normalized.includes('prevencion') ||
+    normalized.includes('jerarquicos') ||
+    normalized.includes('plus') ||
+    normalized.includes('coseguro')
+  );
+}
+
+function tryExtractHealthInsuranceName(rawText) {
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('sancor')) return 'Sancor';
+  if (normalized.includes('osde')) return 'OSDE';
+  if (normalized.includes('isunne')) return 'Isunne';
+  if (normalized.includes('swiss')) return 'SWISS MEDICAL';
+  if (normalized.includes('ioscor')) return 'IOSCOR';
+  if (normalized.includes('galeno')) return 'GALENO ARGENTINA SA';
+  if (normalized.includes('medicus')) return 'MEDICUS';
+  if (normalized.includes('omint')) return 'OMINT SA';
+  if (normalized.includes('prevencion')) return 'PREVENCION SALUD SA';
+  if (normalized.includes('jerarquic')) return 'JERARQUICOS SALUD';
+  return null;
+}
+
+async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
+  const plusRule = await lookupPlusRule(cityEntry.displayName, healthInsuranceName);
+  const privatePriceArs = await lookupPrivatePrice(cityEntry.displayName);
+  const privatePriceFormatted =
+    Number.isFinite(privatePriceArs) ? formatArsAmount(privatePriceArs) : null;
+
+  if (!plusRule) {
+    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+  }
+
+  const osDisplayName = healthInsuranceName;
+  if (!plusRule.isAccepted) {
+    if (privatePriceFormatted) {
+      return `en ${cityEntry.displayName} no trabajamos con ${osDisplayName}. la consulta particular sale $${privatePriceFormatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
+    }
+    return `en ${cityEntry.displayName} no trabajamos con ${osDisplayName}. querés que te pase el link para ver horarios disponibles y reservar?`;
+  }
+
+  if (plusRule.hasPlus) {
+    const plusFormatted =
+      Number.isFinite(plusRule.plusAmountArs) && plusRule.plusAmountArs != null
+        ? formatArsAmount(plusRule.plusAmountArs)
+        : null;
+    if (plusFormatted) {
+      return `en ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
+    }
+    return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
+  }
+
+  return `en ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus. querés que te pase el link para ver horarios disponibles y reservar?`;
+}
+
+function buildAskHealthInsuranceNameMessage() {
+  return 'qué obra social tenés?';
 }
 
 function messageLooksLikePrivatePriceQuestion(rawText) {
@@ -1133,6 +1221,25 @@ exports.handler = async (event) => {
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
+            const pendingHealthInsuranceName =
+              priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
+                ? priorState.healthInsuranceName
+                : null;
+            if (priorState && priorState.state === 'awaiting_health_insurance_city' && pendingHealthInsuranceName) {
+              await clearConversationState(from);
+              const reply = await buildHealthInsurancePlusReply(sede, pendingHealthInsuranceName);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus'),
+                  wrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             if (priorState && priorState.state === 'awaiting_private_price_city') {
               await clearConversationState(from);
               const reply = await buildPrivatePriceReply(sede);
@@ -1182,6 +1289,69 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
             }
           } else {
+            if (priorState && priorState.state === 'awaiting_health_insurance_name') {
+              const extracted = tryExtractHealthInsuranceName(bodyText);
+              if (extracted) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: extracted },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              const askAgain = buildAutoReplyWithGreetingIfNeeded(
+                buildAskHealthInsuranceNameMessage(),
+                profileDisplayName,
+                priorState
+              );
+              await sendWhatsAppText(from, askAgain.messageText);
+              continue;
+            }
+            if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
+              const healthInsuranceName = tryExtractHealthInsuranceName(bodyText);
+              if (healthInsuranceName) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              // They asked about obra social/plus but did not specify which one.
+              const askOsWrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskHealthInsuranceNameMessage(),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_health_insurance_name' },
+                  askOsWrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, askOsWrapped.messageText);
+              continue;
+            }
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildAskSedeMessage(),
