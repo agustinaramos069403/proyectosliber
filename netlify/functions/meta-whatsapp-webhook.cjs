@@ -6,7 +6,7 @@
  * - WHATSAPP_ACCESS_TOKEN     (temporary or system user token from Meta)
  * - WHATSAPP_ttytyPHONE_NUMBER_ID  (from Meta WhatsApp > API setup)
  * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
- *   (full URLs to book; if missing, bot sends text asking to confirm by phone)
+ *   (full URLs to book; if missing, bot fdgdsends text asking to confirm by phone)
  * - OPENAI_API_KEY (optional; if set, non-sede messages use OpenAI with docs/agente-liber-reglas.md prompt file)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
  *
