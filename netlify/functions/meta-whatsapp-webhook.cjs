@@ -671,7 +671,7 @@ function buildMicroCommitmentMessage(entry) {
     return 'querés que te pase el link para ver horarios disponibles y reservar?';
   }
   return (
-    `anotado, ${entry.displayName}. querés que te pase el link para ver horarios disponibles y reservar? ` +
+    `${entry.displayName}. querés que te pase el link para ver horarios disponibles y reservar? ` +
     `si es así, respondé ${optionNumber}.`
   );
 }
@@ -740,7 +740,7 @@ async function buildPrivatePriceReply(entry) {
   if (!formatted) {
     return DERIVATIVE_HANDOFF_PATIENT_MESSAGE;
   }
-  return `anotado, en ${entry.displayName} la consulta particular sale $${formatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
+  return `en ${entry.displayName} la consulta particular sale $${formatted}. querés que te pase el link para ver horarios disponibles y reservar?`;
 }
 
 function buildLinkMessage(entry) {
