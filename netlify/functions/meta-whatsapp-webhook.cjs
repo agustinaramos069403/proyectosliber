@@ -1293,6 +1293,38 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
+            if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
+              const extractedHealthInsuranceName = tryExtractHealthInsuranceName(bodyText);
+              if (extractedHealthInsuranceName) {
+                const reply = await buildHealthInsurancePlusReply(sede, extractedHealthInsuranceName);
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus'),
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              const askOsWrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskHealthInsuranceNameMessage(),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_health_insurance_name' },
+                  askOsWrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, askOsWrapped.messageText);
+              continue;
+            }
             if (priorState && priorState.state === 'awaiting_private_price_city') {
               await clearConversationState(from);
               const reply = await buildPrivatePriceReply(sede);
