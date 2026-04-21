@@ -30,6 +30,9 @@ const GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
 let cachedGoogleSheetsData = null;
 let cachedGoogleSheetsDataExpiresAtMs = 0;
 
+const CONVERSATION_STATE_TTL_MS = 10 * 60 * 1000;
+const conversationStateByPhoneNumber = new Map();
+
 const PRIVATE_PRICE_CITY_KEY_BY_DISPLAY_NAME = {
   Corrientes: 'Corrientes',
   Resistencia: 'Resistencia',
@@ -325,10 +328,45 @@ function parseCsvToRows(csvText) {
   return lines.map(parseCsvLine);
 }
 
+function getConversationStateKey(fromPhoneId) {
+  const raw = typeof fromPhoneId === 'string' ? fromPhoneId.trim() : '';
+  return raw.length > 0 ? raw : null;
+}
+
+function getConversationState(fromPhoneId) {
+  const key = getConversationStateKey(fromPhoneId);
+  if (!key) return null;
+  const entry = conversationStateByPhoneNumber.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAtMs) {
+    conversationStateByPhoneNumber.delete(key);
+    return null;
+  }
+  return entry.state;
+}
+
+function setConversationState(fromPhoneId, state) {
+  const key = getConversationStateKey(fromPhoneId);
+  if (!key) return;
+  conversationStateByPhoneNumber.set(key, {
+    state,
+    expiresAtMs: Date.now() + CONVERSATION_STATE_TTL_MS,
+  });
+}
+
+function clearConversationState(fromPhoneId) {
+  const key = getConversationStateKey(fromPhoneId);
+  if (!key) return;
+  conversationStateByPhoneNumber.delete(key);
+}
+
 async function fetchCsvRows(csvUrl) {
   if (!csvUrl) return null;
   try {
-    const response = await fetch(csvUrl, { method: 'GET' });
+    const response = await fetch(csvUrl, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Mozilla/5.0 (Netlify Function) meta-whatsapp-webhook' },
+    });
     if (!response.ok) {
       const text = await response.text();
       console.error('meta-whatsapp-webhook: CSV fetch failed', response.status, text.slice(0, 300));
@@ -881,6 +919,7 @@ exports.handler = async (event) => {
           const from = msg.from;
           const bodyText = msg.text.body;
           const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
+          const priorState = getConversationState(from);
 
           if (textMatchesMedicalEmergency(bodyText)) {
             await sendWhatsAppText(from, MEDICAL_EMERGENCY_RESPONSE_MESSAGE);
@@ -893,7 +932,10 @@ exports.handler = async (event) => {
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
-            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+            if (priorState === 'awaiting_private_price_city') {
+              clearConversationState(from);
+              await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
+            } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               await sendWhatsAppText(from, await buildPrivatePriceReply(sede));
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
               await sendWhatsAppText(from, buildMicroCommitmentMessage(sede));
@@ -902,6 +944,7 @@ exports.handler = async (event) => {
             }
           } else {
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+              setConversationState(from, 'awaiting_private_price_city');
               await sendWhatsAppText(from, buildAskSedeMessage());
               continue;
             }
