@@ -649,6 +649,9 @@ function normalizeHealthInsuranceNameForKey(value) {
     .replace(/\bobra social\b/g, '')
     .replace(/\bprepaga\b/g, '')
     .replace(/\bsalud\b/g, '')
+    // Remove punctuation/parentheses so sheet typos like missing ")" still match.
+    .replace(/[()]/g, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -926,7 +929,10 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
 function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
+  const normalizedSingleToken = normalized.replace(/\s+/g, '');
+  const looksLikeHealthInsuranceAbbreviation = /^[a-z]{2,6}$/.test(normalizedSingleToken);
   return (
+    looksLikeHealthInsuranceAbbreviation ||
     normalized.includes('obra social') ||
     normalized.includes('osde') ||
     normalized.includes('isunne') ||
@@ -949,7 +955,8 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
 function tryExtractHealthInsuranceName(rawText) {
   const normalized = normalizeForMatch(rawText);
   // Common abbreviations that exist in our Sheet.
-  if (/\baamm\b/.test(normalized)) return 'AAMM (ASCARGMUTMOTO)';
+  // Note: the current CSV has this value without a closing ")".
+  if (normalized.includes('aamm')) return 'AAMM (ASCARGMUTMOTO';
   if (normalized.includes('sancor')) return 'Sancor';
   if (normalized.includes('osde')) return 'OSDE';
   if (normalized.includes('isunne') || normalized.includes('issune') || normalized.includes('isune')) return 'Isunne';
@@ -1704,7 +1711,14 @@ exports.handler = async (event) => {
             if (shouldBypassPendingLinkConfirmation) {
               const preservedSessionState =
                 priorState && typeof priorState === 'object'
-                  ? { greeted: Boolean(priorState.greeted), lastSeenAtMs: priorState.lastSeenAtMs }
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                    }
                   : {};
               await setConversationState(from, preservedSessionState);
             } else {
