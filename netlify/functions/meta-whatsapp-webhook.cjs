@@ -1255,6 +1255,13 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
   }
 }
 
+async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage) {
+  const data = await getGoogleSheetsData();
+  const knownNames = getUniqueHealthInsuranceNamesFromSheetsData(data);
+  if (knownNames.length === 0) return null;
+  return mapHealthInsuranceGuessToKnownName(String(userMessage || ''), knownNames);
+}
+
 function buildAwaitingLinkConfirmationState(entry, reason) {
   return {
     state: 'awaiting_link_confirmation',
@@ -2088,6 +2095,40 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, wrapped.messageText);
                 continue;
               }
+              // Try resolving directly from the Sheet names (fuzzy match) before calling OpenAI.
+              const resolvedFromSheets = await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText);
+              if (resolvedFromSheets) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedFromSheets);
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedFromSheets },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               // If we can't extract it with hard rules, try OpenAI to map typos/aliases to a canonical name
               // that exists in our Sheet.
               const resolvedCanonicalName = await tryResolveHealthInsuranceNameWithOpenAi(bodyText);
@@ -2172,6 +2213,40 @@ exports.handler = async (event) => {
                   mergeConversationStatePreservingGreeting(
                     priorState,
                     { state: 'awaiting_health_insurance_city', healthInsuranceName },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              // Try resolving directly from the Sheet names (fuzzy match) before calling OpenAI.
+              const resolvedFromSheets = await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText);
+              if (resolvedFromSheets) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedFromSheets);
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedFromSheets },
                     wrapped.nextStatePatch
                   )
                 );
