@@ -1260,6 +1260,24 @@ exports.handler = async (event) => {
             continue;
           }
 
+          // If the user answers "sí/ok/dale" but we lost state (serverless restart),
+          // don't fall through to the LLM greeting; ask which sede they want the link for.
+          if (!stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Perfecto. ¿Para qué sede querés el link? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
+              profileDisplayName,
+              priorState
+            );
+            if (wrapped.nextStatePatch) {
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+              );
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
           if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
             const entryFromState = resolveSedeEntryFromState(priorState);
             if (entryFromState) {
