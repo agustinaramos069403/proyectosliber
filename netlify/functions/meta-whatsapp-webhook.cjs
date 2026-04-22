@@ -127,6 +127,13 @@ const EMERGENCY_NORMALIZED_SUBSTRINGS = [
   'urticaria muy fuerte',
   'me salio todo el cuerpo',
   'no aguanto mas',
+  'emergencia',
+  'urgencia',
+  'urgente',
+  'caso critico',
+  'caso crítico',
+  'critico',
+  'crítico',
   'es urgente',
   'es una emergencia',
   'emergencia medica',
@@ -134,7 +141,7 @@ const EMERGENCY_NORMALIZED_SUBSTRINGS = [
 ];
 
 const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
-  'Llamá al 107 o andá a la guardia más cercana ahora. No esperes.';
+  'Si es una emergencia o urgencia, por favor acudí a la guardia/urgencias más cercana o llamá al 107 ahora.';
 
 const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
   '¿Estás en Resistencia o en Sáenz Peña?';
