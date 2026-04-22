@@ -146,6 +146,8 @@ const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
 const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
   '¿Estás en Resistencia o en Sáenz Peña?';
 
+const DEFAULT_RESPONSE_DELAY_MS = 900;
+
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
 
@@ -163,6 +165,32 @@ function normalizeForMatch(text) {
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .trim();
+}
+
+function sleepMs(durationMs) {
+  const parsed = Number(durationMs);
+  if (!Number.isFinite(parsed) || parsed <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, parsed));
+}
+
+function messageIsAcknowledgement(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length === 0) return false;
+  // Short acknowledgements that often come after a helpful answer.
+  if (/^(bueno|ok|oka|dale|listo|perfecto|genial|gracias|joya|bien)$/.test(normalized)) return true;
+  return false;
+}
+
+function buildAnythingElseHelpMessage(priorState) {
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (lastSede) {
+    return `Perfecto. Si querés, también puedo ayudarte con obra social/plus o pasarte el link para ${lastSede.displayName}. ¿Qué necesitás?`;
+  }
+  return 'Perfecto. ¿Querés que te ayude con algo más?';
 }
 
 function findSedeFromText(rawText) {
@@ -301,6 +329,19 @@ function tryParseJson(rawJson) {
   } catch {
     return null;
   }
+}
+
+function tryParseFirstJsonObjectFromText(rawText) {
+  if (typeof rawText !== 'string') return null;
+  const trimmed = rawText.trim();
+  if (trimmed.length === 0) return null;
+  const direct = tryParseJson(trimmed);
+  if (direct) return direct;
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace < 0 || lastBrace < 0 || lastBrace <= firstBrace) return null;
+  const candidate = trimmed.slice(firstBrace, lastBrace + 1);
+  return tryParseJson(candidate);
 }
 
 function parseCsvLine(line) {
@@ -1105,6 +1146,7 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
         model: modelName,
         temperature: 0,
         max_tokens: 120,
+        response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: systemPrompt },
           {
@@ -1125,7 +1167,7 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
     }
     const data = await response.json();
     const text = data?.choices?.[0]?.message?.content;
-    const parsed = tryParseJson(typeof text === 'string' ? text.trim() : '');
+    const parsed = tryParseFirstJsonObjectFromText(typeof text === 'string' ? text : '');
     if (!parsed || typeof parsed !== 'object') return null;
     if (parsed.isHealthInsurance !== true) return null;
     const canonicalName = typeof parsed.canonicalName === 'string' ? parsed.canonicalName.trim() : '';
@@ -1398,6 +1440,10 @@ async function sendWhatsAppText(toPhoneId, body) {
   }
   const rawRecipientDigits =
     typeof toPhoneId === 'string' ? toPhoneId.trim() : '';
+
+  // Small, non-blocking UX delay to reduce "too fast" replies when the user is typing in multiple bursts.
+  await sleepMs(DEFAULT_RESPONSE_DELAY_MS);
+
   const recipientDigitsForGraph = normalizeRecipientDigitsForMetaGraphApi(rawRecipientDigits);
   if (recipientDigitsForGraph !== rawRecipientDigits) {
     console.info(
@@ -1854,6 +1900,24 @@ exports.handler = async (event) => {
                   priorState,
                   { state: 'awaiting_booking_link_sede' },
                   wrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+            // If the user just acknowledges ("Bueno", "Ok") after a helpful answer, keep the thread and avoid re-greeting.
+            if (messageIsAcknowledgement(bodyText)) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAnythingElseHelpMessage(priorState),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  priorState || {},
+                  { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now() }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
