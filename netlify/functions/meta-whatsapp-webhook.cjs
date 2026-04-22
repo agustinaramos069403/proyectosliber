@@ -147,6 +147,7 @@ const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
   '¿Estás en Resistencia o en Sáenz Peña?';
 
 const DEFAULT_RESPONSE_DELAY_MS = 900;
+const MAX_LEVENSHTEIN_DISTANCE = 3;
 
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
@@ -342,6 +343,71 @@ function tryParseFirstJsonObjectFromText(rawText) {
   if (firstBrace < 0 || lastBrace < 0 || lastBrace <= firstBrace) return null;
   const candidate = trimmed.slice(firstBrace, lastBrace + 1);
   return tryParseJson(candidate);
+}
+
+function computeLevenshteinDistance(firstValue, secondValue) {
+  const first = String(firstValue || '');
+  const second = String(secondValue || '');
+  if (first === second) return 0;
+  if (first.length === 0) return second.length;
+  if (second.length === 0) return first.length;
+
+  const firstLength = first.length;
+  const secondLength = second.length;
+  const costs = new Array(secondLength + 1);
+  for (let index = 0; index <= secondLength; index += 1) {
+    costs[index] = index;
+  }
+  for (let firstIndex = 1; firstIndex <= firstLength; firstIndex += 1) {
+    let previousDiagonal = costs[0];
+    costs[0] = firstIndex;
+    for (let secondIndex = 1; secondIndex <= secondLength; secondIndex += 1) {
+      const temp = costs[secondIndex];
+      const substitutionCost = first[firstIndex - 1] === second[secondIndex - 1] ? 0 : 1;
+      costs[secondIndex] = Math.min(
+        costs[secondIndex] + 1,
+        costs[secondIndex - 1] + 1,
+        previousDiagonal + substitutionCost
+      );
+      previousDiagonal = temp;
+    }
+  }
+  return costs[secondLength];
+}
+
+function mapHealthInsuranceGuessToKnownName(guess, knownNames) {
+  const guessRaw = typeof guess === 'string' ? guess.trim() : '';
+  if (!guessRaw) return null;
+  const guessKey = normalizeHealthInsuranceNameForKey(guessRaw);
+  if (!guessKey) return null;
+
+  const candidates = knownNames
+    .map((name) => ({
+      name,
+      key: normalizeHealthInsuranceNameForKey(name),
+    }))
+    .filter((entry) => entry.key);
+
+  for (const candidate of candidates) {
+    if (candidate.key === guessKey) return candidate.name;
+  }
+
+  for (const candidate of candidates) {
+    if (candidate.key.includes(guessKey) || guessKey.includes(candidate.key)) {
+      return candidate.name;
+    }
+  }
+
+  let best = null;
+  for (const candidate of candidates) {
+    const distance = computeLevenshteinDistance(candidate.key, guessKey);
+    if (!Number.isFinite(distance)) continue;
+    if (distance > MAX_LEVENSHTEIN_DISTANCE) continue;
+    if (!best || distance < best.distance) {
+      best = { name: candidate.name, distance };
+    }
+  }
+  return best ? best.name : null;
 }
 
 function parseCsvLine(line) {
@@ -882,6 +948,8 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
 
 function tryExtractHealthInsuranceName(rawText) {
   const normalized = normalizeForMatch(rawText);
+  // Common abbreviations that exist in our Sheet.
+  if (/\baamm\b/.test(normalized)) return 'AAMM (ASCARGMUTMOTO)';
   if (normalized.includes('sancor')) return 'Sancor';
   if (normalized.includes('osde')) return 'OSDE';
   if (normalized.includes('isunne') || normalized.includes('issune') || normalized.includes('isune')) return 'Isunne';
@@ -1123,14 +1191,13 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
   const systemPrompt = [
     'You are a strict entity extractor and normalizer for Argentine health insurance names in Spanish WhatsApp messages.',
     'Task: Determine if the user message mentions a health insurance (obra social / prepaga).',
-    'If yes, pick the single best canonical name from the provided list (exactly as in the list).',
-    'If not sure, return null.',
+    'If yes, provide the best guess for the health insurance name (it can be an abbreviation or full name).',
+    'If not sure, return isHealthInsurance=false.',
     '',
     'Return ONLY a JSON object with this exact shape:',
-    '{"isHealthInsurance":true|false,"canonicalName":string|null}',
+    '{"isHealthInsurance":true|false,"bestGuess":string|null}',
     '',
     'Rules:',
-    '- If canonicalName is provided, it MUST be one of the provided list items exactly.',
     '- Accept typos and variants (e.g., "issune", "issunne", "ioscor", "sancor salud").',
     '- If the message is about something else, return isHealthInsurance=false.',
   ].join('\n');
@@ -1170,10 +1237,9 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
     const parsed = tryParseFirstJsonObjectFromText(typeof text === 'string' ? text : '');
     if (!parsed || typeof parsed !== 'object') return null;
     if (parsed.isHealthInsurance !== true) return null;
-    const canonicalName = typeof parsed.canonicalName === 'string' ? parsed.canonicalName.trim() : '';
-    if (!canonicalName) return null;
-    if (!knownNames.includes(canonicalName)) return null;
-    return canonicalName;
+    const bestGuess = typeof parsed.bestGuess === 'string' ? parsed.bestGuess.trim() : '';
+    if (!bestGuess) return null;
+    return mapHealthInsuranceGuessToKnownName(bestGuess, knownNames);
   } catch (error) {
     console.error('OpenAI health-insurance resolver request failed', error);
     return null;
@@ -2041,10 +2107,23 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, wrapped.messageText);
                 continue;
               }
+              const normalizedUserText = normalizeForMatch(bodyText);
+              const looksLikeAbbreviation = /^[a-z]{2,6}$/.test(normalizedUserText.replace(/\s+/g, ''));
+              const askAgainText = looksLikeAbbreviation
+                ? 'No pude identificar esa obra social con esas siglas. ¿Me decís el nombre completo?'
+                : buildAskHealthInsuranceNameMessage();
               const askAgain = buildAutoReplyWithGreetingIfNeeded(
-                buildAskHealthInsuranceNameMessage(),
+                askAgainText,
                 profileDisplayName,
                 priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_health_insurance_name' },
+                  askAgain.nextStatePatch
+                )
               );
               await sendWhatsAppText(from, askAgain.messageText);
               continue;
