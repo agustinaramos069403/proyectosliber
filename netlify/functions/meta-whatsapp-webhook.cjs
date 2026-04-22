@@ -5,9 +5,7 @@
  * - WHATSAPP_VERIFY_TOKEN     (you choose it; same in Meta app webhook config)
  * - WHATSAfgdfPP_ACCESSdfsdfd_TOKEN     (temporary or system user token from Meta)
  * - WHAfdgfdgTSAPP_ttytyfdgdPHdsvgdfvONE_NUMBER_ID  (from Meta WhatsApp > API setup)
- * - CALENDLY_CORRIENTES, CALENDLY_RESISTENCIA, CALENDLY_SAENZ_PENA, CALENDLY_FORMOSA
- *   (full URLs to book; if missing, bot fdgdsends text asking to confirm by phone)
- * - OPENAI_API_KEY (optional; if set, non-sede messages use OpenAI with docs/agente-liber-reglas.md prompt file)
+ * ional; if set, non-sede messages use OpenAI with docs/agente-liber-reglas.md prompt file)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
  *
  * Conversational rules: docs/agente-liber-reglas.md — system prompt text: agente-liber-system-prompt.txt (same folder)
