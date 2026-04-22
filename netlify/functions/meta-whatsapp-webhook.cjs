@@ -1489,6 +1489,22 @@ exports.handler = async (event) => {
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
+            if (priorState && priorState.state === 'awaiting_booking_link_sede') {
+              await clearConversationState(from);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildLinkMessage(sede),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                );
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             // If the user explicitly asks for the booking link and we already know the sede, send it directly.
             if (messageExplicitlyRequestsBookingLink(bodyText)) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -1631,12 +1647,14 @@ exports.handler = async (event) => {
                 profileDisplayName,
                 priorState
               );
-              if (wrapped.nextStatePatch) {
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
-                );
-              }
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_booking_link_sede' },
+                  wrapped.nextStatePatch
+                )
+              );
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
