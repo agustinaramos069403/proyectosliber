@@ -676,6 +676,18 @@ function processAssistantReplyForPatient(rawModelText) {
   if (suggestsContactingThirdParty) {
     return 'Entendido. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
   }
+  const asksForSpecificDateOrTime =
+    normalized.includes('fecha') ||
+    normalized.includes('día y hora') ||
+    normalized.includes('dia y hora') ||
+    normalized.includes('horario') ||
+    normalized.includes('indicame la fecha') ||
+    normalized.includes('indicame el horario') ||
+    normalized.includes('por favor, indicame la fecha') ||
+    normalized.includes('por favor indicame la fecha');
+  if (asksForSpecificDateOrTime) {
+    return 'Entendido. ¿En qué sede querés atenderte: 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa?';
+  }
   return trimmed;
 }
 
@@ -1409,6 +1421,22 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
             }
           } else {
+            // Booking intent without sede: always ask sede (never ask for date/time).
+            if (/(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText))) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskSedeMessage(),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                );
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             if (priorState && priorState.state === 'awaiting_health_insurance_name') {
               const extracted = tryExtractHealthInsuranceName(bodyText);
               if (extracted) {
