@@ -938,7 +938,8 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
 function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
-    return `Te dejo la agenda para que veas días y horarios disponibles en ${entry.displayName}:\n${url}`;
+    // Micro-compromiso first; the link is sent only after confirmation.
+    return `¿Querés que te pase el link para ver días y horarios disponibles en ${entry.displayName}? Si es así, respondé ${entry.optionNumber}.`;
   }
   return buildLinkMessage(entry);
 }
@@ -1402,22 +1403,28 @@ exports.handler = async (event) => {
                 profileDisplayName,
                 priorState
               );
-              if (wrapped.nextStatePatch) {
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
-                );
-              }
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sede, 'after_schedule_question'),
+                  wrapped.nextStatePatch
+                )
+              );
               await sendWhatsAppText(from, wrapped.messageText);
             } else {
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildLinkMessage(sede),
-                profileDisplayName,
-                priorState
+              // Default: if the user only selected a sede (e.g. replied "3"), ask micro-commitment
+              // before sending the link.
+              const micro = buildMicroCommitmentMessage(sede);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sede, 'after_sede_selection'),
+                  wrapped.nextStatePatch
+                )
               );
-              if (wrapped.nextStatePatch) {
-                await setConversationState(from, mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch));
-              }
               await sendWhatsAppText(from, wrapped.messageText);
             }
           } else {
