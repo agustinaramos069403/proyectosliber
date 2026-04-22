@@ -678,6 +678,18 @@ function processAssistantReplyForPatient(rawModelText) {
   if (suggestsContactingThirdParty) {
     return 'Entendido. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
   }
+  const mentionsNonSedeCity =
+    normalized.includes('buenos aires') ||
+    normalized.includes('capital federal') ||
+    normalized.includes('caba') ||
+    normalized.includes('la plata') ||
+    normalized.includes('cordoba') ||
+    normalized.includes('córdoba') ||
+    normalized.includes('rosario') ||
+    normalized.includes('mendoza');
+  if (mentionsNonSedeCity) {
+    return 'Entendido. El Dr. atiende solo en Corrientes, Resistencia, Sáenz Peña y Formosa. ¿Desde qué ciudad consultás?';
+  }
   const asksForSpecificDateOrTime =
     normalized.includes('fecha') ||
     normalized.includes('día y hora') ||
@@ -785,7 +797,7 @@ function tryExtractHealthInsuranceName(rawText) {
   const normalized = normalizeForMatch(rawText);
   if (normalized.includes('sancor')) return 'Sancor';
   if (normalized.includes('osde')) return 'OSDE';
-  if (normalized.includes('isunne')) return 'Isunne';
+  if (normalized.includes('isunne') || normalized.includes('issune') || normalized.includes('isune')) return 'Isunne';
   if (normalized.includes('swiss')) return 'SWISS MEDICAL';
   if (normalized.includes('ioscor')) return 'IOSCOR';
   if (normalized.includes('galeno')) return 'GALENO ARGENTINA SA';
