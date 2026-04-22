@@ -934,6 +934,8 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
   return (
     looksLikeHealthInsuranceAbbreviation ||
     normalized.includes('obra social') ||
+    normalized.includes('obras sociales') ||
+    normalized.includes('obrasocial') ||
     normalized.includes('osde') ||
     normalized.includes('isunne') ||
     normalized.includes('issune') ||
