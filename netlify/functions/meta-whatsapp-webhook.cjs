@@ -959,6 +959,15 @@ function tryExtractHealthInsuranceName(rawText) {
   // Common abbreviations that exist in our Sheet.
   // Note: the current CSV has this value without a closing ")".
   if (normalized.includes('aamm')) return 'AAMM (ASCARGMUTMOTO';
+  // AMMECO variants (canonical strings must match the CSV as close as possible).
+  if (normalized.includes('ammeco')) {
+    if (normalized.includes('plan a')) return 'AMMECO (PLAN A )';
+    if (normalized.includes('plan b')) return 'AMMECO (PLAN B)';
+    if (normalized.includes('plan dorado')) return 'AMMECO (PLAN DORADO)';
+    if (/\bred\b/.test(normalized)) return 'AMMECO (RED)';
+    if (normalized.includes('ase')) return 'AMMECO ASE';
+    if (normalized.includes('ospuaye')) return 'AMMECO OSPUAYE';
+  }
   if (normalized.includes('sancor')) return 'Sancor';
   if (normalized.includes('osde')) return 'OSDE';
   if (normalized.includes('isunne') || normalized.includes('issune') || normalized.includes('isune')) return 'Isunne';
