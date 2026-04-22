@@ -873,6 +873,8 @@ function messageConfirmsLinkSend(rawText) {
 
   // Accept short confirmations even with extra words: "si quiero", "si pasame el link", "dale pasalo"
   if (/^(si|dale|ok|oka|de una|listo|ya)\b/.test(normalized)) return true;
+  if (/^(por favor|porfa|x favor)\b/.test(normalized)) return true;
+  if (/^(gracias|genial|perfecto)\b/.test(normalized)) return true;
   if (/\b(quiero|mandame|pasame|pasalo|mandalo|manda)\b/.test(normalized)) return true;
   if (normalized.includes('pasa el link') || normalized.includes('pasame el link')) return true;
   return false;
@@ -901,7 +903,7 @@ async function classifyAffirmativeIntentWithOpenAi(userMessage) {
     'Task: Decide if the user message is an AFFIRMATIVE confirmation to receive a booking link that was just offered.',
     'Return only one token: YES or NO.',
     'Rules:',
-    '- YES examples: "si", "si quiero", "dale", "ok", "pasame el link", "mandalo", "de una".',
+    '- YES examples: "si", "si quiero", "dale", "ok", "pasame el link", "mandalo", "de una", "por favor", "porfa", "gracias".',
     '- NO examples: "no", "no por ahora", "después", "mas tarde", questions not confirming.',
     '- If unclear, return NO.',
   ].join('\n');
@@ -936,6 +938,60 @@ async function classifyAffirmativeIntentWithOpenAi(userMessage) {
     return null;
   } catch (error) {
     console.error('OpenAI classifier request failed', error);
+    return null;
+  }
+}
+
+async function decideNextActionForLinkConfirmationWithOpenAi(userMessage) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+  const modelName = getOpenAiModelName();
+
+  const systemPrompt = [
+    'You are a strict router for a WhatsApp booking flow in Spanish (Argentina).',
+    'Context: The assistant just asked: "¿Querés que te pase el link para ver horarios disponibles y reservar?"',
+    'Task: Decide the next action based on the user message.',
+    'Return ONLY one of these tokens: SEND_LINK, DO_NOT_SEND, ASK_CLARIFY.',
+    'Rules:',
+    '- If the user confirms intent (even politely or implicitly), return SEND_LINK.',
+    '- If the user rejects or postpones, return DO_NOT_SEND.',
+    '- If it is unclear (question unrelated, new topic), return ASK_CLARIFY.',
+    '- Examples for SEND_LINK: "sí", "si quiero", "por favor", "dale", "ok", "mandame", "pasame el link", "de una", "gracias".',
+    '- Examples for DO_NOT_SEND: "no", "no por ahora", "más tarde", "después", "ahora no".',
+    '- Examples for ASK_CLARIFY: "¿cuánto sale?", "¿qué es eso?", "¿para cuándo?", "no entiendo".',
+  ].join('\\n');
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 5,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: String(userMessage || '') },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI router error', response.status, errorText.slice(0, 300));
+      return null;
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    if (normalized.startsWith('SEND_LINK')) return 'SEND_LINK';
+    if (normalized.startsWith('DO_NOT_SEND')) return 'DO_NOT_SEND';
+    if (normalized.startsWith('ASK_CLARIFY')) return 'ASK_CLARIFY';
+    return null;
+  } catch (error) {
+    console.error('OpenAI router request failed', error);
     return null;
   }
 }
@@ -1338,12 +1394,19 @@ exports.handler = async (event) => {
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
             // Confirmations like "sí quiero!" should send the link.
-            let isAffirmative = messageConfirmsLinkSend(bodyText);
-            if (!isAffirmative && !messageClearlyRejectsLinkSend(bodyText)) {
-              const aiDecision = await classifyAffirmativeIntentWithOpenAi(bodyText);
-              if (aiDecision === true) isAffirmative = true;
+            const isHardYes = messageConfirmsLinkSend(bodyText);
+            const isHardNo = messageClearlyRejectsLinkSend(bodyText);
+            let routerDecision = null;
+            if (!isHardYes && !isHardNo) {
+              routerDecision = await decideNextActionForLinkConfirmationWithOpenAi(bodyText);
             }
-            if (isAffirmative) {
+
+            const shouldSendLink =
+              isHardYes || routerDecision === 'SEND_LINK';
+            const shouldAskClarify =
+              !isHardYes && !isHardNo && routerDecision === 'ASK_CLARIFY';
+
+            if (shouldSendLink) {
               const entryFromState = resolveSedeEntryFromState(priorState);
               if (entryFromState) {
                 const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -1361,6 +1424,21 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, linkWrapped.messageText);
                 continue;
               }
+            }
+            if (shouldAskClarify) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'Perfecto. ¿Querés que te pase el link para reservar el turno? (Respondé sí o no).',
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                );
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
             }
           }
 
