@@ -1441,6 +1441,20 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
+            // Clear the pending link-confirmation routing state but preserve the greeting session.
+            const shouldBypassPendingLinkConfirmation =
+              messageLooksLikePrivatePriceQuestion(bodyText) ||
+              messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
+              messageExplicitlyRequestsBookingLink(bodyText) ||
+              /(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText));
+            if (shouldBypassPendingLinkConfirmation) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? { greeted: Boolean(priorState.greeted), lastSeenAtMs: priorState.lastSeenAtMs }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            } else {
             // Confirmations like "sí quiero!" should send the link.
             const isHardYes = messageConfirmsLinkSend(bodyText);
             const isHardNo = messageClearlyRejectsLinkSend(bodyText);
@@ -1487,6 +1501,7 @@ exports.handler = async (event) => {
               }
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
+            }
             }
           }
 
