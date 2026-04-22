@@ -351,7 +351,13 @@ function getConversationStateTtlSeconds() {
 
 function getUpstashRedisRestUrl() {
   const raw = process.env.UPSTASH_REDIS_REST_URL;
-  return typeof raw === 'string' ? raw.trim() : '';
+  if (typeof raw !== 'string') return '';
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return '';
+  // Defensive: sometimes secrets are pasted with extra UI text (e.g. a browser prompt).
+  // Extract the first URL-looking substring.
+  const match = trimmed.match(/https?:\/\/[^\s\]]+/i);
+  return (match ? match[0] : trimmed).trim();
 }
 
 function getUpstashRedisRestToken() {
@@ -377,25 +383,42 @@ async function fetchUpstashJson(pathname) {
   const baseUrl = getUpstashRedisRestUrl();
   const token = getUpstashRedisRestToken();
   if (!baseUrl || !token) return null;
-  const url = `${baseUrl.replace(/\/+$/, '')}/${pathname.replace(/^\/+/, '')}`;
-  try {
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'User-Agent': 'Mozilla/5.0 (Netlify Function) meta-whatsapp-webhook',
-      },
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('meta-whatsapp-webhook: Upstash error', response.status, text.slice(0, 300));
-      return null;
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('meta-whatsapp-webhook: Upstash fetch error', error);
-    return null;
+  const trimmedBaseUrl = baseUrl.replace(/\/+$/, '');
+  const trimmedPathname = pathname.replace(/^\/+/, '');
+  const candidateBaseUrls = [trimmedBaseUrl];
+  // Some Upstash consoles show the REST base URL with a trailing "/redis".
+  // Make the integration tolerant: if the first attempt fails, retry with "/redis".
+  if (!/\/redis$/i.test(trimmedBaseUrl)) {
+    candidateBaseUrls.push(`${trimmedBaseUrl}/redis`);
   }
+
+  let lastError = null;
+  for (const candidateBaseUrl of candidateBaseUrls) {
+    const url = `${candidateBaseUrl}/${trimmedPathname}`;
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'Mozilla/5.0 (Netlify Function) meta-whatsapp-webhook',
+        },
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        lastError = new Error(`HTTP ${response.status}: ${text.slice(0, 300)}`);
+        continue;
+      }
+      return await response.json();
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+  }
+
+  if (lastError) {
+    console.error('meta-whatsapp-webhook: Upstash fetch failed', String(lastError).slice(0, 500));
+  }
+  return null;
 }
 
 async function getConversationState(fromPhoneId) {
