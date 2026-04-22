@@ -793,12 +793,25 @@ function buildAutoReplyWithGreetingIfNeeded(body, profileDisplayName, priorState
 function mergeConversationStatePreservingGreeting(priorState, nextState, patch) {
   const priorGreeted =
     priorState && typeof priorState === 'object' ? Boolean(priorState.greeted) : false;
+  const priorLastSede =
+    priorState && typeof priorState === 'object'
+      ? {
+          lastSedeEnvKey: priorState.lastSedeEnvKey,
+          lastSedeDisplayName: priorState.lastSedeDisplayName,
+          lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+          lastSedeAtMs: priorState.lastSedeAtMs,
+        }
+      : null;
   const merged = { ...(nextState || {}) };
   if (patch && typeof patch === 'object') {
     Object.assign(merged, patch);
   }
   if (priorGreeted) {
     merged.greeted = true;
+  }
+  // Keep last known sede unless explicitly overwritten.
+  if (priorLastSede && typeof merged.lastSedeEnvKey !== 'string') {
+    Object.assign(merged, priorLastSede);
   }
   return merged;
 }
@@ -1060,6 +1073,26 @@ function stateLooksLikeAwaitingLinkConfirmation(state) {
     typeof state.sedeEnvKey === 'string' &&
     typeof state.sedeDisplayName === 'string'
   );
+}
+
+function buildLastSedeStatePatch(entry) {
+  if (!entry) return null;
+  return {
+    lastSedeEnvKey: entry.envKey,
+    lastSedeDisplayName: entry.displayName,
+    lastSedeOptionNumber: entry.optionNumber,
+    lastSedeAtMs: Date.now(),
+  };
+}
+
+function resolveLastSedeEntryFromState(state) {
+  if (!state || typeof state !== 'object') return null;
+  const envKey = typeof state.lastSedeEnvKey === 'string' ? state.lastSedeEnvKey : '';
+  if (!envKey) return null;
+  for (const entry of SEDE_ENTRIES) {
+    if (entry.envKey === envKey) return entry;
+  }
+  return null;
 }
 
 function resolveSedeEntryFromState(state) {
@@ -1550,6 +1583,7 @@ exports.handler = async (event) => {
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
+            const lastSedePatch = buildLastSedeStatePatch(sede);
             if (priorState && priorState.state === 'awaiting_booking_link_sede') {
               await clearConversationState(from);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -1576,7 +1610,11 @@ exports.handler = async (event) => {
               if (wrapped.nextStatePatch) {
                 await setConversationState(
                   from,
-                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    priorState || {},
+                    { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
+                  )
                 );
               }
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1595,7 +1633,7 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus'),
-                  wrapped.nextStatePatch
+                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1611,7 +1649,7 @@ exports.handler = async (event) => {
                   mergeConversationStatePreservingGreeting(
                     priorState,
                     buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus'),
-                    wrapped.nextStatePatch
+                    { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                   )
                 );
                 await sendWhatsAppText(from, wrapped.messageText);
@@ -1642,7 +1680,7 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   buildAwaitingLinkConfirmationState(sede, 'after_private_price'),
-                  wrapped.nextStatePatch
+                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1654,7 +1692,7 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   buildAwaitingLinkConfirmationState(sede, 'after_private_price'),
-                  wrapped.nextStatePatch
+                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1666,7 +1704,7 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   buildAwaitingLinkConfirmationState(sede, 'after_booking_intent'),
-                  wrapped.nextStatePatch
+                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1681,7 +1719,7 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   buildAwaitingLinkConfirmationState(sede, 'after_schedule_question'),
-                  wrapped.nextStatePatch
+                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1695,7 +1733,7 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   buildAwaitingLinkConfirmationState(sede, 'after_sede_selection'),
-                  wrapped.nextStatePatch
+                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -1721,6 +1759,21 @@ exports.handler = async (event) => {
             }
             // Pricing questions must win over "turno/agendar" keyword matches.
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+              const lastSede = resolveLastSedeEntryFromState(priorState);
+              if (lastSede) {
+                const reply = await buildPrivatePriceReply(lastSede);
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    buildAwaitingLinkConfirmationState(lastSede, 'after_private_price'),
+                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildAskSedeMessage(),
                 profileDisplayName,
@@ -1756,6 +1809,21 @@ exports.handler = async (event) => {
             if (priorState && priorState.state === 'awaiting_health_insurance_name') {
               const extracted = tryExtractHealthInsuranceName(bodyText);
               if (extracted) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReply(lastSede, extracted);
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(
                   buildAskSedeMessage(),
                   profileDisplayName,
@@ -1783,6 +1851,21 @@ exports.handler = async (event) => {
             if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
               const healthInsuranceName = tryExtractHealthInsuranceName(bodyText);
               if (healthInsuranceName) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReply(lastSede, healthInsuranceName);
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(
                   buildAskSedeMessage(),
                   profileDisplayName,
