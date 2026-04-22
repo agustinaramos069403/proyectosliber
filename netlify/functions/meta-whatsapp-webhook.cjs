@@ -823,6 +823,9 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
     normalized.includes('obra social') ||
     normalized.includes('osde') ||
     normalized.includes('isunne') ||
+    normalized.includes('issune') ||
+    normalized.includes('issunne') ||
+    normalized.includes('isune') ||
     normalized.includes('sancor') ||
     normalized.includes('swiss') ||
     normalized.includes('ioscor') ||
@@ -1051,6 +1054,86 @@ async function decideNextActionForLinkConfirmationWithOpenAi(userMessage) {
     return null;
   } catch (error) {
     console.error('OpenAI router request failed', error);
+    return null;
+  }
+}
+
+function getUniqueHealthInsuranceNamesFromSheetsData(data) {
+  const names = new Set();
+  if (!data || typeof data !== 'object') return [];
+  const plusLookup = data.plusLookup;
+  if (!(plusLookup instanceof Map)) return [];
+  for (const value of plusLookup.values()) {
+    const name = value?.name != null ? String(value.name).trim() : '';
+    if (name) names.add(name);
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b, 'es'));
+}
+
+async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+
+  const data = await getGoogleSheetsData();
+  const knownNames = getUniqueHealthInsuranceNamesFromSheetsData(data);
+  if (knownNames.length === 0) return null;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'You are a strict entity extractor and normalizer for Argentine health insurance names in Spanish WhatsApp messages.',
+    'Task: Determine if the user message mentions a health insurance (obra social / prepaga).',
+    'If yes, pick the single best canonical name from the provided list (exactly as in the list).',
+    'If not sure, return null.',
+    '',
+    'Return ONLY a JSON object with this exact shape:',
+    '{"isHealthInsurance":true|false,"canonicalName":string|null}',
+    '',
+    'Rules:',
+    '- If canonicalName is provided, it MUST be one of the provided list items exactly.',
+    '- Accept typos and variants (e.g., "issune", "issunne", "ioscor", "sancor salud").',
+    '- If the message is about something else, return isHealthInsurance=false.',
+  ].join('\n');
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 120,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: [
+              `Known canonical names list:\n${knownNames.join('\n')}`,
+              '',
+              `User message:\n${String(userMessage || '')}`,
+            ].join('\n'),
+          },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI health-insurance resolver error', response.status, errorText.slice(0, 300));
+      return null;
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const parsed = tryParseJson(typeof text === 'string' ? text.trim() : '');
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (parsed.isHealthInsurance !== true) return null;
+    const canonicalName = typeof parsed.canonicalName === 'string' ? parsed.canonicalName.trim() : '';
+    if (!canonicalName) return null;
+    if (!knownNames.includes(canonicalName)) return null;
+    return canonicalName;
+  } catch (error) {
+    console.error('OpenAI health-insurance resolver request failed', error);
     return null;
   }
 }
@@ -1840,6 +1923,41 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, wrapped.messageText);
                 continue;
               }
+              // If we can't extract it with hard rules, try OpenAI to map typos/aliases to a canonical name
+              // that exists in our Sheet.
+              const resolvedCanonicalName = await tryResolveHealthInsuranceNameWithOpenAi(bodyText);
+              if (resolvedCanonicalName) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedCanonicalName);
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedCanonicalName },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const askAgain = buildAutoReplyWithGreetingIfNeeded(
                 buildAskHealthInsuranceNameMessage(),
                 profileDisplayName,
@@ -1876,6 +1994,40 @@ exports.handler = async (event) => {
                   mergeConversationStatePreservingGreeting(
                     priorState,
                     { state: 'awaiting_health_insurance_city', healthInsuranceName },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              // Not recognized by hard rules. Try OpenAI to map it to a canonical Sheet name.
+              const resolvedCanonicalName = await tryResolveHealthInsuranceNameWithOpenAi(bodyText);
+              if (resolvedCanonicalName) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedCanonicalName);
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedCanonicalName },
                     wrapped.nextStatePatch
                   )
                 );
