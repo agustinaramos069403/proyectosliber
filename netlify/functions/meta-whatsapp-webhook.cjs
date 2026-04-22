@@ -703,14 +703,7 @@ function buildAskSedeMessage() {
 }
 
 function buildMicroCommitmentMessage(entry) {
-  const optionNumber =
-    entry && typeof entry.optionNumber === 'string' && entry.optionNumber.length > 0
-      ? entry.optionNumber
-      : '';
-  if (!optionNumber) {
-    return '¿Querés que te pase el link para ver horarios disponibles y reservar?';
-  }
-  return `¿Querés que te pase el link para ver horarios disponibles y reservar? Si es así, respondé ${optionNumber}.`;
+  return '¿Querés que te pase el link para ver horarios disponibles y reservar?';
 }
 
 function buildGreetingSentence(profileDisplayName) {
@@ -873,10 +866,78 @@ function formatArsAmount(amount) {
 
 function messageConfirmsLinkSend(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  const normalized = normalizeForMatch(rawText);
-  return /^(si|sí|dale|ok|oka|de una|manda|mandalo|mandame|pasalo|pasame|quiero|ya|listo)$/.test(
-    normalized
-  );
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Accept short confirmations even with extra words: "si quiero", "si pasame el link", "dale pasalo"
+  if (/^(si|dale|ok|oka|de una|listo|ya)\b/.test(normalized)) return true;
+  if (/\b(quiero|mandame|pasame|pasalo|mandalo|manda)\b/.test(normalized)) return true;
+  if (normalized.includes('pasa el link') || normalized.includes('pasame el link')) return true;
+  return false;
+}
+
+function messageClearlyRejectsLinkSend(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (/^(no|nop|nah)\b/.test(normalized)) return true;
+  if (normalized.includes('no quiero')) return true;
+  if (normalized.includes('no por ahora')) return true;
+  if (normalized.includes('mas tarde') || normalized.includes('más tarde')) return true;
+  return false;
+}
+
+async function classifyAffirmativeIntentWithOpenAi(userMessage) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+  const modelName = getOpenAiModelName();
+
+  const systemPrompt = [
+    'You are a strict classifier for WhatsApp messages in Spanish.',
+    'Task: Decide if the user message is an AFFIRMATIVE confirmation to receive a booking link that was just offered.',
+    'Return only one token: YES or NO.',
+    'Rules:',
+    '- YES examples: "si", "si quiero", "dale", "ok", "pasame el link", "mandalo", "de una".',
+    '- NO examples: "no", "no por ahora", "después", "mas tarde", questions not confirming.',
+    '- If unclear, return NO.',
+  ].join('\n');
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: String(userMessage || '') },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI classifier error', response.status, errorText.slice(0, 300));
+      return null;
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    if (normalized.startsWith('YES')) return true;
+    if (normalized.startsWith('NO')) return false;
+    return null;
+  } catch (error) {
+    console.error('OpenAI classifier request failed', error);
+    return null;
+  }
 }
 
 function buildAwaitingLinkConfirmationState(entry, reason) {
@@ -939,7 +1000,7 @@ function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
     // Micro-compromiso first; the link is sent only after confirmation.
-    return `¿Querés que te pase el link para ver días y horarios disponibles en ${entry.displayName}? Si es así, respondé ${entry.optionNumber}.`;
+    return `¿Querés que te pase el link para ver días y horarios disponibles en ${entry.displayName}?`;
   }
   return buildLinkMessage(entry);
 }
@@ -1275,6 +1336,34 @@ exports.handler = async (event) => {
 
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
+          if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            // Confirmations like "sí quiero!" should send the link.
+            let isAffirmative = messageConfirmsLinkSend(bodyText);
+            if (!isAffirmative && !messageClearlyRejectsLinkSend(bodyText)) {
+              const aiDecision = await classifyAffirmativeIntentWithOpenAi(bodyText);
+              if (aiDecision === true) isAffirmative = true;
+            }
+            if (isAffirmative) {
+              const entryFromState = resolveSedeEntryFromState(priorState);
+              if (entryFromState) {
+                const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildLinkMessage(entryFromState),
+                  profileDisplayName,
+                  priorState
+                );
+                // Keep greeted flag for subsequent messages.
+                const afterLinkState = mergeConversationStatePreservingGreeting(
+                  priorState,
+                  {},
+                  linkWrapped.nextStatePatch
+                );
+                await setConversationState(from, afterLinkState);
+                await sendWhatsAppText(from, linkWrapped.messageText);
+                continue;
+              }
+            }
+          }
+
           if (!stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               'Perfecto. ¿Para qué sede querés el link? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
@@ -1291,21 +1380,7 @@ exports.handler = async (event) => {
             continue;
           }
 
-          if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
-            const entryFromState = resolveSedeEntryFromState(priorState);
-            if (entryFromState) {
-              const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildLinkMessage(entryFromState),
-                profileDisplayName,
-                priorState
-              );
-              // Keep greeted flag for subsequent messages.
-              const afterLinkState = mergeConversationStatePreservingGreeting(priorState, {}, linkWrapped.nextStatePatch);
-              await setConversationState(from, afterLinkState);
-              await sendWhatsAppText(from, linkWrapped.messageText);
-              continue;
-            }
-          }
+          // Note: awaiting_link_confirmation is handled above (with hard rules + optional OpenAI YES/NO classifier).
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
