@@ -1052,6 +1052,33 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
   );
 }
 
+function messageExplicitlyRequestsBookingLink(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsLink =
+    normalized.includes('link') ||
+    normalized.includes('enlace') ||
+    normalized.includes('agenda') ||
+    normalized.includes('agendar') ||
+    normalized.includes('reservar') ||
+    normalized.includes('turno');
+  if (!mentionsLink) return false;
+  return (
+    normalized.includes('pasame') ||
+    normalized.includes('pasalo') ||
+    normalized.includes('mandame') ||
+    normalized.includes('mandalo') ||
+    normalized.includes('enviame') ||
+    normalized.includes('enviamelo') ||
+    normalized.includes('me pasas') ||
+    normalized.includes('me pasás') ||
+    normalized.includes('me mandas') ||
+    normalized.includes('me mandás') ||
+    normalized.includes('quiero el link') ||
+    normalized.includes('quiero link')
+  );
+}
+
 function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
@@ -1462,6 +1489,22 @@ exports.handler = async (event) => {
 
           const sede = findSedeFromText(bodyText);
           if (sede) {
+            // If the user explicitly asks for the booking link and we already know the sede, send it directly.
+            if (messageExplicitlyRequestsBookingLink(bodyText)) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildLinkMessage(sede),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                );
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             const pendingHealthInsuranceName =
               priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
                 ? priorState.healthInsuranceName
@@ -1581,6 +1624,22 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
             }
           } else {
+            // If the user asks for the link but didn't specify the sede, ask sede first.
+            if (messageExplicitlyRequestsBookingLink(bodyText)) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskSedeMessage(),
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+                );
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             // Booking intent without sede: always ask sede (never ask for date/time).
             if (/(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText))) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
