@@ -166,6 +166,22 @@ function normalizeForMatch(text) {
     .trim();
 }
 
+function shouldWriteDebugBotLogs() {
+  const raw = process.env.DEBUG_BOT_LOGS;
+  if (typeof raw !== 'string') return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+function debugBotLog(...parts) {
+  if (!shouldWriteDebugBotLogs()) return;
+  try {
+    console.log('meta-whatsapp-webhook: DEBUG', ...parts);
+  } catch {
+    // ignore
+  }
+}
+
 function sleepMs(durationMs) {
   const parsed = Number(durationMs);
   if (!Number.isFinite(parsed) || parsed <= 0) return Promise.resolve();
@@ -736,6 +752,7 @@ function buildPrivatePriceMap(rows) {
 async function getGoogleSheetsData() {
   const now = Date.now();
   if (cachedGoogleSheetsData && now < cachedGoogleSheetsDataExpiresAtMs) {
+    debugBotLog('sheets cache hit', { expiresInMs: cachedGoogleSheetsDataExpiresAtMs - now });
     return cachedGoogleSheetsData;
   }
 
@@ -747,12 +764,17 @@ async function getGoogleSheetsData() {
       privatePricesCsvUrl ? fetchCsvRows(privatePricesCsvUrl) : null,
     ]);
     if (!plusRows && !privatePriceRows) {
+      debugBotLog('sheets csv fetch returned null for both');
       return null;
     }
     cachedGoogleSheetsData = {
       plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
       privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
     };
+    debugBotLog('sheets loaded', {
+      plusLookupSize: cachedGoogleSheetsData.plusLookup.size,
+      privatePriceLookupSize: cachedGoogleSheetsData.privatePriceLookup.size,
+    });
     cachedGoogleSheetsDataExpiresAtMs = now + GOOGLE_SHEETS_CACHE_TTL_MS;
     return cachedGoogleSheetsData;
   }
@@ -774,12 +796,17 @@ async function getGoogleSheetsData() {
       : null,
   ]);
   if (!plusRows && !privatePriceRows) {
+    debugBotLog('sheets api fetch returned null for both');
     return null;
   }
   cachedGoogleSheetsData = {
     plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
     privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
   };
+  debugBotLog('sheets loaded (api)', {
+    plusLookupSize: cachedGoogleSheetsData.plusLookup.size,
+    privatePriceLookupSize: cachedGoogleSheetsData.privatePriceLookup.size,
+  });
   cachedGoogleSheetsDataExpiresAtMs = now + GOOGLE_SHEETS_CACHE_TTL_MS;
   return cachedGoogleSheetsData;
 }
@@ -790,7 +817,55 @@ async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
   const cityKey = normalizeForMatch(normalizeCityKeyForSheets(cityDisplayName));
   const osKey = normalizeHealthInsuranceNameForKey(healthInsuranceName);
   const key = `${cityKey}::${osKey}`;
-  return data.plusLookup.get(key) || null;
+  const exactValue = data.plusLookup.get(key) || null;
+  if (exactValue) {
+    debugBotLog('lookupPlusRule', {
+      cityDisplayName,
+      healthInsuranceName,
+      cityKey,
+      osKey,
+      key,
+      found: true,
+      mode: 'exact',
+    });
+    return exactValue;
+  }
+
+  // Fuzzy match within the same city: when the Sheet contains plan/parentheses variants,
+  // match by "contains" and a small typo tolerance.
+  let best = null;
+  for (const [candidateKey, rule] of data.plusLookup.entries()) {
+    if (typeof candidateKey !== 'string') continue;
+    if (!candidateKey.startsWith(`${cityKey}::`)) continue;
+    const candidateOsKey = candidateKey.slice(`${cityKey}::`.length);
+    if (!candidateOsKey) continue;
+    if (candidateOsKey === osKey) {
+      best = { rule, distance: 0, candidateOsKey };
+      break;
+    }
+    const containsMatch =
+      candidateOsKey.includes(osKey) || osKey.includes(candidateOsKey);
+    const distance = computeLevenshteinDistance(candidateOsKey, osKey);
+    const acceptable = containsMatch || distance <= MAX_LEVENSHTEIN_DISTANCE;
+    if (!acceptable) continue;
+    const score = containsMatch ? 0 : distance;
+    if (!best || score < best.distance) {
+      best = { rule, distance: score, candidateOsKey };
+    }
+  }
+
+  const fuzzyValue = best ? best.rule : null;
+  debugBotLog('lookupPlusRule', {
+    cityDisplayName,
+    healthInsuranceName,
+    cityKey,
+    osKey,
+    key,
+    found: Boolean(fuzzyValue),
+    mode: fuzzyValue ? 'fuzzy' : 'miss',
+    matchedCandidateOsKey: best ? best.candidateOsKey : null,
+  });
+  return fuzzyValue;
 }
 
 async function healthInsuranceExistsInAnyCity(healthInsuranceName) {
@@ -1040,6 +1115,10 @@ function tryExtractHealthInsuranceName(rawText) {
 }
 
 async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName) {
+  debugBotLog('buildHealthInsurancePlusReplyOrAskCity', {
+    cityDisplayName: cityEntry?.displayName,
+    healthInsuranceName,
+  });
   const plusRule = await lookupPlusRule(cityEntry.displayName, healthInsuranceName);
   const privatePriceArs = await lookupPrivatePrice(cityEntry.displayName);
   const privatePriceFormatted =
@@ -1062,6 +1141,11 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
       return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
     }
     const existsElsewhere = await healthInsuranceExistsInAnyCity(healthInsuranceName);
+    debugBotLog('plusRule missing', {
+      city: cityEntry?.displayName,
+      healthInsuranceName,
+      existsElsewhere,
+    });
     if (existsElsewhere) {
       return 'ASK_CITY_FOR_HEALTH_INSURANCE';
     }
