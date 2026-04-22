@@ -768,6 +768,24 @@ async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
   return data.plusLookup.get(key) || null;
 }
 
+async function healthInsuranceExistsInAnyCity(healthInsuranceName) {
+  const data = await getGoogleSheetsData();
+  if (!data) return false;
+  const osKey = normalizeHealthInsuranceNameForKey(healthInsuranceName);
+  if (!osKey) return false;
+  const plusLookup = data.plusLookup;
+  if (!(plusLookup instanceof Map) || plusLookup.size === 0) return false;
+  for (const value of plusLookup.values()) {
+    const candidateName = value?.name != null ? String(value.name).trim() : '';
+    if (!candidateName) continue;
+    const candidateKey = normalizeHealthInsuranceNameForKey(candidateName);
+    if (!candidateKey) continue;
+    if (candidateKey === osKey) return true;
+    if (candidateKey.includes(osKey) || osKey.includes(candidateKey)) return true;
+  }
+  return false;
+}
+
 async function lookupPrivatePrice(cityDisplayName) {
   const data = await getGoogleSheetsData();
   if (!data) return null;
@@ -981,7 +999,7 @@ function tryExtractHealthInsuranceName(rawText) {
   return null;
 }
 
-async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
+async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName) {
   const plusRule = await lookupPlusRule(cityEntry.displayName, healthInsuranceName);
   const privatePriceArs = await lookupPrivatePrice(cityEntry.displayName);
   const privatePriceFormatted =
@@ -1002,6 +1020,10 @@ async function buildHealthInsurancePlusReply(cityEntry, healthInsuranceName) {
       (cityNormalized.includes('saenz pena') && (isOsde || isIsunne || isSancor));
     if (isKnownNoPlus) {
       return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+    }
+    const existsElsewhere = await healthInsuranceExistsInAnyCity(healthInsuranceName);
+    if (existsElsewhere) {
+      return 'ASK_CITY_FOR_HEALTH_INSURANCE';
     }
     return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
@@ -1853,8 +1875,21 @@ exports.handler = async (event) => {
                 : null;
             if (priorState && priorState.state === 'awaiting_health_insurance_city' && pendingHealthInsuranceName) {
               await clearConversationState(from);
-              const reply = await buildHealthInsurancePlusReply(sede, pendingHealthInsuranceName);
+              const reply = await buildHealthInsurancePlusReplyOrAskCity(sede, pendingHealthInsuranceName);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: pendingHealthInsuranceName },
+                    askCityWrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, askCityWrapped.messageText);
+                continue;
+              }
               await setConversationState(
                 from,
                 mergeConversationStatePreservingGreeting(
@@ -1869,7 +1904,20 @@ exports.handler = async (event) => {
             if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
               const extractedHealthInsuranceName = tryExtractHealthInsuranceName(bodyText);
               if (extractedHealthInsuranceName) {
-                const reply = await buildHealthInsurancePlusReply(sede, extractedHealthInsuranceName);
+                const reply = await buildHealthInsurancePlusReplyOrAskCity(sede, extractedHealthInsuranceName);
+                if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                  const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      { state: 'awaiting_health_insurance_city', healthInsuranceName: extractedHealthInsuranceName },
+                      askCityWrapped.nextStatePatch
+                    )
+                  );
+                  await sendWhatsAppText(from, askCityWrapped.messageText);
+                  continue;
+                }
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                 await setConversationState(
                   from,
@@ -2075,7 +2123,20 @@ exports.handler = async (event) => {
               if (extracted) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReply(lastSede, extracted);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, extracted);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: extracted },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                   await setConversationState(
                     from,
@@ -2119,7 +2180,7 @@ exports.handler = async (event) => {
                   from,
                   mergeConversationStatePreservingGreeting(
                     priorState,
-                    { state: 'awaiting_health_insurance_name' },
+                    { state: 'awaiting_health_insurance_plan', healthInsuranceFamily: 'AMMECO' },
                     wrapped.nextStatePatch
                   )
                 );
@@ -2131,7 +2192,20 @@ exports.handler = async (event) => {
               if (resolvedFromSheets) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedFromSheets);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedFromSheets);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedFromSheets },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                   await setConversationState(
                     from,
@@ -2166,7 +2240,20 @@ exports.handler = async (event) => {
               if (resolvedCanonicalName) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedCanonicalName);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedCanonicalName);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedCanonicalName },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                   await setConversationState(
                     from,
@@ -2216,12 +2303,143 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, askAgain.messageText);
               continue;
             }
+            if (priorState && priorState.state === 'awaiting_health_insurance_plan') {
+              const family =
+                typeof priorState.healthInsuranceFamily === 'string' ? priorState.healthInsuranceFamily.trim() : '';
+              const combined = family ? `${family} ${String(bodyText || '')}` : String(bodyText || '');
+              const extracted = tryExtractHealthInsuranceName(combined);
+              if (extracted) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, extracted);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: extracted },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: extracted },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+
+              const resolvedFromSheets = await tryResolveHealthInsuranceNameFromSheetsFuzzy(combined);
+              if (resolvedFromSheets) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedFromSheets);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedFromSheets },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskSedeMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedFromSheets },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+
+              const askAgainText =
+                family && family.toUpperCase() === 'AMMECO'
+                  ? '¿Qué plan de AMMECO tenés? Podés responder: Plan A, Plan B, Plan Dorado, Red, ASE u OSPUAYE.'
+                  : 'No pude identificar esa obra social. ¿Me decís el nombre completo?';
+              const askAgain = buildAutoReplyWithGreetingIfNeeded(
+                askAgainText,
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_health_insurance_plan', healthInsuranceFamily: family || 'AMMECO' },
+                  askAgain.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, askAgain.messageText);
+              continue;
+            }
             if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
               const healthInsuranceName = tryExtractHealthInsuranceName(bodyText);
               if (healthInsuranceName) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReply(lastSede, healthInsuranceName);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, healthInsuranceName);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                   await setConversationState(
                     from,
@@ -2255,7 +2473,20 @@ exports.handler = async (event) => {
               if (resolvedFromSheets) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedFromSheets);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedFromSheets);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedFromSheets },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                   await setConversationState(
                     from,
@@ -2289,7 +2520,20 @@ exports.handler = async (event) => {
               if (resolvedCanonicalName) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReply(lastSede, resolvedCanonicalName);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedCanonicalName);
+                  if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                    const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+                    await setConversationState(
+                      from,
+                      mergeConversationStatePreservingGreeting(
+                        priorState,
+                        { state: 'awaiting_health_insurance_city', healthInsuranceName: resolvedCanonicalName },
+                        askCityWrapped.nextStatePatch
+                      )
+                    );
+                    await sendWhatsAppText(from, askCityWrapped.messageText);
+                    continue;
+                  }
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
                   await setConversationState(
                     from,
