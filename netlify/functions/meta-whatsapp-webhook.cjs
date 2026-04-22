@@ -2104,6 +2104,28 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, wrapped.messageText);
                 continue;
               }
+              // AMMECO is a family with multiple plans in the Sheet; ask for the plan instead of
+              // claiming we can't identify it.
+              const normalizedUserTextForAmmeCo = normalizeForMatch(bodyText);
+              if (normalizedUserTextForAmmeCo.includes('ammeco')) {
+                const askPlanText =
+                  '¿Qué plan de AMMECO tenés? Podés responder: Plan A, Plan B, Plan Dorado, Red, ASE u OSPUAYE.';
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  askPlanText,
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_name' },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               // Try resolving directly from the Sheet names (fuzzy match) before calling OpenAI.
               const resolvedFromSheets = await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText);
               if (resolvedFromSheets) {
