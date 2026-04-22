@@ -1824,6 +1824,25 @@ exports.handler = async (event) => {
           } else {
             // If the user asks for the link but didn't specify the sede, ask sede first.
             if (messageExplicitlyRequestsBookingLink(bodyText)) {
+              const lastSede = resolveLastSedeEntryFromState(priorState);
+              // Explicit link request: if we already know the last sede, send the link directly.
+              if (lastSede) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildLinkMessage(lastSede),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    priorState || {},
+                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildAskSedeMessage(),
                 profileDisplayName,
