@@ -896,6 +896,8 @@ function messageLooksLikePrivatePriceQuestion(rawText) {
     normalized.includes('precio') ||
     normalized.includes('cuanto sale') ||
     normalized.includes('cuanto cuesta') ||
+    normalized.includes('precio del turno') ||
+    normalized.includes('precio turno') ||
     normalized.includes('consulta particular') ||
     normalized.includes('particular') ||
     normalized.includes('valor consulta')
@@ -1717,6 +1719,24 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
+            // Pricing questions must win over "turno/agendar" keyword matches.
+            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskSedeMessage(),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_private_price_city' },
+                  wrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             // Booking intent without sede: always ask sede (never ask for date/time).
             if (/(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText))) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -1794,23 +1814,6 @@ exports.handler = async (event) => {
                 )
               );
               await sendWhatsAppText(from, askOsWrapped.messageText);
-              continue;
-            }
-            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildAskSedeMessage(),
-                profileDisplayName,
-                priorState
-              );
-              await setConversationState(
-                from,
-                mergeConversationStatePreservingGreeting(
-                  priorState,
-                  { state: 'awaiting_private_price_city' },
-                  wrapped.nextStatePatch
-                )
-              );
-              await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
             const openAiReply = await fetchOpenAiAssistantReply(bodyText, {
