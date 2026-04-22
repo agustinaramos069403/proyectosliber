@@ -71,6 +71,8 @@ const SEDE_ENTRIES = [
     displayName: 'Resistencia',
     match: [
       'resistencia',
+      'resis',
+      'resi',
       'immi',
       'instituto modelo de medicina infantil',
       'instituto modelo medicina infantil',
