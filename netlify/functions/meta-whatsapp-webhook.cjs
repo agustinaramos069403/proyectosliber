@@ -1031,13 +1031,19 @@ function processAssistantReplyForPatient(rawModelText) {
   }
   const asksForSpecificDateOrTime =
     normalized.includes('fecha') ||
+    normalized.includes('dia') ||
+    normalized.includes('día') ||
     normalized.includes('día y hora') ||
     normalized.includes('dia y hora') ||
     normalized.includes('horario') ||
     normalized.includes('indicame la fecha') ||
+    normalized.includes('indicame el dia') ||
+    normalized.includes('indicame el día') ||
     normalized.includes('indicame el horario') ||
     normalized.includes('por favor, indicame la fecha') ||
-    normalized.includes('por favor indicame la fecha');
+    normalized.includes('por favor indicame la fecha') ||
+    normalized.includes('por favor indicame el dia') ||
+    normalized.includes('por favor indicame el día');
   if (asksForSpecificDateOrTime) {
     return 'Entendido. ¿En qué sede querés atenderte: 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa?';
   }
@@ -1577,6 +1583,16 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
     normalized.includes('disponible') ||
     normalized.includes('disponibilidad')
   );
+}
+
+function messageLooksLikeBookingIntent(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  // Common intent words
+  if (/\b(turno|turnos|agendar|agenda|reservar|reserva|cita)\b/.test(normalized)) return true;
+  // Tolerate common typos like "urno" (missing t)
+  if (/\burno\b/.test(normalized) || /\bun\s*urno\b/.test(normalized)) return true;
+  return false;
 }
 
 function messageExplicitlyRequestsBookingLink(rawText) {
@@ -2319,7 +2335,7 @@ exports.handler = async (event) => {
               messageAsksAboutStudiesOrTests(bodyText) ||
               messageAsksAboutConditionTreatment(bodyText) ||
               messageExplicitlyRequestsBookingLink(bodyText) ||
-              /(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText));
+              messageLooksLikeBookingIntent(bodyText);
             if (shouldBypassPendingLinkConfirmation) {
               const preservedSessionState =
                 priorState && typeof priorState === 'object'
@@ -2735,7 +2751,7 @@ exports.handler = async (event) => {
               continue;
             }
             // Booking intent without sede: always ask sede (never ask for date/time).
-            if (/(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText))) {
+            if (messageLooksLikeBookingIntent(bodyText)) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildAskSedeMessage(),
                 profileDisplayName,
