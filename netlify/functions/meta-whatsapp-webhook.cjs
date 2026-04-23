@@ -161,6 +161,17 @@ const FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT =
 
 let cachedAgenteLiberSystemPrompt = undefined;
 
+const GREETING_NORMALIZED_TOKENS = new Set([
+  'hola',
+  'holaa',
+  'buenas',
+  'buenosdias',
+  'buendia',
+  'buenastardes',
+  'buena tarde',
+  'buenasnoches',
+]);
+
 function normalizeForMatch(text) {
   return text
     .toLowerCase()
@@ -201,6 +212,18 @@ function messageIsAcknowledgement(rawText) {
   // Short acknowledgements that often come after a helpful answer.
   if (/^(bueno|ok|oka|dale|listo|perfecto|genial|gracias|joya|bien)$/.test(normalized)) return true;
   return false;
+}
+
+function messageIsGreeting(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const token = normalized.replace(/\s+/g, '');
+  if (GREETING_NORMALIZED_TOKENS.has(token)) return true;
+  return /^(hola|buenas|buenos dias|buen dia|buenas tardes|buenas noches)\b/.test(normalized);
 }
 
 function buildAnythingElseHelpMessage(priorState) {
@@ -1066,6 +1089,7 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   const normalizedSingleToken = normalized.replace(/\s+/g, '');
+  if (GREETING_NORMALIZED_TOKENS.has(normalizedSingleToken)) return false;
   const looksLikeHealthInsuranceAbbreviation = /^[a-z]{2,6}$/.test(normalizedSingleToken);
   return (
     looksLikeHealthInsuranceAbbreviation ||
@@ -1901,6 +1925,31 @@ exports.handler = async (event) => {
               await setConversationState(from, { ...(priorState || {}), ...chacoWrapped.nextStatePatch });
             }
             await sendWhatsAppText(from, chacoWrapped.messageText);
+            continue;
+          }
+
+          if (messageIsGreeting(bodyText)) {
+            const preservedSessionState =
+              priorState && typeof priorState === 'object'
+                ? {
+                    greeted: Boolean(priorState.greeted),
+                    lastSeenAtMs: priorState.lastSeenAtMs,
+                    lastSedeEnvKey: priorState.lastSedeEnvKey,
+                    lastSedeDisplayName: priorState.lastSedeDisplayName,
+                    lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                    lastSedeAtMs: priorState.lastSedeAtMs,
+                  }
+                : {};
+            await setConversationState(from, preservedSessionState);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Hola. ¿En qué puedo ayudarte? Si querés, decime tu ciudad (Corrientes, Resistencia, Sáenz Peña o Formosa).',
+              profileDisplayName,
+              preservedSessionState
+            );
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...preservedSessionState, ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
 
