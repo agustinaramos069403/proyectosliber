@@ -2255,6 +2255,26 @@ exports.handler = async (event) => {
           }
 
           if (!stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
+            if (messageExplicitlyRequestsBookingLink(bodyText)) {
+              const lastSede = resolveLastSedeEntryFromState(priorState);
+              if (lastSede) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildLinkMessage(lastSede),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    priorState || {},
+                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+            }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               'Perfecto. ¿Para qué sede querés el link? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
               profileDisplayName,
