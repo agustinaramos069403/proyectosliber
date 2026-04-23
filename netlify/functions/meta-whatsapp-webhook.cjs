@@ -229,11 +229,7 @@ function messageIsGreeting(rawText) {
 }
 
 function buildAnythingElseHelpMessage(priorState) {
-  const lastSede = resolveLastSedeEntryFromState(priorState);
-  if (lastSede) {
-    return `Perfecto. Si querés, también puedo ayudarte con obra social/plus o pasarte el link para ${lastSede.displayName}. ¿Qué necesitás?`;
-  }
-  return 'Perfecto. ¿Querés que te ayude con algo más?';
+  return '¿Querés que te ayude con algo más?';
 }
 
 function findSedeFromText(rawText) {
@@ -2052,6 +2048,32 @@ exports.handler = async (event) => {
                   continue;
                 }
               }
+
+              // If we're awaiting link confirmation and the user changes the sede (even without OS context),
+              // update the pending sede and continue with the link flow for the new city.
+              const preservedDetails =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      healthInsuranceName:
+                        typeof priorState.healthInsuranceName === 'string' ? priorState.healthInsuranceName : undefined,
+                    }
+                  : {};
+              const promptForNewSede = buildScheduleQuestionLinkMessage(sedeChange);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                promptForNewSede,
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  buildAwaitingLinkConfirmationState(sedeChange, 'after_sede_selection', preservedDetails),
+                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sedeChange) || {}) }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
             }
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             // Clear the pending link-confirmation routing state but preserve the greeting session.
