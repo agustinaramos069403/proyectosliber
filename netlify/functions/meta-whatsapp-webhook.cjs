@@ -1706,7 +1706,14 @@ function buildConditionTreatmentReply(priorState, rawText) {
   return `${base} Para orientarte bien según el caso, lo ideal es una consulta de evaluación. ${buildAskSedeMessage()}`;
 }
 
-function buildStudiesInformationReply(priorState) {
+function buildStudiesInformationReply(priorState, rawText = '') {
+  if (messageLooksLikePrivatePriceQuestion(rawText)) {
+    const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+    if (sedeFromState) {
+      return `Los valores se confirman en la consulta. Si querés, podés sacar un turno de evaluación en ${sedeFromState.displayName} y ahí te informan según el estudio.`;
+    }
+    return `Los valores se confirman en la consulta. Si querés, podés sacar un turno de evaluación y ahí te informan según el estudio. ${buildAskSedeMessage()}`;
+  }
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (sedeFromState) {
     return `${STUDIES_INFORMATION_MESSAGE} Para confirmarte cómo se realiza en tu situación y en ${sedeFromState.displayName}, lo ideal es sacar un turno para evaluación.`;
@@ -2235,7 +2242,7 @@ exports.handler = async (event) => {
               await setConversationState(from, preservedSessionState);
             }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              buildStudiesInformationReply(priorState),
+              buildStudiesInformationReply(priorState, bodyText),
               profileDisplayName,
               priorState
             );
