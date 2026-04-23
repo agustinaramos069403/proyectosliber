@@ -147,6 +147,8 @@ const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
 const DEFAULT_RESPONSE_DELAY_MS = 900;
 const MAX_LEVENSHTEIN_DISTANCE = 3;
 
+const MESSAGE_COLLECTION_WINDOW_MS = 6000;
+
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
 
@@ -226,6 +228,40 @@ function messageIsGreeting(rawText) {
   const token = normalized.replace(/\s+/g, '');
   if (GREETING_NORMALIZED_TOKENS.has(token)) return true;
   return /^(hola|buenas|buenos dias|buen dia|buenas tardes|buenas noches)\b/.test(normalized);
+}
+
+function messageLooksLikeFragment(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  if (normalized.includes('?')) return false;
+  const words = normalized.split(' ').filter(Boolean);
+  if (words.length > 2) return false;
+  if (normalized.length >= 16) return false;
+  // Common fragments when the user is still typing.
+  if (/^(necesito|quisiera|quiero|un|una|turno|consulta|para|por favor|porfa)$/.test(normalized)) return true;
+  return false;
+}
+
+function buildCollectingUserMessageState(pendingUserText) {
+  return {
+    state: 'collecting_user_message',
+    pendingUserText: String(pendingUserText || '').trim(),
+    pendingUserTextAtMs: Date.now(),
+  };
+}
+
+function stateLooksLikeCollectingUserMessage(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'collecting_user_message' &&
+    typeof state.pendingUserText === 'string' &&
+    state.pendingUserText.trim().length > 0
+  );
 }
 
 function buildAnythingElseHelpMessage(priorState) {
@@ -1953,9 +1989,31 @@ exports.handler = async (event) => {
           if (msg.type !== 'text' || !msg.text?.body) continue;
           processedTextMessageCount += 1;
           const from = msg.from;
-          const bodyText = msg.text.body;
+          let bodyText = msg.text.body;
           const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
           const priorState = await getConversationState(from);
+
+          if (stateLooksLikeCollectingUserMessage(priorState)) {
+            const pendingAtMs = Number(priorState.pendingUserTextAtMs);
+            const isWithinWindow =
+              Number.isFinite(pendingAtMs) && Date.now() - pendingAtMs <= MESSAGE_COLLECTION_WINDOW_MS;
+            const pendingUserText = priorState.pendingUserText.trim();
+            if (isWithinWindow && pendingUserText) {
+              bodyText = `${pendingUserText} ${String(bodyText || '')}`.trim();
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
+          }
 
           if (textMatchesMedicalEmergency(bodyText)) {
             const emergencyWrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -1979,6 +2037,30 @@ exports.handler = async (event) => {
               await setConversationState(from, { ...(priorState || {}), ...chacoWrapped.nextStatePatch });
             }
             await sendWhatsAppText(from, chacoWrapped.messageText);
+            continue;
+          }
+
+          if (
+            !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
+            !messageIsGreeting(bodyText) &&
+            !findSedeFromText(bodyText) &&
+            !messageLooksLikeHealthInsurancePlusQuestion(bodyText) &&
+            !messageLooksLikePrivatePriceQuestion(bodyText) &&
+            !messageLooksLikeScheduleAvailabilityQuestion(bodyText) &&
+            !messageExplicitlyRequestsBookingLink(bodyText) &&
+            !textMatchesMedicalEmergency(bodyText) &&
+            !needsChacoProvinceClarification(bodyText) &&
+            messageLooksLikeFragment(bodyText)
+          ) {
+            const pendingUserText = stateLooksLikeCollectingUserMessage(priorState)
+              ? `${priorState.pendingUserText.trim()} ${String(bodyText || '')}`.trim()
+              : String(bodyText || '').trim();
+            const collectingState = mergeConversationStatePreservingGreeting(
+              priorState,
+              buildCollectingUserMessageState(pendingUserText),
+              null
+            );
+            await setConversationState(from, collectingState);
             continue;
           }
 
