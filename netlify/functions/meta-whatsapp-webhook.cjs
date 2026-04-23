@@ -2000,7 +2000,7 @@ exports.handler = async (event) => {
             }
             if (shouldAskClarify) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                'Perfecto. ¿Querés que te pase el link para reservar el turno? (Respondé sí o no).',
+                'Perfecto. Si querés, te paso el link para reservar el turno. ¿Te lo envío?',
                 profileDisplayName,
                 priorState
               );
