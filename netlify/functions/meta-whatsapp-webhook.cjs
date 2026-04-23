@@ -172,6 +172,8 @@ const GREETING_NORMALIZED_TOKENS = new Set([
   'buenasnoches',
 ]);
 
+const YES_NO_NORMALIZED_TOKENS = new Set(['si', 'sí', 'no']);
+
 function normalizeForMatch(text) {
   return text
     .toLowerCase()
@@ -1090,6 +1092,7 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
   const normalized = normalizeForMatch(rawText);
   const normalizedSingleToken = normalized.replace(/\s+/g, '');
   if (GREETING_NORMALIZED_TOKENS.has(normalizedSingleToken)) return false;
+  if (YES_NO_NORMALIZED_TOKENS.has(normalizedSingleToken)) return false;
   const looksLikeHealthInsuranceAbbreviation = /^[a-z]{2,6}$/.test(normalizedSingleToken);
   return (
     looksLikeHealthInsuranceAbbreviation ||
@@ -1953,6 +1956,33 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (
+            priorState &&
+            priorState.state === 'awaiting_health_insurance_city' &&
+            messageLooksLikeScheduleAvailabilityQuestion(bodyText)
+          ) {
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            const preservedSessionState =
+              priorState && typeof priorState === 'object'
+                ? {
+                    greeted: Boolean(priorState.greeted),
+                    lastSeenAtMs: priorState.lastSeenAtMs,
+                    lastSedeEnvKey: priorState.lastSedeEnvKey,
+                    lastSedeDisplayName: priorState.lastSedeDisplayName,
+                    lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                    lastSedeAtMs: priorState.lastSedeAtMs,
+                  }
+                : {};
+            await setConversationState(from, preservedSessionState);
+            const reply = lastSede ? buildScheduleQuestionLinkMessage(lastSede) : buildAskSedeMessage();
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, preservedSessionState);
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...preservedSessionState, ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
           if (messageAsksIfDoctorTreatsChildren(bodyText)) {
             const reply = `Sí, el Dr. atiende niños y adultos. ${buildAskSedeMessage()}`;
             const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
@@ -2027,6 +2057,8 @@ exports.handler = async (event) => {
               isHardYes || routerDecision === 'SEND_LINK';
             const shouldAskClarify =
               !isHardYes && !isHardNo && routerDecision === 'ASK_CLARIFY';
+            const shouldNotSendLink =
+              isHardNo || routerDecision === 'DO_NOT_SEND';
 
             if (shouldSendLink) {
               const entryFromState = resolveSedeEntryFromState(priorState);
@@ -2046,6 +2078,30 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, linkWrapped.messageText);
                 continue;
               }
+            }
+            if (shouldNotSendLink) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                `Perfecto, no hay problema. ${buildAnythingElseHelpMessage(preservedSessionState)}`,
+                profileDisplayName,
+                preservedSessionState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(from, { ...preservedSessionState, ...wrapped.nextStatePatch });
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
             }
             if (shouldAskClarify) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -2382,6 +2438,23 @@ exports.handler = async (event) => {
               continue;
             }
             if (priorState && priorState.state === 'awaiting_health_insurance_name') {
+              if (messageIsAcknowledgement(bodyText) || messageConfirmsLinkSend(bodyText)) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskHealthInsuranceNameMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_name' },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const extracted = tryExtractHealthInsuranceName(bodyText);
               if (extracted) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
