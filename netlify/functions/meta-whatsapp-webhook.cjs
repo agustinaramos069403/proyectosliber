@@ -1998,6 +1998,7 @@ exports.handler = async (event) => {
       Array.isArray(payload.entry) ? payload.entry.length : 0
     );
     let processedTextMessageCount = 0;
+    const latestTextMessageBySender = new Map();
     const entries = payload.entry || [];
     for (const ent of entries) {
       const changes = ent.changes || [];
@@ -2008,9 +2009,15 @@ exports.handler = async (event) => {
           if (msg.type !== 'text' || !msg.text?.body) continue;
           processedTextMessageCount += 1;
           const from = msg.from;
-          let bodyText = msg.text.body;
           const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
-          const priorState = await getConversationState(from);
+          latestTextMessageBySender.set(from, { from, bodyText: msg.text.body, profileDisplayName });
+        }
+      }
+    }
+
+    for (const { from, bodyText: rawBodyText, profileDisplayName } of latestTextMessageBySender.values()) {
+      let bodyText = rawBodyText;
+      const priorState = await getConversationState(from);
 
           if (stateLooksLikeCollectingUserMessage(priorState)) {
             const pendingAtMs = Number(priorState.pendingUserTextAtMs);
@@ -3328,8 +3335,6 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
             }
           }
-        }
-      }
     }
     if (processedTextMessageCount === 0) {
       console.log(
