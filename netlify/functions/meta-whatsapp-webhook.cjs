@@ -1580,6 +1580,56 @@ function messageAsksAboutStudiesOrTests(rawText) {
   );
 }
 
+function messageAsksAboutConditionTreatment(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const asksAboutCare =
+    /\b(tratan|trata|atiende|atienden|ven|ve|manejan|maneja)\b/.test(normalized) ||
+    normalized.includes('quiero saber si') ||
+    normalized.includes('se atiende') ||
+    normalized.includes('atienden');
+  if (!asksAboutCare) return false;
+  return (
+    normalized.includes('asma') ||
+    normalized.includes('rinitis') ||
+    normalized.includes('sinusitis') ||
+    normalized.includes('alerg') ||
+    normalized.includes('urticaria') ||
+    normalized.includes('dermatitis') ||
+    normalized.includes('eczema') ||
+    normalized.includes('eczema') ||
+    normalized.includes('broncoespasmo')
+  );
+}
+
+function buildConditionTreatmentReply(priorState, rawText) {
+  const normalized = normalizeForMatch(rawText);
+  const condition =
+    normalized.includes('asma')
+      ? 'asma'
+      : normalized.includes('rinitis')
+        ? 'rinitis'
+        : normalized.includes('urticaria')
+          ? 'urticaria'
+          : normalized.includes('dermatitis') || normalized.includes('eczema')
+            ? 'dermatitis'
+            : normalized.includes('sinusitis')
+              ? 'sinusitis'
+              : normalized.includes('broncoespasmo')
+                ? 'broncoespasmo'
+                : normalized.includes('alerg')
+                  ? 'alergias'
+                  : null;
+  const base = condition
+    ? `Sí, el Dr. atiende ${condition}.`
+    : 'Sí, el Dr. atiende este tipo de consultas.';
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  if (sedeFromState) {
+    return `${base} Para orientarte bien según el caso, lo ideal es una consulta de evaluación en ${sedeFromState.displayName}.`;
+  }
+  return `${base} Para orientarte bien según el caso, lo ideal es una consulta de evaluación. ${buildAskSedeMessage()}`;
+}
+
 function buildStudiesInformationReply(priorState) {
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (sedeFromState) {
@@ -2019,6 +2069,33 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (messageAsksAboutConditionTreatment(bodyText)) {
+            if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              buildConditionTreatmentReply(priorState, bodyText),
+              profileDisplayName,
+              priorState
+            );
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
@@ -2082,6 +2159,7 @@ exports.handler = async (event) => {
               messageLooksLikePrivatePriceQuestion(bodyText) ||
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
               messageAsksAboutStudiesOrTests(bodyText) ||
+              messageAsksAboutConditionTreatment(bodyText) ||
               messageExplicitlyRequestsBookingLink(bodyText) ||
               /(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText));
             if (shouldBypassPendingLinkConfirmation) {
