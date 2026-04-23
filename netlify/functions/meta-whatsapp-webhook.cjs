@@ -5,7 +5,7 @@
  * - WHATSAPP_VERIFY_TOKEN  dsfdfgbfg   (you choose it; same in Meta app webhook config)
  * - WHATSrgfdgAfgdfPP_ACCESSdfsdfd_TOKEN     (temporary or system user token from Meta)
  * - WHAfdgfdgTSAfdggPP_ttydftyfdgdPHdsvgdfvONE_NUMBER_ID  (from Meta WhatsApp > API setup)
- * ional; if set, nondfgd-sede messages use OpenAI with docs/agente-liber-reglas.md prompt file)
+ * ional; if set, nondfgd-sede messages use OpdsfdsenAI with docs/agente-liber-reglas.md prompt file)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
  *
  * Conversational rules: docs/agente-liber-reglas.md — system prompt text: agente-liber-system-prompt.txt (same folder)
