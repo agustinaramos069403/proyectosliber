@@ -144,10 +144,11 @@ const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
 const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
   '¿Estás en Resistencia o en Sáenz Peña?';
 
-const DEFAULT_RESPONSE_DELAY_MS = 900;
+const DEFAULT_RESPONSE_DELAY_MS = 3500;
 const MAX_LEVENSHTEIN_DISTANCE = 3;
 
 const MESSAGE_COLLECTION_WINDOW_MS = 6000;
+const SMALL_TALK_COOLDOWN_MS = 20000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -228,6 +229,26 @@ function messageIsGreeting(rawText) {
   const token = normalized.replace(/\s+/g, '');
   if (GREETING_NORMALIZED_TOKENS.has(token)) return true;
   return /^(hola|buenas|buenos dias|buen dia|buenas tardes|buenas noches)\b/.test(normalized);
+}
+
+function messageIsSmallTalk(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized === 'como estas' ||
+    normalized === 'cómo estás' ||
+    normalized === 'como estas?' ||
+    normalized.startsWith('como estas ') ||
+    normalized.startsWith('cómo estás ') ||
+    normalized === 'que tal' ||
+    normalized === 'qué tal' ||
+    normalized.startsWith('que tal ') ||
+    normalized.startsWith('qué tal ')
+  );
 }
 
 function messageLooksLikeFragment(rawText) {
@@ -2038,6 +2059,42 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (messageIsSmallTalk(bodyText)) {
+            const lastBotReplyAtMs =
+              priorState && typeof priorState === 'object' ? Number(priorState.lastBotReplyAtMs) : NaN;
+            const isInCooldown =
+              Number.isFinite(lastBotReplyAtMs) && Date.now() - lastBotReplyAtMs <= SMALL_TALK_COOLDOWN_MS;
+            if (isInCooldown) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: Date.now(),
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                      lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+                    }
+                  : { lastSeenAtMs: Date.now() };
+              await setConversationState(from, preservedSessionState);
+              continue;
+            }
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Hola. ¿En qué puedo ayudarte? Si querés, decime tu ciudad (Corrientes, Resistencia, Sáenz Peña o Formosa).',
+              profileDisplayName,
+              priorState
+            );
+            const afterState = mergeConversationStatePreservingGreeting(
+              priorState,
+              priorState || {},
+              { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now(), lastBotReplyAtMs: Date.now() }
+            );
+            await setConversationState(from, afterState);
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
             !messageIsGreeting(bodyText) &&
@@ -2072,6 +2129,7 @@ exports.handler = async (event) => {
                     lastSedeDisplayName: priorState.lastSedeDisplayName,
                     lastSedeOptionNumber: priorState.lastSedeOptionNumber,
                     lastSedeAtMs: priorState.lastSedeAtMs,
+                    lastBotReplyAtMs: priorState.lastBotReplyAtMs,
                   }
                 : {};
             await setConversationState(from, preservedSessionState);
@@ -2081,7 +2139,18 @@ exports.handler = async (event) => {
               preservedSessionState
             );
             if (wrapped.nextStatePatch) {
-              await setConversationState(from, { ...preservedSessionState, ...wrapped.nextStatePatch });
+              await setConversationState(from, {
+                ...preservedSessionState,
+                ...wrapped.nextStatePatch,
+                lastSeenAtMs: Date.now(),
+                lastBotReplyAtMs: Date.now(),
+              });
+            } else {
+              await setConversationState(from, {
+                ...preservedSessionState,
+                lastSeenAtMs: Date.now(),
+                lastBotReplyAtMs: Date.now(),
+              });
             }
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
