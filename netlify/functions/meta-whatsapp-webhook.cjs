@@ -1158,6 +1158,8 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
     normalized.includes('obra social') ||
     normalized.includes('obras sociales') ||
     normalized.includes('obrasocial') ||
+    normalized.includes('prepaga') ||
+    normalized.includes('prepagas') ||
     normalized.includes('osde') ||
     normalized.includes('isunne') ||
     normalized.includes('issune') ||
@@ -1200,7 +1202,21 @@ function tryExtractHealthInsuranceName(rawText) {
   if (normalized.includes('omint')) return 'OMINT SA';
   if (normalized.includes('prevencion')) return 'PREVENCION SALUD SA';
   if (normalized.includes('jerarquic')) return 'JERARQUICOS SALUD';
+  if (normalized.includes('funcacorr')) return 'FUNCACORR';
   return null;
+}
+
+function messageLooksLikeGenericInstitutionHealthInsurance(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  // Avoid fuzzy-matching generic phrases like "del cardiológico" to some random OS from the sheet.
+  return (
+    normalized.includes('cardiologic') ||
+    normalized.includes('cardiologico') ||
+    normalized.includes('cardiológico') ||
+    /\bobras?\s+social(?:es)?\s+del\b/.test(normalized) ||
+    /\bobra\s+social\s+de\s+el\b/.test(normalized)
+  );
 }
 
 async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName) {
@@ -1209,9 +1225,7 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     healthInsuranceName,
   });
   const plusRule = await lookupPlusRule(cityEntry.displayName, healthInsuranceName);
-  const privatePriceArs = await lookupPrivatePrice(cityEntry.displayName);
-  const privatePriceFormatted =
-    Number.isFinite(privatePriceArs) ? formatArsAmount(privatePriceArs) : null;
+  // Prices are not provided via WhatsApp; always route to evaluation/office confirmation.
 
   if (!plusRule) {
     // Fallback (hard rule) for the stable no-plus set, to avoid unnecessary derivations when
@@ -1243,10 +1257,7 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
 
   const osDisplayName = healthInsuranceName;
   if (!plusRule.isAccepted) {
-    if (privatePriceFormatted) {
-      return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. La consulta particular sale $${privatePriceFormatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
-    }
-    return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+    return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
   }
 
   if (plusRule.hasPlus) {
@@ -1558,15 +1569,7 @@ function resolveSedeEntryFromState(state) {
 }
 
 async function buildPrivatePriceReply(entry) {
-  const priceArs = await lookupPrivatePrice(entry.displayName);
-  if (!Number.isFinite(priceArs)) {
-    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
-  }
-  const formatted = formatArsAmount(priceArs);
-  if (!formatted) {
-    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
-  }
-  return `En ${entry.displayName} la consulta particular sale $${formatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+  return `Para confirmarte valores y cómo se realiza en tu caso, lo ideal es una consulta de evaluación en ${entry.displayName}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
 }
 
 function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
@@ -2857,6 +2860,23 @@ exports.handler = async (event) => {
                   mergeConversationStatePreservingGreeting(
                     priorState,
                     { state: 'awaiting_health_insurance_plan', healthInsuranceFamily: 'AMMECO' },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              if (messageLooksLikeGenericInstitutionHealthInsurance(bodyText)) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildAskHealthInsuranceNameMessage(),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_health_insurance_name' },
                     wrapped.nextStatePatch
                   )
                 );
