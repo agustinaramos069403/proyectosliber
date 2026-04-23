@@ -147,6 +147,9 @@ const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
 const DEFAULT_RESPONSE_DELAY_MS = 900;
 const MAX_LEVENSHTEIN_DISTANCE = 3;
 
+const STUDIES_INFORMATION_MESSAGE =
+  'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche. Para confirmarte cómo se realiza en tu situación y en qué sede, lo ideal es sacar un turno para evaluación. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
 
@@ -1520,6 +1523,37 @@ function messageExplicitlyRequestsBookingLink(rawText) {
   );
 }
 
+function messageAsksIfDoctorTreatsChildren(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    /\bnin(?:o|a|os|as)\b/.test(normalized) ||
+    /\bbebes?\b/.test(normalized) ||
+    /\bnenes?\b/.test(normalized) ||
+    normalized.includes('pediatr') ||
+    normalized.includes('infantil')
+  );
+}
+
+function messageAsksAboutStudiesOrTests(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('estudio') ||
+    normalized.includes('estudios') ||
+    normalized.includes('prick') ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('test alerg') ||
+    normalized.includes('espirometr') ||
+    normalized.includes('laboratorio') ||
+    normalized.includes('sangre') ||
+    normalized.includes('imagen') ||
+    normalized.includes('imagenes') ||
+    normalized.includes('parche') ||
+    normalized.includes('patch')
+  );
+}
+
 function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
@@ -1859,6 +1893,29 @@ exports.handler = async (event) => {
               await setConversationState(from, { ...(priorState || {}), ...chacoWrapped.nextStatePatch });
             }
             await sendWhatsAppText(from, chacoWrapped.messageText);
+            continue;
+          }
+
+          if (messageAsksIfDoctorTreatsChildren(bodyText)) {
+            const reply = `Sí, el Dr. atiende niños y adultos. ${buildAskSedeMessage()}`;
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
+          if (messageAsksAboutStudiesOrTests(bodyText)) {
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              STUDIES_INFORMATION_MESSAGE,
+              profileDisplayName,
+              priorState
+            );
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
 
