@@ -1447,13 +1447,15 @@ async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage) {
   return mapHealthInsuranceGuessToKnownName(String(userMessage || ''), knownNames);
 }
 
-function buildAwaitingLinkConfirmationState(entry, reason) {
+function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
+  const detailsObject = details && typeof details === 'object' ? details : null;
   return {
     state: 'awaiting_link_confirmation',
     sedeEnvKey: entry.envKey,
     sedeDisplayName: entry.displayName,
     sedeOptionNumber: entry.optionNumber,
     reason,
+    ...(detailsObject ? detailsObject : {}),
   };
 }
 
@@ -2023,6 +2025,34 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            const sedeChange = findSedeFromText(bodyText);
+            if (sedeChange) {
+              const pendingHealthInsuranceName =
+                priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
+                  ? priorState.healthInsuranceName
+                  : null;
+              if (pendingHealthInsuranceName) {
+                const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                  sedeChange,
+                  pendingHealthInsuranceName
+                );
+                if (reply !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(sedeChange, 'after_health_insurance_plus', {
+                        healthInsuranceName: pendingHealthInsuranceName,
+                      }),
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sedeChange) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+              }
+            }
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             // Clear the pending link-confirmation routing state but preserve the greeting session.
             const shouldBypassPendingLinkConfirmation =
@@ -2208,7 +2238,9 @@ exports.handler = async (event) => {
                 from,
                 mergeConversationStatePreservingGreeting(
                   priorState,
-                  buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus'),
+                  buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus', {
+                    healthInsuranceName: pendingHealthInsuranceName,
+                  }),
                   { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
@@ -2242,7 +2274,9 @@ exports.handler = async (event) => {
                   from,
                   mergeConversationStatePreservingGreeting(
                     priorState,
-                    buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus'),
+                    buildAwaitingLinkConfirmationState(sede, 'after_health_insurance_plus', {
+                      healthInsuranceName: extractedHealthInsuranceName,
+                    }),
                     { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                   )
                 );
@@ -2487,7 +2521,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: extracted,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2565,7 +2601,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: resolvedFromSheets,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2622,7 +2660,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: resolvedCanonicalName,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2702,7 +2742,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: resolvedFromSheets,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2758,7 +2800,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: resolvedCanonicalName,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2835,7 +2879,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2891,7 +2937,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: resolvedFromSheets,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
@@ -2947,7 +2995,9 @@ exports.handler = async (event) => {
                     from,
                     mergeConversationStatePreservingGreeting(
                       priorState,
-                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus'),
+                      buildAwaitingLinkConfirmationState(lastSede, 'after_health_insurance_plus', {
+                        healthInsuranceName: resolvedCanonicalName,
+                      }),
                       { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
                     )
                   );
