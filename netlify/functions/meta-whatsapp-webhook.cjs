@@ -1227,6 +1227,7 @@ function formatArsAmount(amount) {
 
 function messageConfirmsLinkSend(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageClearlyRejectsLinkSend(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -2106,7 +2107,7 @@ exports.handler = async (event) => {
             }
 
             const shouldSendLink =
-              isHardYes || routerDecision === 'SEND_LINK';
+              !isHardNo && (isHardYes || routerDecision === 'SEND_LINK');
             const shouldAskClarify =
               !isHardYes && !isHardNo && routerDecision === 'ASK_CLARIFY';
             const shouldNotSendLink =
