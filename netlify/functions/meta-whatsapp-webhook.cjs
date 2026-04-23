@@ -2,7 +2,7 @@
  * WhatsApp Cloud API (Meta) webhook — Netlify Function
  *
  * Env vars (Netlify UI → Site settings → Environment variables):
- * - WHATSAPP_VERIFY_TOKEN  dsfdf   (you choose it; same in Meta app webhook config)
+ * - WHATSAPP_VERIFY_TOKEN  dsfdfgbfg   (you choose it; same in Meta app webhook config)
  * - WHATSrgfdgAfgdfPP_ACCESSdfsdfd_TOKEN     (temporary or system user token from Meta)
  * - WHAfdgfdgTSAPP_ttydftyfdgdPHdsvgdfvONE_NUMBER_ID  (from Meta WhatsApp > API setup)
  * ional; if set, nondfgd-sede messages use OpenAI with docs/agente-liber-reglas.md prompt file)
