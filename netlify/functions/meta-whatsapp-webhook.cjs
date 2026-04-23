@@ -1127,9 +1127,7 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
   const normalizedSingleToken = normalized.replace(/\s+/g, '');
   if (GREETING_NORMALIZED_TOKENS.has(normalizedSingleToken)) return false;
   if (YES_NO_NORMALIZED_TOKENS.has(normalizedSingleToken)) return false;
-  const looksLikeHealthInsuranceAbbreviation = /^[a-z]{2,6}$/.test(normalizedSingleToken);
   return (
-    looksLikeHealthInsuranceAbbreviation ||
     normalized.includes('obra social') ||
     normalized.includes('obras sociales') ||
     normalized.includes('obrasocial') ||
@@ -2890,11 +2888,7 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, wrapped.messageText);
                 continue;
               }
-              const normalizedUserText = normalizeForMatch(bodyText);
-              const looksLikeAbbreviation = /^[a-z]{2,6}$/.test(normalizedUserText.replace(/\s+/g, ''));
-              const askAgainText = looksLikeAbbreviation
-                ? 'No pude identificar esa obra social con esas siglas. ¿Me decís el nombre completo?'
-                : buildAskHealthInsuranceNameMessage();
+              const askAgainText = buildAskHealthInsuranceNameMessage();
               const askAgain = buildAutoReplyWithGreetingIfNeeded(
                 askAgainText,
                 profileDisplayName,
