@@ -148,7 +148,7 @@ const DEFAULT_RESPONSE_DELAY_MS = 900;
 const MAX_LEVENSHTEIN_DISTANCE = 3;
 
 const STUDIES_INFORMATION_MESSAGE =
-  'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche. Para confirmarte cómo se realiza en tu situación y en qué sede, lo ideal es sacar un turno para evaluación. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+  'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
 
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
@@ -1554,6 +1554,14 @@ function messageAsksAboutStudiesOrTests(rawText) {
   );
 }
 
+function buildStudiesInformationReply(priorState) {
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  if (sedeFromState) {
+    return `${STUDIES_INFORMATION_MESSAGE} Para confirmarte cómo se realiza en tu situación y en ${sedeFromState.displayName}, lo ideal es sacar un turno para evaluación.`;
+  }
+  return `${STUDIES_INFORMATION_MESSAGE} Para confirmarte cómo se realiza en tu situación y en qué sede, lo ideal es sacar un turno para evaluación. ${buildAskSedeMessage()}`;
+}
+
 function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
@@ -1907,8 +1915,22 @@ exports.handler = async (event) => {
           }
 
           if (messageAsksAboutStudiesOrTests(bodyText)) {
+            if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              STUDIES_INFORMATION_MESSAGE,
+              buildStudiesInformationReply(priorState),
               profileDisplayName,
               priorState
             );
@@ -1927,6 +1949,7 @@ exports.handler = async (event) => {
             const shouldBypassPendingLinkConfirmation =
               messageLooksLikePrivatePriceQuestion(bodyText) ||
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
+              messageAsksAboutStudiesOrTests(bodyText) ||
               messageExplicitlyRequestsBookingLink(bodyText) ||
               /(turno|agendar|agenda|reserv|cita)/i.test(normalizeForMatch(bodyText));
             if (shouldBypassPendingLinkConfirmation) {
