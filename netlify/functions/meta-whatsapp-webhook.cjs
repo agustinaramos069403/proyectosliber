@@ -154,13 +154,12 @@ const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
 
 const DOCUMENTATION_REQUIREMENTS_MESSAGE =
-  'Si tenés obra social: traé orden de consulta y las prácticas autorizadas. Si no: podés venir igual. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+  'Si tenés obra social: traé orden de consulta y las prácticas autorizadas. Si no: podés venir igual.';
 
-const NO_REFERRAL_REQUIRED_MESSAGE =
-  'No necesitás derivación ni receta. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+const NO_REFERRAL_REQUIRED_MESSAGE = 'No necesitás derivación ni receta.';
 
 const AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE =
-  'Sí, atendemos con autorización y aceptamos credencial digital. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+  'Sí, atendemos con autorización y aceptamos credencial digital.';
 
 const INVOICE_MESSAGE = 'Sí, damos factura.';
 
@@ -184,6 +183,20 @@ const STUDY_DURATION_MESSAGE = 'Depende del caso.';
 
 const MEDICATION_ALLERGY_STUDY_MESSAGE =
   'Para test de alergia a medicamentos, primero se realiza la consulta con el médico; según el medicamento se define el protocolo.';
+
+const SEDE_ADDRESS_DETAILS_BY_ENV_KEY = {
+  CALENDLY_CORRIENTES:
+    'Corrientes (Clínica del Pilar): San Martín 555. Lunes, jueves y viernes 9:45 a 11:00 y 17:00 a 20:00. Martes 17:00 a 20:00.',
+  CALENDLY_RESISTENCIA:
+    'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678. Martes 9:30 a 12:00.',
+  CALENDLY_SAENZ_PENA:
+    'Sáenz Peña (Clínica Santa María): Calle 5 entre 12 y 14. Miércoles (dos veces al mes) 8:00 a 12:00.',
+  CALENDLY_FORMOSA:
+    'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580. Miércoles (dos veces al mes) 8:00 a 12:00.',
+};
+
+const CORRIENTES_HOW_TO_ARRIVE_MESSAGE =
+  'Corrientes: ingresá a la Clínica del Pilar, subí al primer piso por la escalera negra y consultá con la primera secretaria.';
 
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
@@ -1770,6 +1783,35 @@ function messageAsksAboutVirtualVisit(rawText) {
   );
 }
 
+function messageAsksAboutSedeAddressOrHowToArrive(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('direccion') ||
+    normalized.includes('dirección') ||
+    normalized.includes('donde queda') ||
+    normalized.includes('dónde queda') ||
+    normalized.includes('ubicacion') ||
+    normalized.includes('ubicación') ||
+    normalized.includes('como llego') ||
+    normalized.includes('cómo llego') ||
+    normalized.includes('como llegar') ||
+    normalized.includes('cómo llegar')
+  );
+}
+
+function buildSedeAddressReply(priorState) {
+  const sedeFromState = resolveLastSedeEntryFromState(priorState);
+  if (!sedeFromState) {
+    return `Decime tu ciudad y te paso la dirección. ${buildAskSedeMessage()}`;
+  }
+  const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[sedeFromState.envKey] || null;
+  if (sedeFromState.envKey === 'CALENDLY_CORRIENTES') {
+    return [details || `Sede ${sedeFromState.displayName}.`, CORRIENTES_HOW_TO_ARRIVE_MESSAGE].join(' ');
+  }
+  return details || `Sede ${sedeFromState.displayName}.`;
+}
+
 function messageAsksAboutStudyFasting(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -1800,6 +1842,12 @@ function messageAsksAboutMedicationAllergyStudy(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   return normalized.includes('medicamento') || normalized.includes('medicamentos');
+}
+
+function appendAskSedeIfMissing(priorState, messageText) {
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (lastSede) return messageText;
+  return `${messageText} ${buildAskSedeMessage()}`.trim();
 }
 
 function messageAsksAboutConditionTreatment(rawText) {
@@ -2408,6 +2456,7 @@ exports.handler = async (event) => {
             messageAsksAboutCompanion(bodyText) ||
             messageAsksAboutOtherProvinces(bodyText) ||
             messageAsksAboutVirtualVisit(bodyText) ||
+            messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
             messageAsksAboutStudyFasting(bodyText) ||
             messageAsksAboutStudyMedicationPreparation(bodyText) ||
             messageAsksAboutStudyDuration(bodyText) ||
@@ -2420,17 +2469,22 @@ exports.handler = async (event) => {
             else if (messageAsksAboutCompanion(bodyText)) reply = COMPANION_ALLOWED_MESSAGE;
             else if (messageAsksAboutOtherProvinces(bodyText)) reply = OTHER_PROVINCES_MESSAGE;
             else if (messageAsksAboutVirtualVisit(bodyText)) reply = VIRTUAL_VISITS_MESSAGE;
+            else if (messageAsksAboutSedeAddressOrHowToArrive(bodyText)) reply = buildSedeAddressReply(priorState);
             else if (messageAsksAboutStudyFasting(bodyText)) reply = STUDY_FASTING_MESSAGE;
             else if (messageAsksAboutStudyMedicationPreparation(bodyText))
               reply = STUDY_PREPARATION_MEDICATION_MESSAGE;
             else if (messageAsksAboutStudyDuration(bodyText)) reply = STUDY_DURATION_MESSAGE;
             else if (messageAsksAboutMedicationAllergyStudy(bodyText)) reply = MEDICATION_ALLERGY_STUDY_MESSAGE;
-            else if (messageAsksAboutReferralOrPrescription(bodyText)) reply = NO_REFERRAL_REQUIRED_MESSAGE;
+            else if (messageAsksAboutReferralOrPrescription(bodyText))
+              reply = appendAskSedeIfMissing(priorState, NO_REFERRAL_REQUIRED_MESSAGE);
             else if (messageAsksAboutDocumentationOrRequirements(bodyText)) {
-              if (normalizeForMatch(bodyText).includes('credencial') || normalizeForMatch(bodyText).includes('autoriz')) {
-                reply = AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE;
+              if (
+                normalizeForMatch(bodyText).includes('credencial') ||
+                normalizeForMatch(bodyText).includes('autoriz')
+              ) {
+                reply = appendAskSedeIfMissing(priorState, AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE);
               } else {
-                reply = DOCUMENTATION_REQUIREMENTS_MESSAGE;
+                reply = appendAskSedeIfMissing(priorState, DOCUMENTATION_REQUIREMENTS_MESSAGE);
               }
             } else {
               reply = MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
