@@ -153,6 +153,38 @@ const SMALL_TALK_COOLDOWN_MS = 20000;
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
 
+const DOCUMENTATION_REQUIREMENTS_MESSAGE =
+  'Si tenés obra social: traé orden de consulta y las prácticas autorizadas. Si no: podés venir igual. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+
+const NO_REFERRAL_REQUIRED_MESSAGE =
+  'No necesitás derivación ni receta. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+
+const AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE =
+  'Sí, atendemos con autorización y aceptamos credencial digital. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+
+const INVOICE_MESSAGE = 'Sí, damos factura.';
+
+const PAYMENT_METHODS_MESSAGE =
+  'Podés pagar en efectivo o por transferencia/QR. Tarjeta y débito no.';
+
+const CONSULT_DURATION_MESSAGE = 'Depende del caso.';
+
+const COMPANION_ALLOWED_MESSAGE = 'Sí, podés ir con acompañante.';
+
+const OTHER_PROVINCES_MESSAGE = 'No atendemos en otras provincias.';
+
+const VIRTUAL_VISITS_MESSAGE = 'Sí, hacemos consulta virtual/videollamada.';
+
+const STUDY_FASTING_MESSAGE = 'No, no hace falta ir en ayunas.';
+
+const STUDY_PREPARATION_MEDICATION_MESSAGE =
+  'Para test de alergia: suspender antialérgicos 48 hs antes y corticoides 1 semana antes. Para espirometría: no aplicar aerosoles ese día.';
+
+const STUDY_DURATION_MESSAGE = 'Depende del caso.';
+
+const MEDICATION_ALLERGY_STUDY_MESSAGE =
+  'Para test de alergia a medicamentos, primero se realiza la consulta con el médico; según el medicamento se define el protocolo.';
+
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
 
@@ -1656,6 +1688,120 @@ function messageAsksAboutStudiesOrTests(rawText) {
   );
 }
 
+function messageAsksAboutDocumentationOrRequirements(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('que tengo que llevar') ||
+    normalized.includes('qué tengo que llevar') ||
+    normalized.includes('que llevo') ||
+    normalized.includes('qué llevo') ||
+    normalized.includes('que hay que llevar') ||
+    normalized.includes('documentacion') ||
+    normalized.includes('documentación') ||
+    normalized.includes('orden') ||
+    normalized.includes('autoriz') ||
+    normalized.includes('credencial')
+  );
+}
+
+function messageAsksAboutReferralOrPrescription(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('derivacion') ||
+    normalized.includes('derivación') ||
+    normalized.includes('receta') ||
+    normalized.includes('necesito derivacion') ||
+    normalized.includes('necesito receta')
+  );
+}
+
+function messageAsksAboutInvoice(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('factura') || normalized.includes('facturacion') || normalized.includes('facturación');
+}
+
+function messageAsksAboutPaymentMethods(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('como pago') ||
+    normalized.includes('cómo pago') ||
+    normalized.includes('medios de pago') ||
+    normalized.includes('pago') ||
+    normalized.includes('transferencia') ||
+    normalized.includes('qr') ||
+    normalized.includes('tarjeta') ||
+    normalized.includes('debito') ||
+    normalized.includes('débito') ||
+    normalized.includes('efectivo')
+  );
+}
+
+function messageAsksAboutConsultDuration(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('cuanto dura') || normalized.includes('cuánto dura') || normalized.includes('duracion');
+}
+
+function messageAsksAboutCompanion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('acompanante') || normalized.includes('acompañante') || normalized.includes('puedo ir con');
+}
+
+function messageAsksAboutOtherProvinces(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('otra provincia') || normalized.includes('otras provincias') || normalized.includes('otra ciudad');
+}
+
+function messageAsksAboutVirtualVisit(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('virtual') ||
+    normalized.includes('videollamada') ||
+    normalized.includes('video llamada') ||
+    normalized.includes('online') ||
+    normalized.includes('a distancia')
+  );
+}
+
+function messageAsksAboutStudyFasting(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('ayunas') || normalized.includes('ayuno');
+}
+
+function messageAsksAboutStudyMedicationPreparation(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('medicacion') ||
+    normalized.includes('medicación') ||
+    normalized.includes('suspendo') ||
+    normalized.includes('suspender') ||
+    normalized.includes('antialerg') ||
+    normalized.includes('cortico') ||
+    normalized.includes('aerosol')
+  );
+}
+
+function messageAsksAboutStudyDuration(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('cuanto tarda') || normalized.includes('cuánto tarda') || normalized.includes('tarda el estudio');
+}
+
+function messageAsksAboutMedicationAllergyStudy(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return normalized.includes('medicamento') || normalized.includes('medicamentos');
+}
+
 function messageAsksAboutConditionTreatment(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -2249,6 +2395,66 @@ exports.handler = async (event) => {
             if (wrapped.nextStatePatch) {
               await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
             }
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
+          if (
+            messageAsksAboutDocumentationOrRequirements(bodyText) ||
+            messageAsksAboutReferralOrPrescription(bodyText) ||
+            messageAsksAboutInvoice(bodyText) ||
+            messageAsksAboutPaymentMethods(bodyText) ||
+            messageAsksAboutConsultDuration(bodyText) ||
+            messageAsksAboutCompanion(bodyText) ||
+            messageAsksAboutOtherProvinces(bodyText) ||
+            messageAsksAboutVirtualVisit(bodyText) ||
+            messageAsksAboutStudyFasting(bodyText) ||
+            messageAsksAboutStudyMedicationPreparation(bodyText) ||
+            messageAsksAboutStudyDuration(bodyText) ||
+            messageAsksAboutMedicationAllergyStudy(bodyText)
+          ) {
+            let reply = null;
+            if (messageAsksAboutInvoice(bodyText)) reply = INVOICE_MESSAGE;
+            else if (messageAsksAboutPaymentMethods(bodyText)) reply = PAYMENT_METHODS_MESSAGE;
+            else if (messageAsksAboutConsultDuration(bodyText)) reply = CONSULT_DURATION_MESSAGE;
+            else if (messageAsksAboutCompanion(bodyText)) reply = COMPANION_ALLOWED_MESSAGE;
+            else if (messageAsksAboutOtherProvinces(bodyText)) reply = OTHER_PROVINCES_MESSAGE;
+            else if (messageAsksAboutVirtualVisit(bodyText)) reply = VIRTUAL_VISITS_MESSAGE;
+            else if (messageAsksAboutStudyFasting(bodyText)) reply = STUDY_FASTING_MESSAGE;
+            else if (messageAsksAboutStudyMedicationPreparation(bodyText))
+              reply = STUDY_PREPARATION_MEDICATION_MESSAGE;
+            else if (messageAsksAboutStudyDuration(bodyText)) reply = STUDY_DURATION_MESSAGE;
+            else if (messageAsksAboutMedicationAllergyStudy(bodyText)) reply = MEDICATION_ALLERGY_STUDY_MESSAGE;
+            else if (messageAsksAboutReferralOrPrescription(bodyText)) reply = NO_REFERRAL_REQUIRED_MESSAGE;
+            else if (messageAsksAboutDocumentationOrRequirements(bodyText)) {
+              if (normalizeForMatch(bodyText).includes('credencial') || normalizeForMatch(bodyText).includes('autoriz')) {
+                reply = AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE;
+              } else {
+                reply = DOCUMENTATION_REQUIREMENTS_MESSAGE;
+              }
+            } else {
+              reply = MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
+            }
+
+            if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                      lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
+
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+            const nextStatePatch = { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now(), lastBotReplyAtMs: Date.now() };
+            await setConversationState(from, { ...(priorState || {}), ...nextStatePatch });
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
