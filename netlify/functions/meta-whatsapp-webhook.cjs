@@ -3208,6 +3208,21 @@ exports.handler = async (event) => {
             }
             // Booking intent without sede: always ask sede (never ask for date/time).
             if (messageLooksLikeBookingIntent(bodyText)) {
+              const lastSede = resolveLastSedeEntryFromState(priorState);
+              if (lastSede) {
+                const micro = buildMicroCommitmentMessageWithState(priorState);
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    buildAwaitingLinkConfirmationState(lastSede, 'after_booking_intent'),
+                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               await sendAskSedeTwoStep(from, profileDisplayName, priorState);
               continue;
             }
