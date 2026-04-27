@@ -1725,6 +1725,7 @@ function messageAsksIfDoctorTreatsChildren(rawText) {
   const normalized = normalizeForMatch(rawText);
   return (
     /\bnin(?:o|a|os|as)\b/.test(normalized) ||
+    /\bnini(?:o|a|os|as)\b/.test(normalized) ||
     /\bbebes?\b/.test(normalized) ||
     /\bnenes?\b/.test(normalized) ||
     normalized.includes('pediatr') ||
@@ -2559,12 +2560,20 @@ exports.handler = async (event) => {
           }
 
           if (messageAsksIfDoctorTreatsChildren(bodyText)) {
-            const reply = `Sí, el Dr. atiende niños y adultos. ${buildAskSedeMessage()}`;
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-            if (wrapped.nextStatePatch) {
-              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            if (lastSede) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'Sí, el Dr. atiende niños y adultos.',
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
             }
-            await sendWhatsAppText(from, wrapped.messageText);
+            await sendAskSedeTwoStep(from, profileDisplayName, priorState, 'Sí, el Dr. atiende niños y adultos.');
             continue;
           }
 
