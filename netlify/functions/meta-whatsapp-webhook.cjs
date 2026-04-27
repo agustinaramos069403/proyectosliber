@@ -159,6 +159,7 @@ const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
+const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -2485,6 +2486,57 @@ function messageLooksLikeVagueAnswer(rawText) {
   );
 }
 
+function messageLooksLikeSensitiveData(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('dni') ||
+    normalized.includes('cuil') ||
+    normalized.includes('cuit') ||
+    normalized.includes('nro afiliado') ||
+    normalized.includes('numero de afiliado') ||
+    normalized.includes('número de afiliado') ||
+    normalized.includes('credencial') ||
+    normalized.includes('foto de la credencial')
+  ) {
+    return true;
+  }
+  // Long digit sequences often indicate DNI / member id / phone etc.
+  const digitSequences = normalized.match(/\d{7,}/g);
+  return Array.isArray(digitSequences) && digitSequences.length > 0;
+}
+
+function messageAsksToTalkToSecretary(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('secretaria') ||
+    normalized.includes('secretaría') ||
+    normalized.includes('recepcion') ||
+    normalized.includes('recepción') ||
+    normalized.includes('administracion') ||
+    normalized.includes('administración') ||
+    normalized.includes('hablar con secretaria') ||
+    normalized.includes('hablar con la secretaria') ||
+    normalized.includes('pasame con secretaria') ||
+    normalized.includes('pasame con la secretaria') ||
+    normalized.includes('me comunicas con secretaria') ||
+    normalized.includes('me comunicás con secretaria') ||
+    normalized.includes('me comunicas con la recepcion') ||
+    normalized.includes('me comunicás con la recepción')
+  );
+}
+
+function buildSensitiveDataWarningReply(priorState) {
+  const base =
+    'Por favor no envíes datos sensibles por este chat (DNI, CUIL, número de afiliado o fotos de credenciales).';
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (lastSede) {
+    return `${base} Si querés, decime solo tu obra social/prepaga (sin números) y te digo si trabajamos en ${lastSede.displayName}.`;
+  }
+  return `${base} Si querés, decime solo tu ciudad y tu obra social/prepaga (sin números).`;
+}
+
 function resolveLastBookingLinkSedeEntryFromState(state) {
   if (!state || typeof state !== 'object') return null;
   const envKey =
@@ -2823,6 +2875,25 @@ exports.handler = async (event) => {
       const { from, profileDisplayName, isText, messageType } = item;
       const priorState = await getConversationState(from);
       if (!isText) {
+        const lastSensitiveWarnAtMs =
+          priorState && typeof priorState === 'object' ? Number(priorState.lastSensitiveDataWarningAtMs) : NaN;
+        const isSensitiveCooldown =
+          Number.isFinite(lastSensitiveWarnAtMs) &&
+          Date.now() - lastSensitiveWarnAtMs <= SENSITIVE_DATA_WARNING_COOLDOWN_MS;
+        if (!isSensitiveCooldown && (messageType === 'image' || messageType === 'document')) {
+          const warning = buildSensitiveDataWarningReply(priorState);
+          const wrapped = buildAutoReplyWithGreetingIfNeeded(warning, profileDisplayName, priorState);
+          await setConversationState(from, {
+            ...(priorState || {}),
+            ...(wrapped.nextStatePatch || {}),
+            lastSeenAtMs: Date.now(),
+            lastBotReplyAtMs: Date.now(),
+            lastSensitiveDataWarningAtMs: Date.now(),
+            lastNonTextMessageType: messageType,
+          });
+          await sendWhatsAppText(from, wrapped.messageText);
+          continue;
+        }
         const lastPromptAtMs =
           priorState && typeof priorState === 'object' ? Number(priorState.lastNonTextWriteItDownAtMs) : NaN;
         const isInCooldown =
@@ -2850,6 +2921,45 @@ exports.handler = async (event) => {
       }
 
       let bodyText = item.bodyText;
+
+          if (messageAsksToTalkToSecretary(bodyText)) {
+            const preservedSessionState = mergeConversationStatePreservingGreeting(
+              priorState,
+              {},
+              { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS }
+            );
+            await setConversationState(from, preservedSessionState);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
+              profileDisplayName,
+              preservedSessionState
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
+          if (messageLooksLikeSensitiveData(bodyText)) {
+            const lastSensitiveWarnAtMs =
+              priorState && typeof priorState === 'object' ? Number(priorState.lastSensitiveDataWarningAtMs) : NaN;
+            const isInSensitiveCooldown =
+              Number.isFinite(lastSensitiveWarnAtMs) &&
+              Date.now() - lastSensitiveWarnAtMs <= SENSITIVE_DATA_WARNING_COOLDOWN_MS;
+            if (!isInSensitiveCooldown) {
+              const reply = buildSensitiveDataWarningReply(priorState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(from, {
+                ...(priorState || {}),
+                ...(wrapped.nextStatePatch || {}),
+                lastSeenAtMs: Date.now(),
+                lastBotReplyAtMs: Date.now(),
+                lastSensitiveDataWarningAtMs: Date.now(),
+              });
+              await sendWhatsAppText(from, wrapped.messageText);
+            } else {
+              await setConversationState(from, { ...(priorState || {}), lastSeenAtMs: Date.now() });
+            }
+            continue;
+          }
 
           if (
             stateLooksLikeAwaitingSedeSelection(priorState) &&
