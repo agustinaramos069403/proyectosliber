@@ -149,6 +149,7 @@ const MAX_LEVENSHTEIN_DISTANCE = 3;
 
 const MESSAGE_COLLECTION_WINDOW_MS = 6000;
 const SMALL_TALK_COOLDOWN_MS = 20000;
+const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -1127,6 +1128,23 @@ function buildMicroCommitmentMessage(entry) {
   return '¿Querés que te pase el link para ver horarios disponibles y reservar?';
 }
 
+function shouldOfferBookingLink(priorState) {
+  if (!priorState || typeof priorState !== 'object') return true;
+  const optOutUntilMs = Number(priorState.bookingLinkOptOutUntilMs);
+  if (!Number.isFinite(optOutUntilMs) || optOutUntilMs <= 0) return true;
+  return Date.now() > optOutUntilMs;
+}
+
+function appendBookingLinkOfferIfAllowed(priorState, messageText) {
+  if (!shouldOfferBookingLink(priorState)) return messageText;
+  return `${messageText} ¿Querés que te pase el link para ver horarios disponibles y reservar?`.trim();
+}
+
+function buildMicroCommitmentMessageWithState(priorState) {
+  if (!shouldOfferBookingLink(priorState)) return buildAnythingElseHelpMessage(priorState);
+  return buildMicroCommitmentMessage();
+}
+
 function buildGreetingSentence(profileDisplayName) {
   const hasName = typeof profileDisplayName === 'string' && profileDisplayName.trim().length > 0;
   if (hasName) {
@@ -1266,7 +1284,7 @@ function messageLooksLikeGenericInstitutionHealthInsurance(rawText) {
   );
 }
 
-async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName) {
+async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName, priorState) {
   debugBotLog('buildHealthInsurancePlusReplyOrAskCity', {
     cityDisplayName: cityEntry?.displayName,
     healthInsuranceName,
@@ -1288,7 +1306,10 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
       (cityNormalized.includes('formosa') && (isOsde || isSancor)) ||
       (cityNormalized.includes('saenz pena') && (isOsde || isIsunne || isSancor));
     if (isKnownNoPlus) {
-      return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+      return appendBookingLinkOfferIfAllowed(
+        priorState,
+        `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus.`
+      );
     }
     const existsElsewhere = await healthInsuranceExistsInAnyCity(healthInsuranceName);
     debugBotLog('plusRule missing', {
@@ -1304,7 +1325,10 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
 
   const osDisplayName = healthInsuranceName;
   if (!plusRule.isAccepted) {
-    return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+    return appendBookingLinkOfferIfAllowed(
+      priorState,
+      `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación.`
+    );
   }
 
   if (plusRule.hasPlus) {
@@ -1313,12 +1337,18 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
         ? formatArsAmount(plusRule.plusAmountArs)
         : null;
     if (plusFormatted) {
-      return `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+      return appendBookingLinkOfferIfAllowed(
+        priorState,
+        `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}.`
+      );
     }
     return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
 
-  return `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+  return appendBookingLinkOfferIfAllowed(
+    priorState,
+    `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus.`
+  );
 }
 
 function buildAskHealthInsuranceNameMessage() {
@@ -1616,7 +1646,7 @@ function resolveSedeEntryFromState(state) {
 }
 
 async function buildPrivatePriceReply(entry) {
-  return `Para confirmarte valores y cómo se realiza en tu caso, lo ideal es una consulta de evaluación en ${entry.displayName}. ¿Querés que te pase el link para ver horarios disponibles y reservar?`;
+  return `Para confirmarte valores y cómo se realiza en tu caso, lo ideal es una consulta de evaluación en ${entry.displayName}.`;
 }
 
 function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
@@ -2665,6 +2695,7 @@ exports.handler = async (event) => {
                       lastSedeDisplayName: priorState.lastSedeDisplayName,
                       lastSedeOptionNumber: priorState.lastSedeOptionNumber,
                       lastSedeAtMs: priorState.lastSedeAtMs,
+                      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
                     }
                   : {};
               await setConversationState(from, preservedSessionState);
@@ -2780,7 +2811,11 @@ exports.handler = async (event) => {
                 : null;
             if (priorState && priorState.state === 'awaiting_health_insurance_city' && pendingHealthInsuranceName) {
               await clearConversationState(from);
-              const reply = await buildHealthInsurancePlusReplyOrAskCity(sede, pendingHealthInsuranceName);
+              const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                sede,
+                pendingHealthInsuranceName,
+                priorState
+              );
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
               if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
@@ -2816,7 +2851,11 @@ exports.handler = async (event) => {
             if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
               const extractedHealthInsuranceName = tryExtractHealthInsuranceName(bodyText);
               if (extractedHealthInsuranceName) {
-                const reply = await buildHealthInsurancePlusReplyOrAskCity(sede, extractedHealthInsuranceName);
+                const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                  sede,
+                  extractedHealthInsuranceName,
+                  priorState
+                );
                 if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                   const lastSede = resolveLastSedeEntryFromState(priorState);
                   const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -2868,7 +2907,11 @@ exports.handler = async (event) => {
             if (priorState && priorState.state === 'awaiting_private_price_city') {
               await clearConversationState(from);
               const reply = await buildPrivatePriceReply(sede);
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                appendBookingLinkOfferIfAllowed(priorState, reply),
+                profileDisplayName,
+                priorState
+              );
               await setConversationState(
                 from,
                 mergeConversationStatePreservingGreeting(
@@ -2880,7 +2923,11 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               const reply = await buildPrivatePriceReply(sede);
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                appendBookingLinkOfferIfAllowed(priorState, reply),
+                profileDisplayName,
+                priorState
+              );
               await setConversationState(
                 from,
                 mergeConversationStatePreservingGreeting(
@@ -2891,7 +2938,7 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
-              const micro = buildMicroCommitmentMessage(sede);
+              const micro = buildMicroCommitmentMessageWithState(priorState);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
               await setConversationState(
                 from,
@@ -2920,7 +2967,7 @@ exports.handler = async (event) => {
             } else {
               // Default: if the user only selected a sede (e.g. replied "3"), ask micro-commitment
               // before sending the link.
-              const micro = buildMicroCommitmentMessage(sede);
+              const micro = buildMicroCommitmentMessageWithState(priorState);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
               await setConversationState(
                 from,
@@ -3048,7 +3095,7 @@ exports.handler = async (event) => {
               if (extracted) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, extracted);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, extracted, priorState);
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3145,7 +3192,11 @@ exports.handler = async (event) => {
               if (resolvedFromSheets) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedFromSheets);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                    lastSede,
+                    resolvedFromSheets,
+                    priorState
+                  );
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3204,7 +3255,11 @@ exports.handler = async (event) => {
               if (resolvedCanonicalName) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedCanonicalName);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                    lastSede,
+                    resolvedCanonicalName,
+                    priorState
+                  );
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3282,7 +3337,7 @@ exports.handler = async (event) => {
               if (extracted) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, extracted);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, extracted, priorState);
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3340,7 +3395,11 @@ exports.handler = async (event) => {
               if (resolvedFromSheets) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedFromSheets);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                    lastSede,
+                    resolvedFromSheets,
+                    priorState
+                  );
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3419,7 +3478,11 @@ exports.handler = async (event) => {
               if (healthInsuranceName) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, healthInsuranceName);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                    lastSede,
+                    healthInsuranceName,
+                    priorState
+                  );
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3477,7 +3540,11 @@ exports.handler = async (event) => {
               if (resolvedFromSheets) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedFromSheets);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                    lastSede,
+                    resolvedFromSheets,
+                    priorState
+                  );
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
@@ -3535,7 +3602,11 @@ exports.handler = async (event) => {
               if (resolvedCanonicalName) {
                 const lastSede = resolveLastSedeEntryFromState(priorState);
                 if (lastSede) {
-                  const reply = await buildHealthInsurancePlusReplyOrAskCity(lastSede, resolvedCanonicalName);
+                  const reply = await buildHealthInsurancePlusReplyOrAskCity(
+                    lastSede,
+                    resolvedCanonicalName,
+                    priorState
+                  );
                   if (reply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
                     const lastSede = resolveLastSedeEntryFromState(priorState);
                     const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
