@@ -1247,8 +1247,6 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
 
 function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  // If it matches a sede keyword/option, do not treat it as a health insurance abbreviation.
-  if (findSedeFromText(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   const normalizedSingleToken = normalized.replace(/\s+/g, '');
   if (GREETING_NORMALIZED_TOKENS.has(normalizedSingleToken)) return false;
@@ -1792,7 +1790,6 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   return (
-    normalized.includes('?') ||
     normalized.includes('que dia') ||
     normalized.includes('que dias') ||
     normalized.includes('cuando atiende') ||
