@@ -3,7 +3,7 @@
  *
  * Env vars (Netlify UI → Site settings → Environment variables):
  * - WHATSAPP_VERIFY_TOKEN  dsfdfgbfg   (you choose it; same in Meta app webhook config)
- * - WHATSrcfACCESSdfsdfd_TOKEN     (temporary or system user token from Meta)
+ * - cfACCESSdfsdfd_TOKEN     (temporary or system user token from Meta)
  * - WHAfdgfdgTSAfdggPP_ttydftyfdgdPHdsvgdfvONE_NUMBER_ID  (from Meta WhatsApp > API setup)
  * ional; if set, nondfgd-sede messages use OpdsfdsenAI with docs/agente-liber-reglas.md prompt file)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
