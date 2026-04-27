@@ -158,6 +158,7 @@ const BOOKING_LINK_RECENTLY_SENT_MS = 5 * 60 * 1000;
 const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
+const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -2822,6 +2823,15 @@ exports.handler = async (event) => {
       const { from, profileDisplayName, isText, messageType } = item;
       const priorState = await getConversationState(from);
       if (!isText) {
+        const lastPromptAtMs =
+          priorState && typeof priorState === 'object' ? Number(priorState.lastNonTextWriteItDownAtMs) : NaN;
+        const isInCooldown =
+          Number.isFinite(lastPromptAtMs) &&
+          Date.now() - lastPromptAtMs <= NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS;
+        if (isInCooldown) {
+          await setConversationState(from, { ...(priorState || {}), lastSeenAtMs: Date.now() });
+          continue;
+        }
         const wrapped = buildAutoReplyWithGreetingIfNeeded(
           '¿Me lo podés escribir en un mensaje, por favor? Así puedo ayudarte mejor.',
           profileDisplayName,
@@ -2833,6 +2843,7 @@ exports.handler = async (event) => {
           lastSeenAtMs: Date.now(),
           lastBotReplyAtMs: Date.now(),
           lastNonTextMessageType: messageType,
+          lastNonTextWriteItDownAtMs: Date.now(),
         });
         await sendWhatsAppText(from, wrapped.messageText);
         continue;
