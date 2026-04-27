@@ -1329,6 +1329,18 @@ function messageLooksLikeGenericInstitutionHealthInsurance(rawText) {
   );
 }
 
+function messageAsksAboutCardiologicoHealthInsuranceInCorrientes(rawText, priorState) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsCardiologico =
+    normalized.includes('cardiologic') || normalized.includes('cardiologico') || normalized.includes('cardiológico');
+  if (!mentionsCardiologico) return false;
+  const sedeFromMessage = findSedeFromText(rawText);
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  const sede = sedeFromMessage || lastSede;
+  return Boolean(sede && sede.envKey === 'CALENDLY_CORRIENTES');
+}
+
 async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName, priorState) {
   debugBotLog('buildHealthInsurancePlusReplyOrAskCity', {
     cityDisplayName: cityEntry?.displayName,
@@ -2975,6 +2987,21 @@ exports.handler = async (event) => {
               preservedSessionState
             );
             await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
+          if (messageAsksAboutCardiologicoHealthInsuranceInCorrientes(bodyText, priorState)) {
+            const preservedSessionState = mergeConversationStatePreservingGreeting(
+              priorState,
+              {},
+              { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS }
+            );
+            await setConversationState(from, preservedSessionState);
+            const reply =
+              'No cuento con esa información en este momento. Te derivo con alguien del equipo para confirmarlo.';
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, preservedSessionState);
+            await sendWhatsAppText(from, wrapped.messageText);
+            await sendWhatsAppText(from, DERIVATIVE_HANDOFF_PATIENT_MESSAGE, { skipDelay: true });
             continue;
           }
 
