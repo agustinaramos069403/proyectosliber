@@ -1357,7 +1357,9 @@ function buildAskHealthInsuranceNameMessage() {
 
 function messageLooksLikePrivatePriceQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutStudiesOrTests(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  if (/^y\s*particular\??$/.test(normalized) || /^particular\??$/.test(normalized)) return true;
   return (
     normalized.includes('precio') ||
     normalized.includes('cuanto sale') ||
@@ -1365,7 +1367,7 @@ function messageLooksLikePrivatePriceQuestion(rawText) {
     normalized.includes('precio del turno') ||
     normalized.includes('precio turno') ||
     normalized.includes('consulta particular') ||
-    normalized.includes('particular') ||
+    (normalized.includes('consulta') && normalized.includes('particular')) ||
     normalized.includes('valor consulta')
   );
 }
@@ -1646,7 +1648,15 @@ function resolveSedeEntryFromState(state) {
 }
 
 async function buildPrivatePriceReply(entry) {
-  return `Para confirmarte valores y cómo se realiza en tu caso, lo ideal es una consulta de evaluación en ${entry.displayName}.`;
+  const priceArs = await lookupPrivatePrice(entry.displayName);
+  if (!Number.isFinite(priceArs)) {
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
+  }
+  const formatted = formatArsAmount(priceArs);
+  if (!formatted) {
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
+  }
+  return `En ${entry.displayName} la consulta particular sale $${formatted}.`;
 }
 
 function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
