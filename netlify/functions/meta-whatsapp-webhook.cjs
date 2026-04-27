@@ -3040,7 +3040,11 @@ exports.handler = async (event) => {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
                 const reply = await buildPrivatePriceReply(lastSede);
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  appendBookingLinkOfferIfAllowed(priorState, reply),
+                  profileDisplayName,
+                  priorState
+                );
                 await setConversationState(
                   from,
                   mergeConversationStatePreservingGreeting(
