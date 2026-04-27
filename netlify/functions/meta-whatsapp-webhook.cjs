@@ -139,7 +139,7 @@ const EMERGENCY_NORMALIZED_SUBSTRINGS = [
 ];
 
 const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
-  'Si es una emergencia o urgencia, por favor acudí a la guardia/urgencias más cercana o llamá al 107 ahora.';
+  'El Dr. no atiende urgencias. Si es una emergencia o urgencia, por favor acudí a la guardia/urgencias más cercana o llamá al 107 ahora.';
 
 const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
   '¿Estás en Resistencia o en Sáenz Peña?';
@@ -190,11 +190,11 @@ const MEDICATION_ALLERGY_STUDY_MESSAGE =
 
 const SEDE_ADDRESS_DETAILS_BY_ENV_KEY = {
   CALENDLY_CORRIENTES:
-    'Corrientes (Clínica del Pilar): San Martín 555. Lunes, jueves y viernes 9:45 a 11:00 y 17:00 a 20:00. Martes 17:00 a 20:00.',
+    'Clínica del Pilar: San Martín 555. Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
   CALENDLY_RESISTENCIA:
     'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678. Martes 9:30 a 12:00.',
   CALENDLY_SAENZ_PENA:
-    'Sáenz Peña (Clínica Santa María): Calle 5 entre 12 y 14. Miércoles (dos veces al mes) 8:00 a 12:00.',
+    'Sáenz Peña (Clínica Santa María): Calle 5 entre 12 y 14. Miércoles (dos veces al mes) 8:00 a 12:00 hs.',
   CALENDLY_FORMOSA:
     'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580. Miércoles (dos veces al mes) 8:00 a 12:00.',
 };
@@ -1687,6 +1687,12 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
   );
 }
 
+function buildSedeScheduleReply(entry) {
+  if (!entry) return null;
+  const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[entry.envKey] || null;
+  return details ? details : `Sede ${entry.displayName}.`;
+}
+
 function messageLooksLikeBookingIntent(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -2762,6 +2768,25 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (priorState && priorState.state === 'awaiting_schedule_sede') {
+            const sedeFromMessage = findSedeFromText(bodyText);
+            if (sedeFromMessage) {
+              await clearConversationState(from);
+              const reply = buildSedeScheduleReply(sedeFromMessage);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  priorState || {},
+                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sedeFromMessage) || {}) }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+          }
+
           if (messageAsksIfDoctorTreatsChildren(bodyText)) {
             const lastSede = resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
@@ -3363,16 +3388,13 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (messageLooksLikeScheduleAvailabilityQuestion(bodyText)) {
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildScheduleQuestionLinkMessage(sede),
-                profileDisplayName,
-                priorState
-              );
+              const reply = buildSedeScheduleReply(sede);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
               await setConversationState(
                 from,
                 mergeConversationStatePreservingGreeting(
                   priorState,
-                  buildAwaitingLinkConfirmationState(sede, 'after_schedule_question'),
+                  priorState || {},
                   { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
                 )
               );
