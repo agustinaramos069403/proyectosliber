@@ -150,6 +150,7 @@ const MAX_LEVENSHTEIN_DISTANCE = 3;
 const MESSAGE_COLLECTION_WINDOW_MS = 6000;
 const SMALL_TALK_COOLDOWN_MS = 20000;
 const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
+const BOOKING_LINK_RECENTLY_SENT_MS = 5 * 60 * 1000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -1366,6 +1367,10 @@ function messageLooksLikePrivatePriceQuestion(rawText) {
     normalized.includes('cuanto cuesta') ||
     normalized.includes('precio del turno') ||
     normalized.includes('precio turno') ||
+    normalized.includes('control') ||
+    normalized.includes('seguimiento') ||
+    normalized.includes('reconsulta') ||
+    normalized.includes('re consulta') ||
     normalized.includes('consulta particular') ||
     (normalized.includes('consulta') && normalized.includes('particular')) ||
     normalized.includes('valor consulta')
@@ -1401,6 +1406,9 @@ function messageClearlyRejectsLinkSend(rawText) {
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  // Sarcasm / ironic "yes" that actually means "no".
+  if (/^si\s+como\s+no\b/.test(normalized)) return true;
+  if (/^sí\s+como\s+no\b/.test(normalized)) return true;
   if (/^(no|nop|nah)\b/.test(normalized)) return true;
   if (normalized.includes('no quiero')) return true;
   if (normalized.includes('no por ahora')) return true;
@@ -1656,7 +1664,7 @@ async function buildPrivatePriceReply(entry) {
   if (!formatted) {
     return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
-  return `En ${entry.displayName} la consulta particular sale $${formatted}.`;
+  return `En ${entry.displayName} la consulta sale $${formatted}.`;
 }
 
 function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
@@ -1842,16 +1850,18 @@ function messageAsksAboutSedeAddressOrHowToArrive(rawText) {
   );
 }
 
-function buildSedeAddressReply(priorState) {
+function buildSedeAddressReply(priorState, explicitSedeEntry) {
+  const sedeFromMessage = explicitSedeEntry && typeof explicitSedeEntry === 'object' ? explicitSedeEntry : null;
   const sedeFromState = resolveLastSedeEntryFromState(priorState);
-  if (!sedeFromState) {
-    return `Decime tu ciudad y te paso la dirección. ${buildAskSedeMessage()}`;
+  const selectedSede = sedeFromMessage || sedeFromState;
+  if (!selectedSede) {
+    return `Decime tu ciudad y te paso la dirección. ${buildAskSedeBridgeMessage()} ${buildAskSedeMessage()}`.trim();
   }
-  const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[sedeFromState.envKey] || null;
-  if (sedeFromState.envKey === 'CALENDLY_CORRIENTES') {
-    return [details || `Sede ${sedeFromState.displayName}.`, CORRIENTES_HOW_TO_ARRIVE_MESSAGE].join(' ');
+  const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[selectedSede.envKey] || null;
+  if (selectedSede.envKey === 'CALENDLY_CORRIENTES') {
+    return [details || `Sede ${selectedSede.displayName}.`, CORRIENTES_HOW_TO_ARRIVE_MESSAGE].join(' ');
   }
-  return details || `Sede ${sedeFromState.displayName}.`;
+  return details || `Sede ${selectedSede.displayName}.`;
 }
 
 function messageAsksAboutStudyFasting(rawText) {
@@ -2005,6 +2015,47 @@ function buildLinkMessage(entry) {
     'El link de agenda online todavía no está configurado.',
     'Escribinos el horario preferido y te confirmamos por este chat.',
   ].join('\n');
+}
+
+function buildLinkSentStatePatch(entry) {
+  const url = getAgendaUrl(entry);
+  if (!url) return null;
+  return {
+    lastBookingLinkSentAtMs: Date.now(),
+    lastBookingLinkSedeEnvKey: entry.envKey,
+    lastBookingLinkSedeDisplayName: entry.displayName,
+    lastBookingLinkUrl: url,
+  };
+}
+
+function wasBookingLinkSentRecently(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastAtMs = Number(priorState.lastBookingLinkSentAtMs);
+  if (!Number.isFinite(lastAtMs) || lastAtMs <= 0) return false;
+  return Date.now() - lastAtMs <= BOOKING_LINK_RECENTLY_SENT_MS;
+}
+
+function messageLooksLikeBookingLinkTrouble(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('no me abre') ||
+    normalized.includes('no abre') ||
+    normalized.includes('no funciona') ||
+    normalized.includes('no anda') ||
+    normalized.includes('no puedo abrir') ||
+    normalized.includes('no puedo entrar') ||
+    normalized.includes('no carga') ||
+    normalized.includes('error en el link') ||
+    normalized.includes('link caido') ||
+    normalized.includes('link caído') ||
+    normalized.includes('no hay turnos') ||
+    normalized.includes('no hay disponibles') ||
+    normalized.includes('sin turnos') ||
+    normalized.includes('no hay disponibilidad') ||
+    normalized.includes('no aparecen turnos') ||
+    normalized.includes('no aparece disponibilidad')
+  );
 }
 
 function describeOpenAiApiKeyForLogs(secret) {
@@ -2290,7 +2341,7 @@ exports.handler = async (event) => {
       Array.isArray(payload.entry) ? payload.entry.length : 0
     );
     let processedTextMessageCount = 0;
-    const latestTextMessageBySender = new Map();
+    const latestMessageBySender = new Map();
     const entries = payload.entry || [];
     for (const ent of entries) {
       const changes = ent.changes || [];
@@ -2298,18 +2349,50 @@ exports.handler = async (event) => {
         const value = change.value || {};
         const messages = value.messages || [];
         for (const msg of messages) {
-          if (msg.type !== 'text' || !msg.text?.body) continue;
-          processedTextMessageCount += 1;
           const from = msg.from;
+          if (!from) continue;
           const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
-          latestTextMessageBySender.set(from, { from, bodyText: msg.text.body, profileDisplayName });
+          const isText = msg.type === 'text' && typeof msg.text?.body === 'string' && msg.text.body.trim().length > 0;
+          if (isText) processedTextMessageCount += 1;
+
+          const existing = latestMessageBySender.get(from);
+          // Prefer text if we have it; otherwise keep latest non-text.
+          if (existing && existing.isText === true) {
+            if (!isText) continue;
+          }
+
+          latestMessageBySender.set(from, {
+            from,
+            profileDisplayName,
+            isText,
+            messageType: msg.type,
+            bodyText: isText ? msg.text.body : null,
+          });
         }
       }
     }
 
-    for (const { from, bodyText: rawBodyText, profileDisplayName } of latestTextMessageBySender.values()) {
-      let bodyText = rawBodyText;
+    for (const item of latestMessageBySender.values()) {
+      const { from, profileDisplayName, isText, messageType } = item;
       const priorState = await getConversationState(from);
+      if (!isText) {
+        const wrapped = buildAutoReplyWithGreetingIfNeeded(
+          '¿Me lo podés escribir en un mensaje, por favor? Así puedo ayudarte mejor.',
+          profileDisplayName,
+          priorState
+        );
+        await setConversationState(from, {
+          ...(priorState || {}),
+          ...(wrapped.nextStatePatch || {}),
+          lastSeenAtMs: Date.now(),
+          lastBotReplyAtMs: Date.now(),
+          lastNonTextMessageType: messageType,
+        });
+        await sendWhatsAppText(from, wrapped.messageText);
+        continue;
+      }
+
+      let bodyText = item.bodyText;
 
           if (stateLooksLikeCollectingUserMessage(priorState)) {
             const pendingAtMs = Number(priorState.pendingUserTextAtMs);
@@ -2355,6 +2438,30 @@ exports.handler = async (event) => {
               await setConversationState(from, { ...(priorState || {}), ...chacoWrapped.nextStatePatch });
             }
             await sendWhatsAppText(from, chacoWrapped.messageText);
+            continue;
+          }
+
+          if (messageLooksLikeBookingLinkTrouble(bodyText)) {
+            const preservedSessionState =
+              priorState && typeof priorState === 'object'
+                ? {
+                    greeted: Boolean(priorState.greeted),
+                    lastSeenAtMs: Date.now(),
+                    lastSedeEnvKey: priorState.lastSedeEnvKey,
+                    lastSedeDisplayName: priorState.lastSedeDisplayName,
+                    lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                    lastSedeAtMs: priorState.lastSedeAtMs,
+                    lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+                    bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+                  }
+                : { lastSeenAtMs: Date.now(), bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS };
+            await setConversationState(from, preservedSessionState);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
+              profileDisplayName,
+              preservedSessionState
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
 
@@ -2504,13 +2611,17 @@ exports.handler = async (event) => {
             messageAsksAboutMedicationAllergyStudy(bodyText)
           ) {
             let reply = null;
+            const sedeMentionedInMessage = messageAsksAboutSedeAddressOrHowToArrive(bodyText)
+              ? findSedeFromText(bodyText)
+              : null;
             if (messageAsksAboutInvoice(bodyText)) reply = INVOICE_MESSAGE;
             else if (messageAsksAboutPaymentMethods(bodyText)) reply = PAYMENT_METHODS_MESSAGE;
             else if (messageAsksAboutConsultDuration(bodyText)) reply = CONSULT_DURATION_MESSAGE;
             else if (messageAsksAboutCompanion(bodyText)) reply = COMPANION_ALLOWED_MESSAGE;
             else if (messageAsksAboutOtherProvinces(bodyText)) reply = OTHER_PROVINCES_MESSAGE;
             else if (messageAsksAboutVirtualVisit(bodyText)) reply = VIRTUAL_VISITS_MESSAGE;
-            else if (messageAsksAboutSedeAddressOrHowToArrive(bodyText)) reply = buildSedeAddressReply(priorState);
+            else if (messageAsksAboutSedeAddressOrHowToArrive(bodyText))
+              reply = buildSedeAddressReply(priorState, sedeMentionedInMessage);
             else if (messageAsksAboutStudyFasting(bodyText)) reply = STUDY_FASTING_MESSAGE;
             else if (messageAsksAboutStudyMedicationPreparation(bodyText))
               reply = STUDY_PREPARATION_MEDICATION_MESSAGE;
@@ -2549,7 +2660,11 @@ exports.handler = async (event) => {
 
             const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
             const nextStatePatch = { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now(), lastBotReplyAtMs: Date.now() };
-            await setConversationState(from, { ...(priorState || {}), ...nextStatePatch });
+            await setConversationState(from, {
+              ...(priorState || {}),
+              ...(sedeMentionedInMessage ? buildLastSedeStatePatch(sedeMentionedInMessage) : null),
+              ...nextStatePatch,
+            });
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
@@ -2688,7 +2803,7 @@ exports.handler = async (event) => {
                 const afterLinkState = mergeConversationStatePreservingGreeting(
                   priorState,
                   {},
-                  linkWrapped.nextStatePatch
+                  { ...(linkWrapped.nextStatePatch || {}), ...(buildLinkSentStatePatch(entryFromState) || {}) }
                 );
                 await setConversationState(from, afterLinkState);
                 await sendWhatsAppText(from, linkWrapped.messageText);
