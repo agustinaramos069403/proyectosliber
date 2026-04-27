@@ -2472,6 +2472,26 @@ function stateLooksLikeAwaitingSedeSelection(state) {
   );
 }
 
+function preserveSessionStateWithoutTransientRouting(priorState) {
+  if (!priorState || typeof priorState !== 'object') return {};
+  return {
+    greeted: Boolean(priorState.greeted),
+    lastSeenAtMs: priorState.lastSeenAtMs,
+    lastSedeEnvKey: priorState.lastSedeEnvKey,
+    lastSedeDisplayName: priorState.lastSedeDisplayName,
+    lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+    lastSedeAtMs: priorState.lastSedeAtMs,
+    lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+    bookingLinkOptOutUntilMs: priorState.bookingLinkOptOutUntilMs,
+    lastBookingLinkSentAtMs: priorState.lastBookingLinkSentAtMs,
+    lastBookingLinkSedeEnvKey: priorState.lastBookingLinkSedeEnvKey,
+    lastBookingLinkSedeDisplayName: priorState.lastBookingLinkSedeDisplayName,
+    lastBookingLinkUrl: priorState.lastBookingLinkUrl,
+    lastSensitiveDataWarningAtMs: priorState.lastSensitiveDataWarningAtMs,
+    lastNonTextWriteItDownAtMs: priorState.lastNonTextWriteItDownAtMs,
+  };
+}
+
 function messageLooksLikeSedeSelectionConfusion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText)
@@ -3298,18 +3318,20 @@ exports.handler = async (event) => {
             const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
               const schedule = buildSedeScheduleReply(lastSede);
-              const reply = shouldOfferBookingLink(priorState)
+              const canOfferLink = shouldOfferBookingLink(priorState);
+              const reply = canOfferLink
                 ? `${schedule} Si querés, también puedo pasarte el link para reservar.`
                 : schedule;
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-              await setConversationState(
-                from,
-                mergeConversationStatePreservingGreeting(
-                  priorState,
-                  priorState || {},
-                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
-                )
-              );
+              const baseSession = preserveSessionStateWithoutTransientRouting(priorState);
+              await setConversationState(from, {
+                ...baseSession,
+                ...(canOfferLink ? buildAwaitingLinkConfirmationState(lastSede, 'after_schedule_question') : {}),
+                ...(buildLastSedeStatePatch(lastSede) || {}),
+                ...(wrapped.nextStatePatch || {}),
+                lastSeenAtMs: Date.now(),
+                lastBotReplyAtMs: Date.now(),
+              });
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
