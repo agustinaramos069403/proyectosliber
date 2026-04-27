@@ -2463,8 +2463,65 @@ function messageAsksToBookWithoutLink(rawText) {
     normalized.includes('no tengo mail') ||
     normalized.includes('no tengo email') ||
     normalized.includes('no uso mail') ||
-    normalized.includes('no uso email')
+    normalized.includes('no uso email') ||
+    normalized.includes('no se usar') ||
+    normalized.includes('no sé usar') ||
+    normalized.includes('no se entrar') ||
+    normalized.includes('no sé entrar') ||
+    normalized.includes('no se reservar') ||
+    normalized.includes('no sé reservar') ||
+    normalized.includes('no se agendar') ||
+    normalized.includes('no sé agendar') ||
+    normalized.includes('me ayudas a sacar') ||
+    normalized.includes('me ayudás a sacar')
   );
+}
+
+function messageAsksToRescheduleOrCancelBooking(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('cambiar el turno') ||
+    normalized.includes('cambiar turno') ||
+    normalized.includes('reprogram') ||
+    normalized.includes('re-program') ||
+    normalized.includes('posponer') ||
+    normalized.includes('cancelar') ||
+    normalized.includes('anular') ||
+    normalized.includes('me equivoque') ||
+    normalized.includes('me equivoqué') ||
+    normalized.includes('equivocado') ||
+    normalized.includes('equivocada')
+  );
+}
+
+function messageSaysDoesNotKnowHealthInsurance(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('no se mi obra social') ||
+    normalized.includes('no sé mi obra social') ||
+    normalized.includes('no se cual es') ||
+    normalized.includes('no sé cuál es') ||
+    normalized.includes('no me acuerdo') ||
+    normalized.includes('no recuerdo') ||
+    normalized.includes('la obra social de mi mama') ||
+    normalized.includes('la obra social de mi mamá') ||
+    normalized.includes('es la de mi mama') ||
+    normalized.includes('es la de mi mamá')
+  );
+}
+
+function buildDoesNotKnowHealthInsuranceReply(priorState) {
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (lastSede) {
+    return `No pasa nada. Si te acordás, decime el nombre de la obra social/prepaga (sin números) y te digo si trabajamos en ${lastSede.displayName}. Si no, lo vemos en la consulta.`;
+  }
+  return 'No pasa nada. Si te acordás, decime el nombre de la obra social/prepaga (sin números). Si no, lo vemos en la consulta.';
 }
 
 function messageLooksLikeNoAvailability(rawText) {
@@ -3096,6 +3153,41 @@ exports.handler = async (event) => {
               profileDisplayName,
               preservedSessionState
             );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
+          if (messageAsksToRescheduleOrCancelBooking(bodyText)) {
+            const preservedSessionState = mergeConversationStatePreservingGreeting(
+              priorState,
+              {},
+              { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS }
+            );
+            await setConversationState(from, {
+              ...preservedSessionState,
+              lastInboundMessageAtMs: inboundAtMs,
+              recentInboundMessageIds: updatedRecentIds,
+            });
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
+              profileDisplayName,
+              preservedSessionState
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
+          if (messageSaysDoesNotKnowHealthInsurance(bodyText)) {
+            const reply = buildDoesNotKnowHealthInsuranceReply(priorState);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+            await setConversationState(from, {
+              ...(priorState || {}),
+              ...(wrapped.nextStatePatch || {}),
+              lastInboundMessageAtMs: inboundAtMs,
+              recentInboundMessageIds: updatedRecentIds,
+              lastSeenAtMs: Date.now(),
+              lastBotReplyAtMs: Date.now(),
+            });
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
