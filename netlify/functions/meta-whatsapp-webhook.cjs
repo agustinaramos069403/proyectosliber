@@ -285,6 +285,32 @@ function messageIsGreeting(rawText) {
   return /^(hola|buenas|buenos dias|buen dia|buenas tardes|buenas noches)\b/.test(normalized);
 }
 
+function messageLooksLikeGreetingOnly(rawText) {
+  if (!messageIsGreeting(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  if (wordCount > 3) return false;
+  // If the message contains another intent, treat it as a real request (not just a greeting).
+  if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return false;
+  if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
+  if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return false;
+  if (messageAsksAboutStudiesOrTests(rawText)) return false;
+  if (messageAsksAboutConditionTreatment(rawText) || messageAsksAboutTreatmentCost(rawText)) return false;
+  if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return false;
+  if (
+    messageAsksAboutDocumentationOrRequirements(rawText) ||
+    messageAsksAboutReferralOrPrescription(rawText) ||
+    messageAsksAboutInvoice(rawText) ||
+    messageAsksAboutPaymentMethods(rawText)
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function messageIsSmallTalk(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText)
@@ -2878,7 +2904,7 @@ exports.handler = async (event) => {
             continue;
           }
 
-          if (messageIsSmallTalk(bodyText)) {
+          if (messageIsSmallTalk(bodyText) && messageLooksLikeGreetingOnly(bodyText)) {
             const lastBotReplyAtMs =
               priorState && typeof priorState === 'object' ? Number(priorState.lastBotReplyAtMs) : NaN;
             const isInCooldown =
@@ -2927,7 +2953,7 @@ exports.handler = async (event) => {
             continue;
           }
 
-          if (messageIsGreeting(bodyText)) {
+          if (messageLooksLikeGreetingOnly(bodyText)) {
             const preservedSessionState =
               priorState && typeof priorState === 'object'
                 ? {
