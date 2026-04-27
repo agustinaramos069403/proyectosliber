@@ -151,6 +151,8 @@ const MESSAGE_COLLECTION_WINDOW_MS = 6000;
 const SMALL_TALK_COOLDOWN_MS = 20000;
 const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
 const BOOKING_LINK_RECENTLY_SENT_MS = 5 * 60 * 1000;
+const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
+const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -1360,6 +1362,8 @@ function messageLooksLikePrivatePriceQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksAboutStudiesOrTests(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  // "Tratamiento" is not a consultation price question; it depends on the case.
+  if (normalized.includes('tratamiento') && !normalized.includes('consulta')) return false;
   if (/^y\s*particular\??$/.test(normalized) || /^particular\??$/.test(normalized)) return true;
   return (
     normalized.includes('precio') ||
@@ -1953,6 +1957,55 @@ function messageAsksAboutConditionTreatment(rawText) {
   );
 }
 
+function messageAsksAboutTreatmentCost(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const asksCost =
+    normalized.includes('cuanto sale') ||
+    normalized.includes('cuanto cuesta') ||
+    normalized.includes('precio') ||
+    normalized.includes('valor');
+  if (!asksCost) return false;
+  return normalized.includes('tratamiento') || normalized.includes('medicacion') || normalized.includes('medicación');
+}
+
+function messageAsksToTalkToDoctor(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('puedo hablar con') ||
+    normalized.includes('puedo hablar') ||
+    normalized.includes('hablar con el medico') ||
+    normalized.includes('hablar con el médico') ||
+    normalized.includes('hablar con el doctor') ||
+    normalized.includes('hablar con el dr') ||
+    normalized.includes('consultar con el medico') ||
+    normalized.includes('consultar con el médico') ||
+    normalized.includes('consultar con el doctor')
+  );
+}
+
+function buildTalkToDoctorReply(priorState) {
+  const base =
+    'El Dr. no atiende consultas previas por WhatsApp, pero en el turno te dedica el tiempo completo.';
+  if (!shouldOfferBookingLink(priorState)) {
+    return `${base} ¿Querés que te ayude con algo más?`;
+  }
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (lastSede) {
+    return `${base} ¿Querés que te ayude a reservarlo?`;
+  }
+  return `${base} ¿Querés que te ayude a reservarlo?`;
+}
+
+function buildTreatmentCostReply(priorState) {
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  if (sedeFromState) {
+    return `Eso depende del caso y del tratamiento indicado. Lo ideal es una consulta de evaluación en ${sedeFromState.displayName} para que el médico te indique el plan y te informen los valores.`;
+  }
+  return `Eso depende del caso y del tratamiento indicado. Lo ideal es una consulta de evaluación para que el médico te indique el plan y te informen los valores. ${buildAskSedeBridgeMessage()} ${buildAskSedeMessage()}`.trim();
+}
+
 function buildConditionTreatmentReply(priorState, rawText) {
   const normalized = normalizeForMatch(rawText);
   const condition =
@@ -2056,6 +2109,51 @@ function messageLooksLikeBookingLinkTrouble(rawText) {
     normalized.includes('no hay disponibilidad') ||
     normalized.includes('no aparecen turnos') ||
     normalized.includes('no aparece disponibilidad')
+  );
+}
+
+function messageLooksLikeNoAvailability(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('no hay turnos') ||
+    normalized.includes('sin turnos') ||
+    normalized.includes('no hay disponibles') ||
+    normalized.includes('no hay disponibilidad') ||
+    normalized.includes('no aparecen turnos') ||
+    normalized.includes('no aparece disponibilidad') ||
+    normalized.includes('no hay horarios') ||
+    normalized.includes('no hay horarios disponibles') ||
+    normalized.includes('no hay turno')
+  );
+}
+
+function stateLooksLikeAwaitingWaitlistConfirmation(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_waitlist_confirmation' &&
+    Number.isFinite(Number(state.waitlistFirstAtMs))
+  );
+}
+
+function resolveLastBookingLinkSedeEntryFromState(state) {
+  if (!state || typeof state !== 'object') return null;
+  const envKey =
+    typeof state.lastBookingLinkSedeEnvKey === 'string' ? state.lastBookingLinkSedeEnvKey : '';
+  if (!envKey) return null;
+  for (const entry of SEDE_ENTRIES) {
+    if (entry.envKey === envKey) return entry;
+  }
+  return null;
+}
+
+function stateLooksLikeAwaitingBookingLinkTroubleFollowup(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_booking_link_trouble_followup' &&
+    Number.isFinite(Number(state.linkTroubleFirstAtMs))
   );
 }
 
@@ -2442,20 +2540,125 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (stateLooksLikeAwaitingWaitlistConfirmation(priorState)) {
+            const nowMs = Date.now();
+            const isInWindow =
+              nowMs - Number(priorState.waitlistFirstAtMs) <= WAITLIST_CONFIRMATION_WINDOW_MS;
+            if (isInWindow && messageConfirmsLinkSend(bodyText)) {
+              const preservedSessionState = mergeConversationStatePreservingGreeting(
+                priorState,
+                {},
+                { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+              );
+              await setConversationState(from, preservedSessionState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
+                profileDisplayName,
+                preservedSessionState
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+            if (isInWindow && messageClearlyRejectsLinkSend(bodyText)) {
+              const url =
+                priorState && typeof priorState === 'object' && typeof priorState.lastBookingLinkUrl === 'string'
+                  ? priorState.lastBookingLinkUrl
+                  : null;
+              const sedeFromLink = resolveLastBookingLinkSedeEntryFromState(priorState);
+              const isFormosaOrSaenz =
+                sedeFromLink &&
+                (sedeFromLink.envKey === 'CALENDLY_FORMOSA' || sedeFromLink.envKey === 'CALENDLY_SAENZ_PENA');
+              const goodbye = isFormosaOrSaenz
+                ? (url
+                    ? `Sin problema. Cuando quieras el link te queda acá:\n${url}\nHasta pronto 😊`
+                    : 'Sin problema. Hasta pronto 😊')
+                : 'Sin problema.';
+              const preservedSessionState = mergeConversationStatePreservingGreeting(
+                priorState,
+                {},
+                { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+              );
+              await setConversationState(from, preservedSessionState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(goodbye, profileDisplayName, preservedSessionState);
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+          }
+
+          if (messageLooksLikeNoAvailability(bodyText)) {
+            const nowMs = Date.now();
+            const url =
+              priorState && typeof priorState === 'object' && typeof priorState.lastBookingLinkUrl === 'string'
+                ? priorState.lastBookingLinkUrl
+                : null;
+            const sedeFromLink = resolveLastBookingLinkSedeEntryFromState(priorState);
+            const isFormosaOrSaenz =
+              sedeFromLink &&
+              (sedeFromLink.envKey === 'CALENDLY_FORMOSA' || sedeFromLink.envKey === 'CALENDLY_SAENZ_PENA');
+            const nextState = mergeConversationStatePreservingGreeting(
+              priorState,
+              {
+                state: 'awaiting_waitlist_confirmation',
+                waitlistFirstAtMs: nowMs,
+              },
+              { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+            );
+            await setConversationState(from, nextState);
+
+            if (isFormosaOrSaenz) {
+              const message1 =
+                'Para esas sedes las fechas las carga el Dr. con anticipación; por ahora no hay turnos cargados.';
+              const message2 = '¿Querés que te avisemos cuando estén disponibles?';
+              const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
+              await sendWhatsAppText(from, wrapped1.messageText);
+              await sendWhatsAppText(from, message2, { skipDelay: true });
+              continue;
+            }
+
+            const message1 = 'La agenda se llena rápido, pero se van liberando turnos por cancelaciones.';
+            const message2 = url
+              ? `Te recomiendo volver a revisar el link en unos días:\n${url}`
+              : 'Te recomiendo volver a revisar la agenda en unos días.';
+            const message3 =
+              'Si preferís que te contactemos cuando haya un hueco, decime y te paso con alguien del equipo.';
+
+            const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
+            await sendWhatsAppText(from, wrapped1.messageText);
+            await sendWhatsAppText(from, message2, { skipDelay: true });
+            await sendWhatsAppText(from, message3, { skipDelay: true });
+            continue;
+          }
+
           if (messageLooksLikeBookingLinkTrouble(bodyText)) {
-            const preservedSessionState =
-              priorState && typeof priorState === 'object'
-                ? {
-                    greeted: Boolean(priorState.greeted),
-                    lastSeenAtMs: Date.now(),
-                    lastSedeEnvKey: priorState.lastSedeEnvKey,
-                    lastSedeDisplayName: priorState.lastSedeDisplayName,
-                    lastSedeOptionNumber: priorState.lastSedeOptionNumber,
-                    lastSedeAtMs: priorState.lastSedeAtMs,
-                    lastBotReplyAtMs: priorState.lastBotReplyAtMs,
-                    bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
-                  }
-                : { lastSeenAtMs: Date.now(), bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS };
+            const nowMs = Date.now();
+            const isFollowup =
+              stateLooksLikeAwaitingBookingLinkTroubleFollowup(priorState) &&
+              nowMs - Number(priorState.linkTroubleFirstAtMs) <= BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS;
+
+            if (!isFollowup) {
+              const nextState = mergeConversationStatePreservingGreeting(
+                priorState,
+                {
+                  state: 'awaiting_booking_link_trouble_followup',
+                  linkTroubleFirstAtMs: nowMs,
+                },
+                { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+              );
+              await setConversationState(from, nextState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.',
+                profileDisplayName,
+                priorState
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+
+            const preservedSessionState = mergeConversationStatePreservingGreeting(
+              priorState,
+              {},
+              { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+            );
             await setConversationState(from, preservedSessionState);
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
@@ -2678,6 +2881,63 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (messageAsksToTalkToDoctor(bodyText)) {
+            if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                      lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            const reply = buildTalkToDoctorReply(priorState);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
+            if (shouldOfferBookingLink(priorState) && !lastSede) {
+              await sendAskSedeTwoStep(from, profileDisplayName, priorState);
+            }
+            continue;
+          }
+
+          if (messageAsksAboutTreatmentCost(bodyText)) {
+            if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                      lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              buildTreatmentCostReply(priorState),
+              profileDisplayName,
+              priorState
+            );
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
           if (messageAsksAboutConditionTreatment(bodyText)) {
             if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
               const preservedSessionState =
@@ -2832,6 +3092,25 @@ exports.handler = async (event) => {
                       bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
                     }
                   : {};
+              const entryFromState = resolveSedeEntryFromState(priorState);
+              if (entryFromState) {
+                const url = getAgendaUrl(entryFromState);
+                const message1 = 'Sin problema, sin apuro.';
+                const message2 = url
+                  ? `Cuando quieras el link te queda acá:\n${url}\nCualquier duda escribime 😊`
+                  : 'Cuando quieras, te paso el link para reservar. Cualquier duda escribime 😊';
+                const nextState = mergeConversationStatePreservingGreeting(
+                  priorState,
+                  {},
+                  { ...(buildLinkSentStatePatch(entryFromState) || {}), ...preservedSessionState }
+                );
+                await setConversationState(from, nextState);
+                const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
+                await sendWhatsAppText(from, wrapped1.messageText);
+                await sendWhatsAppText(from, message2, { skipDelay: true });
+                continue;
+              }
+
               await setConversationState(from, preservedSessionState);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 `Perfecto, no hay problema. ${buildAnythingElseHelpMessage(preservedSessionState)}`,
