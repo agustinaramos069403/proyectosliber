@@ -1426,6 +1426,26 @@ function messageLooksLikePrivatePriceQuestion(rawText) {
   );
 }
 
+function messageAsksIfParticularIsAvailable(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  // Avoid matching price questions; those are handled elsewhere.
+  if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
+  return (
+    normalized.includes('atienden particular') ||
+    normalized.includes('atiende particular') ||
+    normalized.includes('atenden particular') ||
+    normalized.includes('atiende por particular') ||
+    normalized.includes('atienden por particular') ||
+    normalized === 'particular' ||
+    normalized === 'particular?' ||
+    normalized === 'particular.'
+  );
+}
+
 function formatArsAmount(amount) {
   const integerAmount = Math.round(Number(amount));
   if (!Number.isFinite(integerAmount)) return null;
@@ -3273,6 +3293,30 @@ exports.handler = async (event) => {
             }
           }
 
+          if (messageLooksLikeScheduleAvailabilityQuestion(bodyText)) {
+            const sedeFromMessage = findSedeFromText(bodyText);
+            const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
+            if (lastSede) {
+              const schedule = buildSedeScheduleReply(lastSede);
+              const reply = shouldOfferBookingLink(priorState)
+                ? `${schedule} Si querés, también puedo pasarte el link para reservar.`
+                : schedule;
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  priorState || {},
+                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+            await sendAskSedeTwoStep(from, profileDisplayName, priorState, '¿Para qué sede querés los horarios?');
+            continue;
+          }
+
           if (messageLooksLikeMultiIntentCandidate(bodyText)) {
             const intents = (await decideIntentsWithOpenAi(bodyText)) || [];
             const hasHealthInsurance = intents.includes('HEALTH_INSURANCE');
@@ -3536,6 +3580,24 @@ exports.handler = async (event) => {
             if (shouldOfferBookingLink(priorState) && !lastSede) {
               await sendAskSedeTwoStep(from, profileDisplayName, priorState);
             }
+            continue;
+          }
+
+          if (messageAsksIfParticularIsAvailable(bodyText)) {
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            if (lastSede) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'Sí, atendemos particular.',
+                profileDisplayName,
+                priorState
+              );
+              if (wrapped.nextStatePatch) {
+                await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+              }
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+            await sendAskSedeTwoStep(from, profileDisplayName, priorState, 'Sí, atendemos particular.');
             continue;
           }
 
