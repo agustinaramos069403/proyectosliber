@@ -116,16 +116,30 @@ const EMERGENCY_NORMALIZED_SUBSTRINGS = [
   'no puedo respirar',
   'me falta el aire',
   'me ahogo',
+  'me estoy quedando sin aire',
   'me hincho la garganta',
   'se me hincho la garganta',
+  'se me cerro la garganta',
+  'se le cerro la garganta',
+  'se cerro la garganta',
   'me hincho la cara',
   'se me hincho la cara',
   'reaccion alergica fuerte',
   'me desmaye',
+  'se desmayo',
+  'se desmayo',
+  'se descompenso',
+  'se descompenso',
   'me pico una abeja',
   'me pico una avispa',
   'anafilaxia',
   'anafilaxis',
+  'shock',
+  'shock anafilactico',
+  'shock anafilactico',
+  'adrenalina',
+  'epipen',
+  'epi pen',
   'urticaria muy fuerte',
   'me salio todo el cuerpo',
   'no aguanto mas',
@@ -160,6 +174,9 @@ const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
+const INBOUND_MESSAGE_DEDUPLICATION_TTL_MS = 2 * 60 * 60 * 1000;
+const INBOUND_MESSAGE_STALE_AFTER_MS = 45 * 60 * 1000;
+const USER_REPLY_COOLDOWN_MS = 6000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
@@ -2504,6 +2521,45 @@ function preserveSessionStateWithoutTransientRouting(priorState) {
   };
 }
 
+function shouldIgnoreStaleInboundMessage(priorState, messageTimestampSeconds) {
+  const tsSeconds = Number(messageTimestampSeconds);
+  if (!Number.isFinite(tsSeconds) || tsSeconds <= 0) return false;
+  const inboundAtMs = tsSeconds * 1000;
+  // Ignore very old messages (e.g., retries or delayed deliveries).
+  if (Date.now() - inboundAtMs > INBOUND_MESSAGE_STALE_AFTER_MS) return true;
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastInboundAtMs = Number(priorState.lastInboundMessageAtMs);
+  if (!Number.isFinite(lastInboundAtMs) || lastInboundAtMs <= 0) return false;
+  // If this inbound message is older than the last one we processed, skip it.
+  return inboundAtMs + 5000 < lastInboundAtMs;
+}
+
+function pruneRecentMessageIds(recentMessageIds) {
+  if (!Array.isArray(recentMessageIds)) return [];
+  const nowMs = Date.now();
+  return recentMessageIds
+    .filter((item) => item && typeof item === 'object')
+    .filter((item) => typeof item.id === 'string' && item.id.length > 0)
+    .filter((item) => Number.isFinite(Number(item.atMs)) && nowMs - Number(item.atMs) <= INBOUND_MESSAGE_DEDUPLICATION_TTL_MS)
+    .slice(-50);
+}
+
+function shouldThrottleUserReply(priorState, rawText) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  if (!Number.isFinite(lastBotReplyAtMs) || lastBotReplyAtMs <= 0) return false;
+  if (Date.now() - lastBotReplyAtMs > USER_REPLY_COOLDOWN_MS) return false;
+  // Never throttle emergencies.
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  // Never throttle explicit link confirmation/rejection.
+  if (messageConfirmsLinkSend(rawText) || messageClearlyRejectsLinkSend(rawText)) return false;
+  // Never throttle explicit booking/link requests.
+  if (messageExplicitlyRequestsBookingLink(rawText) || messageLooksLikeBookingIntent(rawText)) return false;
+  // Throttle low-signal messages.
+  if (messageLooksLikeFragment(rawText) || messageLooksLikeVagueAnswer(rawText) || messageIsGreeting(rawText)) return true;
+  return false;
+}
+
 function messageLooksLikeSedeSelectionConfusion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText)
@@ -2905,13 +2961,21 @@ exports.handler = async (event) => {
           const profileDisplayName = resolveWhatsAppProfileDisplayName(value, from);
           const isText = msg.type === 'text' && typeof msg.text?.body === 'string' && msg.text.body.trim().length > 0;
           if (isText) processedTextMessageCount += 1;
+          const messageId = typeof msg.id === 'string' ? msg.id : null;
+          const messageTimestampSeconds = typeof msg.timestamp === 'string' ? msg.timestamp : null;
 
           const existing = latestMessageBySender.get(from);
           // Build up to the last 4 text messages per sender in this webhook.
           const nextTextParts = Array.isArray(existing?.textParts) ? existing.textParts.slice(0) : [];
+          const nextTextIds = Array.isArray(existing?.textIds) ? existing.textIds.slice(0) : [];
+          const nextTextTimestamps = Array.isArray(existing?.textTimestamps) ? existing.textTimestamps.slice(0) : [];
           if (isText) {
             nextTextParts.push(msg.text.body.trim());
+            if (messageId) nextTextIds.push(messageId);
+            if (messageTimestampSeconds) nextTextTimestamps.push(messageTimestampSeconds);
             while (nextTextParts.length > 4) nextTextParts.shift();
+            while (nextTextIds.length > 4) nextTextIds.shift();
+            while (nextTextTimestamps.length > 4) nextTextTimestamps.shift();
           }
 
           // Prefer text if we have it; otherwise keep latest non-text.
@@ -2924,6 +2988,8 @@ exports.handler = async (event) => {
             isText: nextIsText,
             messageType: nextIsText ? 'text' : msg.type,
             textParts: nextTextParts,
+            textIds: nextTextIds,
+            textTimestamps: nextTextTimestamps,
             bodyText: nextIsText ? nextTextParts.join(' ') : null,
           });
         }
@@ -2980,6 +3046,39 @@ exports.handler = async (event) => {
       }
 
       let bodyText = item.bodyText;
+      const inboundTimestampSeconds =
+        Array.isArray(item.textTimestamps) && item.textTimestamps.length > 0
+          ? item.textTimestamps[item.textTimestamps.length - 1]
+          : null;
+      if (shouldIgnoreStaleInboundMessage(priorState, inboundTimestampSeconds)) {
+        await setConversationState(from, { ...(priorState || {}), lastSeenAtMs: Date.now() });
+        continue;
+      }
+
+      const priorRecentIds = pruneRecentMessageIds(priorState?.recentInboundMessageIds);
+      const inboundIds = Array.isArray(item.textIds) ? item.textIds.filter(Boolean) : [];
+      const hasDuplicateId =
+        inboundIds.length > 0 && inboundIds.some((id) => priorRecentIds.some((entry) => entry.id === id));
+      if (hasDuplicateId) {
+        await setConversationState(from, { ...(priorState || {}), lastSeenAtMs: Date.now(), recentInboundMessageIds: priorRecentIds });
+        continue;
+      }
+
+      const inboundAtMs = inboundTimestampSeconds ? Number(inboundTimestampSeconds) * 1000 : Date.now();
+      const updatedRecentIds = pruneRecentMessageIds([
+        ...priorRecentIds,
+        ...inboundIds.map((id) => ({ id, atMs: inboundAtMs })),
+      ]);
+
+      if (shouldThrottleUserReply(priorState, bodyText)) {
+        await setConversationState(from, {
+          ...(priorState || {}),
+          lastSeenAtMs: Date.now(),
+          lastInboundMessageAtMs: inboundAtMs,
+          recentInboundMessageIds: updatedRecentIds,
+        });
+        continue;
+      }
 
           if (messageAsksToTalkToSecretary(bodyText)) {
             const preservedSessionState = mergeConversationStatePreservingGreeting(
@@ -2987,7 +3086,11 @@ exports.handler = async (event) => {
               {},
               { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS }
             );
-            await setConversationState(from, preservedSessionState);
+            await setConversationState(from, {
+              ...preservedSessionState,
+              lastInboundMessageAtMs: inboundAtMs,
+              recentInboundMessageIds: updatedRecentIds,
+            });
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
               profileDisplayName,
