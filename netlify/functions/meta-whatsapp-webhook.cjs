@@ -2907,17 +2907,24 @@ exports.handler = async (event) => {
           if (isText) processedTextMessageCount += 1;
 
           const existing = latestMessageBySender.get(from);
-          // Prefer text if we have it; otherwise keep latest non-text.
-          if (existing && existing.isText === true) {
-            if (!isText) continue;
+          // Build up to the last 4 text messages per sender in this webhook.
+          const nextTextParts = Array.isArray(existing?.textParts) ? existing.textParts.slice(0) : [];
+          if (isText) {
+            nextTextParts.push(msg.text.body.trim());
+            while (nextTextParts.length > 4) nextTextParts.shift();
           }
+
+          // Prefer text if we have it; otherwise keep latest non-text.
+          const nextIsText = nextTextParts.length > 0;
+          if (existing && existing.isText === true && !nextIsText) continue;
 
           latestMessageBySender.set(from, {
             from,
             profileDisplayName,
-            isText,
-            messageType: msg.type,
-            bodyText: isText ? msg.text.body : null,
+            isText: nextIsText,
+            messageType: nextIsText ? 'text' : msg.type,
+            textParts: nextTextParts,
+            bodyText: nextIsText ? nextTextParts.join(' ') : null,
           });
         }
       }
