@@ -182,25 +182,25 @@ const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
 
 const DOCUMENTATION_REQUIREMENTS_MESSAGE =
-  'Si tenés obra social: traé orden de consulta y las prácticas autorizadas. Si no: podés venir igual.';
+  'Si tenés obra social: traé orden de consulta y las prácticas autorizadas. Si no: podés venir igual. ¿Te sirve?';
 
-const NO_REFERRAL_REQUIRED_MESSAGE = 'No necesitás derivación ni receta.';
+const NO_REFERRAL_REQUIRED_MESSAGE = 'No necesitás derivación ni receta. ¿Te sirve?';
 
 const AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE =
-  'Sí, atendemos con autorización y aceptamos credencial digital.';
+  'Sí, atendemos con autorización y aceptamos credencial digital. ¿Te sirve?';
 
-const INVOICE_MESSAGE = 'Sí, damos factura.';
+const INVOICE_MESSAGE = 'Sí, damos factura. ¿Te sirve?';
 
 const PAYMENT_METHODS_MESSAGE =
-  'Podés pagar en efectivo o por transferencia/QR. Tarjeta y débito no.';
+  'Podés pagar en efectivo o por transferencia/QR. Tarjeta y débito no. ¿Te sirve?';
 
-const CONSULT_DURATION_MESSAGE = 'Depende del caso.';
+const CONSULT_DURATION_MESSAGE = 'Depende del caso. ¿Te sirve?';
 
-const COMPANION_ALLOWED_MESSAGE = 'Sí, podés ir con acompañante.';
+const COMPANION_ALLOWED_MESSAGE = 'Sí, podés ir con acompañante. ¿Te sirve?';
 
-const OTHER_PROVINCES_MESSAGE = 'No atendemos en otras provincias.';
+const OTHER_PROVINCES_MESSAGE = 'No atendemos en otras provincias. ¿Te sirve?';
 
-const VIRTUAL_VISITS_MESSAGE = 'Sí, hacemos consulta virtual/videollamada.';
+const VIRTUAL_VISITS_MESSAGE = 'Sí, hacemos consulta virtual/videollamada. ¿Te sirve?';
 
 const STUDY_FASTING_MESSAGE = 'No, no hace falta ir en ayunas.';
 
@@ -238,7 +238,7 @@ const CORRIENTES_HOW_TO_ARRIVE_MESSAGE =
   'Corrientes: ingresá a la Clínica del Pilar, subí al primer piso por la escalera negra y consultá con la primera secretaria.';
 
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
-  'Dejame pasarte con alguien del equipo que te puede ayudar mejor. En breve te contactan.';
+  'Si preferís, te paso con alguien del equipo para que te ayude. En breve te contactan.';
 
 const MISSING_INFORMATION_CALL_OFFICE_MESSAGE =
   'No cuento con esa información en este momento. Por favor, llamá al consultorio y te lo confirman.';
@@ -1169,8 +1169,12 @@ function buildAskSedeMessage() {
   return 'Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.';
 }
 
+function buildFriendlyAcknowledgeSentence() {
+  return 'Perfecto.';
+}
+
 function buildAskSedeBridgeMessage() {
-  return 'Para darte la info correcta, ¿para qué sede es?';
+  return 'Dale, te ayudo. Para darte la info correcta, ¿para qué sede es?';
 }
 
 function buildAskSedeForHealthInsuranceMismatchMessage(lastSedeDisplayName, healthInsuranceName) {
@@ -1426,7 +1430,7 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
 }
 
 function buildAskHealthInsuranceNameMessage() {
-  return '¿Qué obra social tenés?';
+  return 'Perfecto. ¿Qué obra social/prepaga tenés?';
 }
 
 function messageLooksLikePrivatePriceQuestion(rawText) {
@@ -3407,7 +3411,7 @@ exports.handler = async (event) => {
               );
               await setConversationState(from, nextState);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                'Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.',
+                'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.',
                 profileDisplayName,
                 priorState
               );
