@@ -1101,9 +1101,11 @@ function getAgendaUrl(entry) {
 }
 
 function buildAskSedeMessage() {
-  return (
-    '¿Desde qué ciudad consultás? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.'
-  );
+  return 'Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.';
+}
+
+function buildAskSedeBridgeMessage() {
+  return 'Para darte la info correcta, ¿para qué sede es?';
 }
 
 function buildAskSedeForHealthInsuranceMismatchMessage(lastSedeDisplayName, healthInsuranceName) {
@@ -1850,6 +1852,34 @@ function appendAskSedeIfMissing(priorState, messageText) {
   return `${messageText} ${buildAskSedeMessage()}`.trim();
 }
 
+async function sendAskSedeTwoStep(toPhoneId, profileDisplayName, priorState, prefaceText = null) {
+  const preface =
+    typeof prefaceText === 'string' && prefaceText.trim().length > 0 ? prefaceText.trim() : null;
+  const bridge = preface ? `${preface} ${buildAskSedeBridgeMessage()}` : buildAskSedeBridgeMessage();
+  const firstWrapped = buildAutoReplyWithGreetingIfNeeded(bridge, profileDisplayName, priorState);
+  const preservedSessionState =
+    priorState && typeof priorState === 'object'
+      ? {
+          greeted: Boolean(priorState.greeted),
+          lastSeenAtMs: priorState.lastSeenAtMs,
+          lastSedeEnvKey: priorState.lastSedeEnvKey,
+          lastSedeDisplayName: priorState.lastSedeDisplayName,
+          lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+          lastSedeAtMs: priorState.lastSedeAtMs,
+          lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+        }
+      : {};
+  const afterFirstState = {
+    ...preservedSessionState,
+    ...(firstWrapped.nextStatePatch || {}),
+    lastSeenAtMs: Date.now(),
+    lastBotReplyAtMs: Date.now(),
+  };
+  await setConversationState(toPhoneId, afterFirstState);
+  await sendWhatsAppText(toPhoneId, firstWrapped.messageText);
+  await sendWhatsAppText(toPhoneId, buildAskSedeMessage(), { skipDelay: true });
+}
+
 function messageAsksAboutConditionTreatment(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -2043,7 +2073,7 @@ function normalizeRecipientDigitsForMetaGraphApi(recipientDigits) {
   return trimmed;
 }
 
-async function sendWhatsAppText(toPhoneId, body) {
+async function sendWhatsAppText(toPhoneId, body, options = {}) {
   const token =
     typeof process.env.WHATSAPP_ACCESS_TOKEN === 'string'
       ? process.env.WHATSAPP_ACCESS_TOKEN.trim()
@@ -2074,7 +2104,9 @@ async function sendWhatsAppText(toPhoneId, body) {
     typeof toPhoneId === 'string' ? toPhoneId.trim() : '';
 
   // Small, non-blocking UX delay to reduce "too fast" replies when the user is typing in multiple bursts.
-  await sleepMs(DEFAULT_RESPONSE_DELAY_MS);
+  if (!options || options.skipDelay !== true) {
+    await sleepMs(DEFAULT_RESPONSE_DELAY_MS);
+  }
 
   const recipientDigitsForGraph = normalizeRecipientDigitsForMetaGraphApi(rawRecipientDigits);
   if (recipientDigitsForGraph !== rawRecipientDigits) {
@@ -2307,18 +2339,7 @@ exports.handler = async (event) => {
               await setConversationState(from, preservedSessionState);
               continue;
             }
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Hola. ¿En qué puedo ayudarte? Si querés, decime tu ciudad (Corrientes, Resistencia, Sáenz Peña o Formosa).',
-              profileDisplayName,
-              priorState
-            );
-            const afterState = mergeConversationStatePreservingGreeting(
-              priorState,
-              priorState || {},
-              { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now(), lastBotReplyAtMs: Date.now() }
-            );
-            await setConversationState(from, afterState);
-            await sendWhatsAppText(from, wrapped.messageText);
+            await sendAskSedeTwoStep(from, profileDisplayName, priorState, '¿En qué puedo ayudarte?');
             continue;
           }
 
@@ -2359,27 +2380,7 @@ exports.handler = async (event) => {
                     lastBotReplyAtMs: priorState.lastBotReplyAtMs,
                   }
                 : {};
-            await setConversationState(from, preservedSessionState);
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Hola. ¿En qué puedo ayudarte? Si querés, decime tu ciudad (Corrientes, Resistencia, Sáenz Peña o Formosa).',
-              profileDisplayName,
-              preservedSessionState
-            );
-            if (wrapped.nextStatePatch) {
-              await setConversationState(from, {
-                ...preservedSessionState,
-                ...wrapped.nextStatePatch,
-                lastSeenAtMs: Date.now(),
-                lastBotReplyAtMs: Date.now(),
-              });
-            } else {
-              await setConversationState(from, {
-                ...preservedSessionState,
-                lastSeenAtMs: Date.now(),
-                lastBotReplyAtMs: Date.now(),
-              });
-            }
-            await sendWhatsAppText(from, wrapped.messageText);
+            await sendAskSedeTwoStep(from, profileDisplayName, preservedSessionState, '¿En qué puedo ayudarte?');
             continue;
           }
 
@@ -3022,18 +3023,7 @@ exports.handler = async (event) => {
             }
             // Booking intent without sede: always ask sede (never ask for date/time).
             if (messageLooksLikeBookingIntent(bodyText)) {
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildAskSedeMessage(),
-                profileDisplayName,
-                priorState
-              );
-              if (wrapped.nextStatePatch) {
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
-                );
-              }
-              await sendWhatsAppText(from, wrapped.messageText);
+              await sendAskSedeTwoStep(from, profileDisplayName, priorState);
               continue;
             }
             if (priorState && priorState.state === 'awaiting_health_insurance_name') {
