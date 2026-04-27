@@ -1649,6 +1649,100 @@ async function decidePrimaryIntentWithOpenAi(userMessage) {
   }
 }
 
+async function decideIntentsWithOpenAi(userMessage) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+  const modelName = getOpenAiModelName();
+
+  const systemPrompt = [
+    'You are a strict intent router for a WhatsApp clinic assistant in Spanish (Argentina).',
+    'Task: Return up to TWO intents to answer, in order of priority.',
+    `Allowed intents: ${MULTI_INTENT_ROUTER_TOKENS.join(', ')}.`,
+    'Output MUST be valid JSON, with this exact schema:',
+    '{ "intents": ["INTENT_1", "INTENT_2"] }',
+    'Rules:',
+    '- Include at least 1 intent.',
+    '- Include at most 2 intents.',
+    '- Use intents exactly as listed.',
+    '- Prefer HEALTH_INSURANCE and PRIVATE_PRICE when both are asked.',
+    '- If booking/link is asked together with something else, include BOOKING as second unless it is the only request.',
+    '- If unclear, return OTHER.',
+  ].join('\n');
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 60,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: String(userMessage || '') },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI multi-intent router error', response.status, errorText.slice(0, 300));
+      return null;
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const parsed = tryParseFirstJsonObjectFromText(typeof text === 'string' ? text : '');
+    const intents = Array.isArray(parsed?.intents) ? parsed.intents : null;
+    if (!intents) return null;
+    const cleaned = intents
+      .map((value) => (typeof value === 'string' ? value.trim().toUpperCase() : ''))
+      .filter((value) => MULTI_INTENT_ROUTER_TOKENS.includes(value));
+    if (cleaned.length === 0) return null;
+    return cleaned.slice(0, 2);
+  } catch (error) {
+    console.error('OpenAI multi-intent router request failed', error);
+    return null;
+  }
+}
+
+async function buildHealthInsuranceSummary(cityEntry, healthInsuranceName) {
+  const plusRule = await lookupPlusRule(cityEntry.displayName, healthInsuranceName);
+  if (!plusRule) {
+    const cityNormalized = normalizeForMatch(cityEntry.displayName);
+    const osNormalized = normalizeForMatch(healthInsuranceName);
+    const isOsde = osNormalized.includes('osde');
+    const isIsunne = osNormalized.includes('isunne');
+    const isSancor = osNormalized.includes('sancor');
+    const isKnownNoPlus =
+      (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
+      (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
+      (cityNormalized.includes('formosa') && (isOsde || isSancor)) ||
+      (cityNormalized.includes('saenz pena') && (isOsde || isIsunne || isSancor));
+    if (isKnownNoPlus) {
+      return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus.`;
+    }
+    const existsElsewhere = await healthInsuranceExistsInAnyCity(healthInsuranceName);
+    if (existsElsewhere) return 'ASK_CITY_FOR_HEALTH_INSURANCE';
+    return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
+  }
+
+  const osDisplayName = healthInsuranceName;
+  if (!plusRule.isAccepted) {
+    return `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}.`;
+  }
+  if (plusRule.hasPlus) {
+    const plusFormatted =
+      Number.isFinite(plusRule.plusAmountArs) && plusRule.plusAmountArs != null
+        ? formatArsAmount(plusRule.plusAmountArs)
+        : null;
+    if (!plusFormatted) return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
+    return `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}.`;
+  }
+  return `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus.`;
+}
+
 function getUniqueHealthInsuranceNamesFromSheetsData(data) {
   const names = new Set();
   if (!data || typeof data !== 'object') return [];
@@ -3059,7 +3153,50 @@ exports.handler = async (event) => {
           }
 
           if (messageLooksLikeMultiIntentCandidate(bodyText)) {
-            const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText);
+            const intents = (await decideIntentsWithOpenAi(bodyText)) || [];
+            const hasHealthInsurance = intents.includes('HEALTH_INSURANCE');
+            const hasPrivatePrice = intents.includes('PRIVATE_PRICE');
+
+            if (hasHealthInsurance && hasPrivatePrice) {
+              const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+              const healthInsuranceName =
+                tryExtractHealthInsuranceName(bodyText) ||
+                (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)
+                  ? await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText)
+                  : null);
+              if (sedeFromMessage && healthInsuranceName) {
+                const healthInsuranceSummary = await buildHealthInsuranceSummary(
+                  sedeFromMessage,
+                  healthInsuranceName
+                );
+                if (healthInsuranceSummary !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+                  const privatePriceReply = await buildPrivatePriceReply(sedeFromMessage);
+                  const combined = `${healthInsuranceSummary} ${privatePriceReply}`.trim();
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                    appendBookingLinkOfferIfAllowed(priorState, combined),
+                    profileDisplayName,
+                    priorState
+                  );
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_health_insurance_plus', {
+                        healthInsuranceName,
+                      }),
+                      {
+                        ...(wrapped.nextStatePatch || {}),
+                        ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
+                      }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+              }
+            }
+
+            const primaryIntent = intents.length > 0 ? intents[0] : null;
             if (primaryIntent === 'HEALTH_INSURANCE') {
               const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
               const healthInsuranceName =
