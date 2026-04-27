@@ -204,6 +204,17 @@ const SEDE_ADDRESS_DETAILS_BY_ENV_KEY = {
     'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580. Miércoles (dos veces al mes) 8:00 a 12:00.',
 };
 
+const SEDE_MAPS_URL_BY_ENV_KEY = {
+  CALENDLY_CORRIENTES:
+    'https://google.com/maps/place/Cl%C3%ADnica+del+Pilar/data=!4m2!3m1!1s0x0:0x49146846c8c3ca7a?sa=X&ved=1t:2428&ictx=111',
+  CALENDLY_RESISTENCIA:
+    'https://www.google.com/maps/place/Immi,+Instituto+Modelo+de+Medicina+Infantil/@-27.4595693,-58.9866954,736m/data=!3m2!1e3!4b1!4m6!3m5!1s0x94450cedd359d8f5:0xefe1f0c59533241e!8m2!3d-27.4595741!4d-58.9841205!16s%2Fg%2F1tfczxpj?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D',
+  CALENDLY_SAENZ_PENA:
+    'https://www.google.com/maps/place/Cl%C3%ADnica+Santa+Mar%C3%ADa/@-26.8004379,-60.4361063,740m/data=!3m2!1e3!4b1!4m6!3m5!1s0x94412d00746e10b5:0xac9d69f86ead35d0!8m2!3d-26.8004428!4d-60.4312354!16s%2Fg%2F11xztntc_h?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D',
+  CALENDLY_FORMOSA:
+    'https://www.google.com/maps/place/Instituto+IMG+Formosa+(Instituto+Modelo+de+Gastroenterolog%C3%ADa)/@-26.1837531,-58.1864783,744m/data=!3m2!1e3!4b1!4m6!3m5!1s0x945ca5f9f106b2dd:0x4cc784833c09beb3!8m2!3d-26.1837579!4d-58.1839034!16s%2Fg%2F11bzvxmbt1?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D',
+};
+
 const CORRIENTES_HOW_TO_ARRIVE_MESSAGE =
   'Corrientes: ingresá a la Clínica del Pilar, subí al primer piso por la escalera negra y consultá con la primera secretaria.';
 
@@ -1975,6 +1986,40 @@ function messageAsksAboutSedeAddressOrHowToArrive(rawText) {
   );
 }
 
+function messageAsksForMapsLocation(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('ubicacion') ||
+    normalized.includes('ubicación') ||
+    normalized.includes('pasame la ubi') ||
+    normalized.includes('pasame ubi') ||
+    normalized.includes('ubi') ||
+    normalized.includes('maps') ||
+    normalized.includes('google maps') ||
+    normalized.includes('pin')
+  );
+}
+
+function buildSedeMapsLocationReply(priorState, explicitSedeEntry) {
+  const sedeFromMessage = explicitSedeEntry && typeof explicitSedeEntry === 'object' ? explicitSedeEntry : null;
+  const sedeFromState = resolveLastSedeEntryFromState(priorState);
+  const selectedSede = sedeFromMessage || sedeFromState;
+  if (!selectedSede) {
+    return `¿Para qué sede necesitás la ubicación? ${buildAskSedeBridgeMessage()} ${buildAskSedeMessage()}`.trim();
+  }
+  const mapsUrl = SEDE_MAPS_URL_BY_ENV_KEY[selectedSede.envKey] || null;
+  if (mapsUrl) {
+    const address = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[selectedSede.envKey] || null;
+    if (address) {
+      return `${address}\n\nUbicación en Google Maps:\n${mapsUrl}`;
+    }
+    return `Ubicación en Google Maps (${selectedSede.displayName}):\n${mapsUrl}`;
+  }
+  // Fallback to address text if we don't have a maps link for that sede yet.
+  return buildSedeAddressReply(priorState, selectedSede);
+}
+
 function buildSedeAddressReply(priorState, explicitSedeEntry) {
   const sedeFromMessage = explicitSedeEntry && typeof explicitSedeEntry === 'object' ? explicitSedeEntry : null;
   const sedeFromState = resolveLastSedeEntryFromState(priorState);
@@ -3140,6 +3185,7 @@ exports.handler = async (event) => {
             messageAsksAboutCompanion(bodyText) ||
             messageAsksAboutOtherProvinces(bodyText) ||
             messageAsksAboutVirtualVisit(bodyText) ||
+            messageAsksForMapsLocation(bodyText) ||
             messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
             messageAsksAboutStudyFasting(bodyText) ||
             messageAsksAboutStudyMedicationPreparation(bodyText) ||
@@ -3156,6 +3202,7 @@ exports.handler = async (event) => {
             else if (messageAsksAboutCompanion(bodyText)) reply = COMPANION_ALLOWED_MESSAGE;
             else if (messageAsksAboutOtherProvinces(bodyText)) reply = OTHER_PROVINCES_MESSAGE;
             else if (messageAsksAboutVirtualVisit(bodyText)) reply = VIRTUAL_VISITS_MESSAGE;
+            else if (messageAsksForMapsLocation(bodyText)) reply = buildSedeMapsLocationReply(priorState, findSedeFromText(bodyText));
             else if (messageAsksAboutSedeAddressOrHowToArrive(bodyText))
               reply = buildSedeAddressReply(priorState, sedeMentionedInMessage);
             else if (messageAsksAboutStudyFasting(bodyText)) reply = STUDY_FASTING_MESSAGE;
