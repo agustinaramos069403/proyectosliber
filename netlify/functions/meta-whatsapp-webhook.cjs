@@ -2854,22 +2854,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
     }
     const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
-    if (lastSede) {
-      const plusRule = await lookupPlusRule(lastSede.displayName, inferredHealthInsuranceName);
-      if (
-        plusRule &&
-        plusRule.isAccepted &&
-        plusRule.hasPlus &&
-        Number.isFinite(plusRule.plusAmountArs) &&
-        plusRule.plusAmountArs != null
-      ) {
-        const formattedPlusAmount = formatArsAmount(plusRule.plusAmountArs);
-        if (formattedPlusAmount) {
-          return `Con ${inferredHealthInsuranceName}, plus de $${formattedPlusAmount} + ${studyType} sería $${formattedAmount} del estudio.`;
-        }
-      }
-    }
-    return `Con ${inferredHealthInsuranceName}, ${studyType} sería $${formattedAmount} del estudio.`;
+    return `Con ${inferredHealthInsuranceName}, el ${studyType} tiene un costo adicional de $${formattedAmount} a la consulta. ¿Deseás agendar?`;
   }
 
   if (studyTypeFromMessage) {
@@ -4652,7 +4637,7 @@ exports.handler = async (event) => {
             const shouldAwaitStudyTypeForPrice =
               messageAsksAboutStudyPrice(bodyText) && !hasStudyTypeContext;
             const shouldAwaitStudyPriceHealthInsurance =
-              messageAsksAboutStudyPrice(bodyText) &&
+              (messageAsksAboutStudyPrice(bodyText) || Boolean(detectedStudyType)) &&
               hasStudyTypeContext &&
               !resolveKnownHealthInsuranceNameForStudyPricing(priorState, bodyText);
             const studiesStatePatch = {
