@@ -233,6 +233,20 @@ const SEDE_ADDRESS_DETAILS_BY_ENV_KEY = {
     'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580. Miércoles (dos veces al mes) 8:00 a 12:00.',
 };
 
+const SEDE_LOCATION_ONLY_BY_ENV_KEY = {
+  CALENDLY_CORRIENTES: 'Clínica del Pilar: San Martín 555.',
+  CALENDLY_RESISTENCIA: 'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678.',
+  CALENDLY_SAENZ_PENA: 'Sáenz Peña (Clínica Santa María): Calle 5 entre 12 y 14.',
+  CALENDLY_FORMOSA: 'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580.',
+};
+
+const SEDE_SCHEDULE_ONLY_BY_ENV_KEY = {
+  CALENDLY_CORRIENTES: 'Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
+  CALENDLY_RESISTENCIA: 'Martes 9:30 a 12:00.',
+  CALENDLY_SAENZ_PENA: 'Miércoles (dos veces al mes) 8:00 a 12:00 hs.',
+  CALENDLY_FORMOSA: 'Miércoles (dos veces al mes) 8:00 a 12:00.',
+};
+
 const SEDE_MAPS_URL_BY_ENV_KEY = {
   CALENDLY_CORRIENTES:
     'https://google.com/maps/place/Cl%C3%ADnica+del+Pilar/data=!4m2!3m1!1s0x0:0x49146846c8c3ca7a?sa=X&ved=1t:2428&ictx=111',
@@ -2195,8 +2209,8 @@ function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
 
 function buildSedeScheduleReply(entry) {
   if (!entry) return null;
-  const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[entry.envKey] || null;
-  return details ? details : `Sede ${entry.displayName}.`;
+  const schedule = SEDE_SCHEDULE_ONLY_BY_ENV_KEY[entry.envKey] || null;
+  return schedule ? `Horarios de ${entry.displayName}: ${schedule}` : `Sede ${entry.displayName}.`;
 }
 
 function messageLooksLikeBookingIntent(rawText) {
@@ -2396,7 +2410,7 @@ function buildSedeMapsLocationReply(priorState, explicitSedeEntry) {
   }
   const mapsUrl = SEDE_MAPS_URL_BY_ENV_KEY[selectedSede.envKey] || null;
   if (mapsUrl) {
-    const address = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[selectedSede.envKey] || null;
+    const address = SEDE_LOCATION_ONLY_BY_ENV_KEY[selectedSede.envKey] || null;
     if (address) {
       return `${address}\n\nUbicación en Google Maps:\n${mapsUrl}`;
     }
@@ -2413,7 +2427,7 @@ function buildSedeAddressReply(priorState, explicitSedeEntry) {
   if (!selectedSede) {
     return `Decime tu ciudad y te paso la dirección. ${buildAskSedeBridgeMessage()} ${buildAskSedeMessage()}`.trim();
   }
-  const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[selectedSede.envKey] || null;
+  const details = SEDE_LOCATION_ONLY_BY_ENV_KEY[selectedSede.envKey] || null;
   if (selectedSede.envKey === 'CALENDLY_CORRIENTES') {
     return [details || `Sede ${selectedSede.displayName}.`, CORRIENTES_HOW_TO_ARRIVE_MESSAGE].join(' ');
   }
@@ -4136,6 +4150,26 @@ exports.handler = async (event) => {
             const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
               const schedule = buildSedeScheduleReply(lastSede);
+              const asksLocationToo =
+                messageAsksForMapsLocation(bodyText) || messageAsksAboutSedeAddressOrHowToArrive(bodyText);
+              if (asksLocationToo) {
+                const location = buildSedeMapsLocationReply(priorState, lastSede);
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  `${location}\n\n${schedule}`,
+                  profileDisplayName,
+                  priorState
+                );
+                const baseSession = preserveSessionStateWithoutTransientRouting(priorState);
+                await setConversationState(from, {
+                  ...baseSession,
+                  ...(buildLastSedeStatePatch(lastSede) || {}),
+                  ...(wrapped.nextStatePatch || {}),
+                  lastSeenAtMs: Date.now(),
+                  lastBotReplyAtMs: Date.now(),
+                });
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const canOfferLink = shouldOfferBookingLink(priorState);
               const reply = canOfferLink
                 ? `${schedule} Si querés, también puedo pasarte el link para reservar.`
