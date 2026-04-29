@@ -277,6 +277,30 @@ function normalizeForMatch(text) {
     .trim();
 }
 
+function tokenizeNormalizedText(normalizedText) {
+  return String(normalizedText || '')
+    .replace(/[!?.,;:()"'`]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+function normalizedTextContainsApproxWord(normalizedText, targetWord, maxDistance = 1) {
+  const normalizedTargetWord = normalizeForMatch(targetWord);
+  if (!normalizedTargetWord) return false;
+  const normalizedSourceText = String(normalizedText || '');
+  if (normalizedSourceText.includes(normalizedTargetWord)) return true;
+  const sourceTokens = tokenizeNormalizedText(normalizedSourceText);
+  for (const sourceToken of sourceTokens) {
+    const lengthDifference = Math.abs(sourceToken.length - normalizedTargetWord.length);
+    if (lengthDifference > maxDistance) continue;
+    const distance = computeLevenshteinDistance(sourceToken, normalizedTargetWord);
+    if (Number.isFinite(distance) && distance <= maxDistance) return true;
+  }
+  return false;
+}
+
 function shouldWriteDebugBotLogs() {
   const raw = process.env.DEBUG_BOT_LOGS;
   if (typeof raw !== 'string') return false;
@@ -498,19 +522,17 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
-  const hasThroatPainSignal =
-    normalized.includes('garganta') ||
-    normalized.includes('grganta') ||
-    normalized.includes('gargnta') ||
-    normalized.includes('garaganta') ||
-    /\bg[ae]?r?g?anta\b/.test(normalized);
+  const hasThroatPainSignal = normalizedTextContainsApproxWord(normalized, 'garganta', 2);
+  const hasPainSignal =
+    normalized.includes('dolor') ||
+    normalized.includes('molesta') ||
+    normalizedTextContainsApproxWord(normalized, 'duele', 1);
   return (
     normalized.includes('me duele la nariz') ||
     normalized.includes('me duele la garganta') ||
     normalized.includes('me duele mucho la garganta') ||
     normalized.includes('dolor de garganta') ||
-    (hasThroatPainSignal &&
-      (normalized.includes('me duele') || normalized.includes('dolor') || normalized.includes('molesta'))) ||
+    (hasThroatPainSignal && hasPainSignal) ||
     normalized.includes('me chorrea la nariz') ||
     normalized.includes('congestion') ||
     normalized.includes('congestión') ||
@@ -2043,10 +2065,19 @@ function buildLastSedeStatePatch(entry) {
 
 function resolveLastSedeEntryFromState(state) {
   if (!state || typeof state !== 'object') return null;
-  const envKey = typeof state.lastSedeEnvKey === 'string' ? state.lastSedeEnvKey : '';
-  if (!envKey) return null;
+  const candidateEnvKeys = [];
+  if (typeof state.lastSedeEnvKey === 'string' && state.lastSedeEnvKey.trim().length > 0) {
+    candidateEnvKeys.push(state.lastSedeEnvKey.trim());
+  }
+  if (typeof state.sedeEnvKey === 'string' && state.sedeEnvKey.trim().length > 0) {
+    candidateEnvKeys.push(state.sedeEnvKey.trim());
+  }
+  if (typeof state.lastBookingLinkSedeEnvKey === 'string' && state.lastBookingLinkSedeEnvKey.trim().length > 0) {
+    candidateEnvKeys.push(state.lastBookingLinkSedeEnvKey.trim());
+  }
+  if (candidateEnvKeys.length === 0) return null;
   for (const entry of SEDE_ENTRIES) {
-    if (entry.envKey === envKey) return entry;
+    if (candidateEnvKeys.includes(entry.envKey)) return entry;
   }
   return null;
 }
@@ -2111,6 +2142,11 @@ function messageLooksLikeBookingIntent(rawText) {
   const normalized = normalizeForMatch(rawText);
   // Common intent words
   if (/\b(turno|turnos|agendar|agenda|reservar|reserva|cita)\b/.test(normalized)) return true;
+  // Tolerate misspellings in key intent words.
+  if (normalizedTextContainsApproxWord(normalized, 'turno', 2)) return true;
+  if (normalizedTextContainsApproxWord(normalized, 'agendar', 2)) return true;
+  if (normalizedTextContainsApproxWord(normalized, 'reservar', 2)) return true;
+  if (normalizedTextContainsApproxWord(normalized, 'consulta', 2)) return true;
   // Tolerate common typos like "urno" (missing t)
   if (/\burno\b/.test(normalized) || /\bun\s*urno\b/.test(normalized)) return true;
   return false;
