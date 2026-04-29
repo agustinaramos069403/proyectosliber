@@ -168,6 +168,7 @@ const MAX_LEVENSHTEIN_DISTANCE = 3;
 const MESSAGE_COLLECTION_WINDOW_MS = 6000;
 const SMALL_TALK_COOLDOWN_MS = 20000;
 const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
+const BOOKING_LINK_OFFER_REPEAT_COOLDOWN_MS = 8 * 60 * 1000;
 const BOOKING_LINK_RECENTLY_SENT_MS = 5 * 60 * 1000;
 const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
@@ -1465,8 +1466,13 @@ function buildMicroCommitmentMessage(entry) {
 function shouldOfferBookingLink(priorState) {
   if (!priorState || typeof priorState !== 'object') return true;
   const optOutUntilMs = Number(priorState.bookingLinkOptOutUntilMs);
-  if (!Number.isFinite(optOutUntilMs) || optOutUntilMs <= 0) return true;
-  return Date.now() > optOutUntilMs;
+  if (Number.isFinite(optOutUntilMs) && optOutUntilMs > 0 && Date.now() <= optOutUntilMs) return false;
+  if (wasBookingLinkSentRecently(priorState)) return false;
+  const bookingLinkOfferAtMs = Number(priorState.bookingLinkOfferAtMs);
+  if (Number.isFinite(bookingLinkOfferAtMs) && bookingLinkOfferAtMs > 0) {
+    if (Date.now() - bookingLinkOfferAtMs <= BOOKING_LINK_OFFER_REPEAT_COOLDOWN_MS) return false;
+  }
+  return true;
 }
 
 function appendBookingLinkOfferIfAllowed(priorState, messageText) {
@@ -1558,6 +1564,8 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
           ? priorState.healthInsuranceName.trim()
           : null
       : null;
+  const priorBookingLinkOfferAtMs =
+    priorState && typeof priorState === 'object' ? Number(priorState.bookingLinkOfferAtMs) : NaN;
   const priorStudyContext =
     priorState && typeof priorState === 'object'
       ? {
@@ -1608,6 +1616,13 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
     !Object.prototype.hasOwnProperty.call(merged, 'lastStudyPriceContextAtMs')
   ) {
     merged.lastStudyPriceContextAtMs = priorStudyContext.lastStudyPriceContextAtMs;
+  }
+  if (
+    Number.isFinite(priorBookingLinkOfferAtMs) &&
+    priorBookingLinkOfferAtMs > 0 &&
+    !Object.prototype.hasOwnProperty.call(merged, 'bookingLinkOfferAtMs')
+  ) {
+    merged.bookingLinkOfferAtMs = priorBookingLinkOfferAtMs;
   }
   return merged;
 }
@@ -2256,6 +2271,7 @@ function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
     lastSedeOptionNumber: entry.optionNumber,
     lastSedeAtMs: Date.now(),
     ...(healthInsuranceName ? { lastHealthInsuranceName: healthInsuranceName } : {}),
+    bookingLinkOfferAtMs: Date.now(),
     reason,
     ...(detailsObject ? detailsObject : {}),
   };
@@ -3230,6 +3246,7 @@ function preserveSessionStateWithoutTransientRouting(priorState) {
     lastSedeAtMs: priorState.lastSedeAtMs,
     lastBotReplyAtMs: priorState.lastBotReplyAtMs,
     bookingLinkOptOutUntilMs: priorState.bookingLinkOptOutUntilMs,
+    bookingLinkOfferAtMs: priorState.bookingLinkOfferAtMs,
     lastBookingLinkSentAtMs: priorState.lastBookingLinkSentAtMs,
     lastBookingLinkSedeEnvKey: priorState.lastBookingLinkSedeEnvKey,
     lastBookingLinkSedeDisplayName: priorState.lastBookingLinkSedeDisplayName,
