@@ -177,6 +177,7 @@ const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
 const SYMPTOM_DURATION_WINDOW_MS = 30 * 60 * 1000;
+const STUDY_TYPE_FOR_PRICE_WINDOW_MS = 30 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
 const INBOUND_MESSAGE_DEDUPLICATION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -564,6 +565,15 @@ function stateLooksLikeAwaitingSymptomDuration(state) {
     typeof state === 'object' &&
     state.state === 'awaiting_symptom_duration' &&
     Number.isFinite(Number(state.symptomFirstAtMs))
+  );
+}
+
+function stateLooksLikeAwaitingStudyTypeForPrice(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_study_type_for_price' &&
+    Number.isFinite(Number(state.awaitingStudyTypeForPriceAtMs))
   );
 }
 
@@ -2609,6 +2619,25 @@ function messageAsksAboutConsultationPlusStudy(rawText) {
   return mentionsConsultation && mentionsStudy && mentionsPlus;
 }
 
+function messageAsksAboutStudyPrice(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const asksPrice =
+    normalized.includes('cuanto sale') ||
+    normalized.includes('cuanto cuesta') ||
+    normalized.includes('cuanto esta') ||
+    normalized.includes('cuánto está') ||
+    normalized.includes('precio') ||
+    normalized.includes('valor');
+  if (!asksPrice) return false;
+  return (
+    normalized.includes('estudio') ||
+    normalized.includes('espirometr') ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('prick')
+  );
+}
+
 function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
   if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return null;
   if (/osde/i.test(healthInsuranceName)) return 'OSDE';
@@ -2635,7 +2664,7 @@ function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
   return null;
 }
 
-async function buildStudiesInformationReply(priorState, rawText = '') {
+async function buildStudiesInformationReply(priorState, rawText = '', options = {}) {
   const normalized = normalizeForMatch(rawText);
   const studyTypeFromMessage = getStudyTypeFromText(rawText);
   const studyTypeFromState =
@@ -2643,9 +2672,12 @@ async function buildStudiesInformationReply(priorState, rawText = '') {
       ? priorState.lastStudyType
       : null;
   const studyType = studyTypeFromMessage || studyTypeFromState || 'estudio';
+  const forcePriceFlow = Boolean(options.forcePriceFlow);
   const inferredHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
   const asksPrice =
     messageLooksLikePrivatePriceQuestion(rawText) ||
+    messageAsksAboutStudyPrice(rawText) ||
+    forcePriceFlow ||
     normalized.includes('cuanto sale') ||
     normalized.includes('cuanto cuesta') ||
     normalized.includes('cuanto esta') ||
@@ -4176,15 +4208,37 @@ exports.handler = async (event) => {
               await setConversationState(from, preservedSessionState);
             }
             const detectedStudyType = getStudyTypeFromText(bodyText);
-            const studiesReply = await buildStudiesInformationReply(priorState, bodyText);
+            const isAwaitingStudyTypeForPrice =
+              stateLooksLikeAwaitingStudyTypeForPrice(priorState) &&
+              Date.now() - Number(priorState.awaitingStudyTypeForPriceAtMs) <= STUDY_TYPE_FOR_PRICE_WINDOW_MS;
+            const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
+              forcePriceFlow: isAwaitingStudyTypeForPrice && Boolean(detectedStudyType),
+            });
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               studiesReply,
               profileDisplayName,
               priorState
             );
+            const hasStudyTypeContext =
+              Boolean(detectedStudyType) ||
+              (priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string');
+            const shouldAwaitStudyTypeForPrice =
+              messageAsksAboutStudyPrice(bodyText) && !hasStudyTypeContext;
             const studiesStatePatch = {
               ...(wrapped.nextStatePatch || {}),
               ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+              ...(shouldAwaitStudyTypeForPrice
+                ? {
+                    state: 'awaiting_study_type_for_price',
+                    awaitingStudyTypeForPriceAtMs: Date.now(),
+                  }
+                : {}),
+              ...(!shouldAwaitStudyTypeForPrice && isAwaitingStudyTypeForPrice
+                ? {
+                    state: undefined,
+                    awaitingStudyTypeForPriceAtMs: undefined,
+                  }
+                : {}),
             };
             if (Object.keys(studiesStatePatch).length > 0) {
               await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
