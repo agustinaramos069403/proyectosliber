@@ -329,8 +329,6 @@ function messageLooksLikeGreetingOnly(rawText) {
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  const wordCount = normalized.split(' ').filter(Boolean).length;
-  if (wordCount > 3) return false;
   // If the message contains another intent, treat it as a real request (not just a greeting).
   if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return false;
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
@@ -346,7 +344,17 @@ function messageLooksLikeGreetingOnly(rawText) {
   ) {
     return false;
   }
-  return true;
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  if (wordCount <= 3) return true;
+  // Accept composite greeting + small talk as "greeting-only" (e.g., "buenos dias como estas").
+  if (
+    /^(hola|buenas|buenos dias|buen dia|buenas tardes|buenas noches)\b/.test(normalized) &&
+    /\b(como estas|que tal|todo bien|como va)\b/.test(normalized) &&
+    wordCount <= 8
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function messageIsSmallTalk(rawText) {
@@ -365,7 +373,9 @@ function messageIsSmallTalk(rawText) {
     normalized === 'que tal' ||
     normalized === 'qué tal' ||
     normalized.startsWith('que tal ') ||
-    normalized.startsWith('qué tal ')
+    normalized.startsWith('qué tal ') ||
+    /\btodo bien\b/.test(normalized) ||
+    /\bcomo va\b/.test(normalized)
   );
 }
 
@@ -1235,8 +1245,6 @@ function processAssistantReplyForPatient(rawModelText) {
   }
   const asksForSpecificDateOrTime =
     normalized.includes('fecha') ||
-    normalized.includes('dia') ||
-    normalized.includes('día') ||
     normalized.includes('día y hora') ||
     normalized.includes('dia y hora') ||
     normalized.includes('horario') ||

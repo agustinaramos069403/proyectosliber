@@ -17,8 +17,15 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 ## Saludos / small talk (evitar doble saludo)
 - “hola”, “buenas”, “buen día”
 - “¿cómo estás?”, “qué tal”
+- Saludos compuestos (deben responder humano y sin pedir sede):
+  - “buenos días, cómo estás?”
+  - “hola, qué tal?”
+  - “buenas tardes, todo bien?”
+  - “hola, cómo va?”
 - Saludo + intención en el mismo mensaje (no debe tratarlo como solo saludo):
   - “Hola, soy de Resis y tengo OSDE, ¿hay plus?”
+  - “Hola, quiero turno”
+  - “Buenas, cuánto sale la consulta”
 
 ## Turnos / reservas / link
 - Intención de reservar:
