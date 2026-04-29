@@ -173,9 +173,11 @@ Este apartado describe **qué cubrimos** y cómo se resuelve (hard rule vs flujo
 El webhook tiene detectores dedicados como:
 
 - `messageLooksLikeGreetingOnly`
+- `messageLooksLikeFarewell`
 - `messageLooksLikeBookingIntent`
 - `messageLooksLikeBookingLinkTrouble`
 - `messageLooksLikeNoAvailability`
+- `messageLooksLikeRealtimeAvailabilityQuestion`
 - `messageAsksToBookWithoutLink`
 - `messageAsksToRescheduleOrCancelBooking`
 - `messageLooksLikeSedeSelectionConfusion`
@@ -228,18 +230,27 @@ El playbook de casos está mantenido como checklist en:
 ### 8.1 Caminos principales (resumen práctico)
 
 - Saludo solo:
-  - Responder saludo humanizado (evitar disparar OS/precio por error).
+  - Responder saludo humanizado y esperar intención (no disparar selección de sede de forma automática).
+- Cierre natural del paciente:
+  - Detectar despedidas/gracias y cerrar cálido sin reabrir la conversación con "¿te ayudo en algo más?".
 - Saludo + intención (incluye multi-intent):
   - No tratarlo como “solo saludo”, procesar el contenido (p. ej. sede + OS + plus).
+- Urgencia:
+  - Si hay señales médicas críticas, responder guardia/107 inmediato.
+  - Si es ambiguo ("urgente/emergencia"), desambiguar primero.
 - Turno / agendar / link:
   - Si hay sede → link directo y patch de última sede.
   - Si falta sede → menú 1–4 y `awaiting_sede_selection`.
   - Oferta de link → `awaiting_link_confirmation`.
   - Rechazo del link → `bookingLinkOptOutUntilMs` para no insistir (salvo pedido explícito).
+- Consulta de disponibilidad en tiempo real:
+  - Explicar que días/horarios se ven en la agenda online.
+  - Si hay sede conocida, enviar link directo; si falta sede, pedirla y continuar flujo.
 - Link trouble:
   - Tip corto (otro navegador / computadora), luego `awaiting_booking_link_trouble_followup` si corresponde y derivación si persiste.
 - No availability:
-  - Respuesta específica por sede + opción de lista de espera → `awaiting_waitlist_confirmation`.
+  - Respuesta específica por sede + opción de aviso/lista de espera → `awaiting_waitlist_confirmation`.
+  - Si paciente acepta aviso: registrar confirmación y responder que le van a avisar (sin derivar automático).
 - Obras sociales / plus:
   - Si falta OS → `awaiting_health_insurance_name`.
   - Si falta ciudad → `awaiting_health_insurance_city` con `healthInsuranceName`.

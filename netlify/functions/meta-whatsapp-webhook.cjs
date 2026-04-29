@@ -112,7 +112,7 @@ const SEDE_ENTRIES = [
 ];
 
 /** Normalized substrings; must match after normalizeForMatch (no accents). */
-const EMERGENCY_NORMALIZED_SUBSTRINGS = [
+const CRITICAL_EMERGENCY_NORMALIZED_SUBSTRINGS = [
   'no puedo respirar',
   'me falta el aire',
   'me ahogo',
@@ -140,24 +140,28 @@ const EMERGENCY_NORMALIZED_SUBSTRINGS = [
   'adrenalina',
   'epipen',
   'epi pen',
-  'urticaria muy fuerte',
-  'me salio todo el cuerpo',
-  'no aguanto mas',
+  'emergencia medica',
+];
+
+const AMBIGUOUS_URGENCY_NORMALIZED_SUBSTRINGS = [
   'emergencia',
   'urgencia',
   'urgente',
+  'necesito rapido',
+  'necesito rápido',
+  'lo antes posible',
   'caso critico',
   'caso crítico',
   'critico',
   'crítico',
   'es urgente',
   'es una emergencia',
-  'emergencia medica',
-  'necesito urgencia',
 ];
 
 const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
   'El Dr. no atiende urgencias. Si es una emergencia o urgencia, por favor acudí a la guardia/urgencias más cercana o llamá al 107 ahora.';
+const AMBIGUOUS_URGENCY_CLARIFICATION_MESSAGE =
+  '¿Es una urgencia médica o necesitás turno lo antes posible?';
 
 const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
   '¿Estás en Resistencia o en Sáenz Peña?';
@@ -396,7 +400,7 @@ function stateLooksLikeCollectingUserMessage(state) {
 }
 
 function buildAnythingElseHelpMessage(priorState) {
-  return '¿Querés que te ayude con algo más?';
+  return 'Cualquier duda que te surja, escribime.';
 }
 
 function findSedeFromText(rawText) {
@@ -424,10 +428,41 @@ function findSedeFromText(rawText) {
 function textMatchesMedicalEmergency(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  for (const phrase of EMERGENCY_NORMALIZED_SUBSTRINGS) {
+  for (const phrase of CRITICAL_EMERGENCY_NORMALIZED_SUBSTRINGS) {
     if (normalized.includes(phrase)) return true;
   }
   return false;
+}
+
+function messageLooksLikeAmbiguousUrgency(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  for (const phrase of AMBIGUOUS_URGENCY_NORMALIZED_SUBSTRINGS) {
+    if (normalized.includes(phrase)) return true;
+  }
+  return false;
+}
+
+function messageLooksLikeFarewell(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('muchas gracias') ||
+    normalized === 'gracias' ||
+    normalized === 'ok gracias' ||
+    normalized.includes('hasta luego') ||
+    normalized === 'chau' ||
+    normalized === 'ok chau' ||
+    normalized === 'bye' ||
+    normalized.includes('nos vemos') ||
+    normalized.includes('buen dia') ||
+    normalized.includes('buenas noches')
+  );
 }
 
 /**
@@ -1961,6 +1996,20 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
   );
 }
 
+function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('hay turno para hoy') ||
+    normalized.includes('hay turnos para hoy') ||
+    normalized.includes('hay turno hoy') ||
+    normalized.includes('hay disponibilidad') ||
+    normalized.includes('tienen disponibilidad') ||
+    normalized.includes('tienen para esta semana') ||
+    normalized.includes('hay para esta semana')
+  );
+}
+
 function buildSedeScheduleReply(entry) {
   if (!entry) return null;
   const details = SEDE_ADDRESS_DETAILS_BY_ENV_KEY[entry.envKey] || null;
@@ -2390,7 +2439,7 @@ function buildScheduleQuestionLinkMessage(entry) {
 function buildLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
-    return `Perfecto, sede ${entry.displayName}.\n\nAgendá tu turno acá:\n${url}`;
+    return `Acá tenés el link para elegir el día y horario que mejor te quede en ${entry.displayName}:\n${url}\nCualquier duda que te surja, avisame.`;
   }
   return [
     `Recibimos tu preferencia por ${entry.displayName}.`,
@@ -2437,7 +2486,18 @@ function messageLooksLikeBookingLinkTrouble(rawText) {
     normalized.includes('sin turnos') ||
     normalized.includes('no hay disponibilidad') ||
     normalized.includes('no aparecen turnos') ||
-    normalized.includes('no aparece disponibilidad')
+    normalized.includes('no aparece disponibilidad') ||
+    normalized.includes('no pude agendar') ||
+    normalized.includes('no pude reservar') ||
+    normalized.includes('no pude sacar turno') ||
+    normalized.includes('no me dejo reservar') ||
+    normalized.includes('no me dejó reservar') ||
+    normalized.includes('que hago') ||
+    normalized.includes('qué hago') ||
+    normalized.includes('no se que hacer') ||
+    normalized.includes('no sé qué hacer') ||
+    normalized.includes('como hago') ||
+    normalized.includes('cómo hago')
   );
 }
 
@@ -3276,6 +3336,31 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, emergencyWrapped.messageText);
             continue;
           }
+          if (messageLooksLikeAmbiguousUrgency(bodyText)) {
+            const urgencyWrapped = buildAutoReplyWithGreetingIfNeeded(
+              AMBIGUOUS_URGENCY_CLARIFICATION_MESSAGE,
+              profileDisplayName,
+              priorState
+            );
+            if (urgencyWrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...urgencyWrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, urgencyWrapped.messageText);
+            continue;
+          }
+          if (messageLooksLikeFarewell(bodyText)) {
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Gracias a vos 😊 Cualquier consulta que te surja, escribime. Hasta pronto.',
+              profileDisplayName,
+              priorState
+            );
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(priorState, { state: 'conversation_closed' }, wrapped.nextStatePatch)
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
           if (needsChacoProvinceClarification(bodyText)) {
             const chacoWrapped = buildAutoReplyWithGreetingIfNeeded(
               CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE,
@@ -3317,7 +3402,7 @@ exports.handler = async (event) => {
               );
               await setConversationState(from, preservedSessionState);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
+                'Anotado, te avisamos cuando haya disponibilidad.',
                 profileDisplayName,
                 preservedSessionState
               );
@@ -3372,7 +3457,7 @@ exports.handler = async (event) => {
 
             if (isFormosaOrSaenz) {
               const message1 =
-                'Para esas sedes las fechas las carga el Dr. con anticipación; por ahora no hay turnos cargados.';
+                `Para ${sedeFromLink.displayName} las fechas las carga el Dr. con anticipación, por ahora no hay turnos cargados.`;
               const message2 = '¿Querés que te avisemos cuando estén disponibles?';
               const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
               await sendWhatsAppText(from, wrapped1.messageText);
@@ -3385,7 +3470,7 @@ exports.handler = async (event) => {
               ? `Te recomiendo volver a revisar el link en unos días:\n${url}`
               : 'Te recomiendo volver a revisar la agenda en unos días.';
             const message3 =
-              'Si preferís que te contactemos cuando haya un hueco, decime y te paso con alguien del equipo.';
+              '¿Querés que te avisemos cuando se libere algo?';
 
             const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
             await sendWhatsAppText(from, wrapped1.messageText);
@@ -3434,6 +3519,40 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (messageLooksLikeRealtimeAvailabilityQuestion(bodyText)) {
+            const sedeFromMessage = findSedeFromText(bodyText);
+            const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
+            if (!lastSede) {
+              await sendAskSedeTwoStep(
+                from,
+                profileDisplayName,
+                priorState,
+                'Los días y horarios disponibles los podés ver directo en nuestra agenda digital.'
+              );
+              continue;
+            }
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Los días y horarios disponibles los podés ver directo en la agenda digital, así podés agendar fácilmente.',
+              profileDisplayName,
+              priorState
+            );
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                priorState || {},
+                {
+                  ...(wrapped.nextStatePatch || {}),
+                  ...(buildLastSedeStatePatch(lastSede) || {}),
+                  ...(buildLinkSentStatePatch(lastSede) || {}),
+                }
+              )
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            await sendWhatsAppText(from, buildLinkMessage(lastSede), { skipDelay: true });
+            continue;
+          }
+
           if (messageIsSmallTalk(bodyText) && messageLooksLikeGreetingOnly(bodyText)) {
             const lastBotReplyAtMs =
               priorState && typeof priorState === 'object' ? Number(priorState.lastBotReplyAtMs) : NaN;
@@ -3455,7 +3574,16 @@ exports.handler = async (event) => {
               await setConversationState(from, preservedSessionState);
               continue;
             }
-            await sendAskSedeTwoStep(from, profileDisplayName, priorState, '¿En qué puedo ayudarte?');
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Contame en qué te puedo ayudar.',
+              profileDisplayName,
+              priorState
+            );
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
 
@@ -3496,7 +3624,20 @@ exports.handler = async (event) => {
                     lastBotReplyAtMs: priorState.lastBotReplyAtMs,
                   }
                 : {};
-            await sendAskSedeTwoStep(from, profileDisplayName, preservedSessionState, '¿En qué puedo ayudarte?');
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Contame en qué te puedo ayudar.',
+              profileDisplayName,
+              preservedSessionState
+            );
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                preservedSessionState,
+                preservedSessionState || {},
+                wrapped.nextStatePatch
+              )
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
 
