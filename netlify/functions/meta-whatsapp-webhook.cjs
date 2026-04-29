@@ -1416,6 +1416,14 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
           sedeOptionNumber: priorState.sedeOptionNumber,
         }
       : null;
+  const priorHealthInsuranceName =
+    priorState && typeof priorState === 'object'
+      ? typeof priorState.lastHealthInsuranceName === 'string' && priorState.lastHealthInsuranceName.trim().length > 0
+        ? priorState.lastHealthInsuranceName.trim()
+        : typeof priorState.healthInsuranceName === 'string' && priorState.healthInsuranceName.trim().length > 0
+          ? priorState.healthInsuranceName.trim()
+          : null
+      : null;
   const merged = { ...(nextState || {}) };
   if (patch && typeof patch === 'object') {
     Object.assign(merged, patch);
@@ -1430,6 +1438,16 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
   // Keep active/pending sede context unless explicitly overwritten.
   if (priorActiveSede && typeof merged.sedeEnvKey !== 'string') {
     Object.assign(merged, priorActiveSede);
+  }
+  if (priorHealthInsuranceName && typeof merged.lastHealthInsuranceName !== 'string') {
+    merged.lastHealthInsuranceName = priorHealthInsuranceName;
+  }
+  if (
+    typeof merged.healthInsuranceName === 'string' &&
+    merged.healthInsuranceName.trim().length > 0 &&
+    typeof merged.lastHealthInsuranceName !== 'string'
+  ) {
+    merged.lastHealthInsuranceName = merged.healthInsuranceName.trim();
   }
   return merged;
 }
@@ -2048,6 +2066,10 @@ async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage) {
 
 function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
   const detailsObject = details && typeof details === 'object' ? details : null;
+  const healthInsuranceName =
+    detailsObject && typeof detailsObject.healthInsuranceName === 'string'
+      ? detailsObject.healthInsuranceName.trim()
+      : '';
   return {
     state: 'awaiting_link_confirmation',
     sedeEnvKey: entry.envKey,
@@ -2057,6 +2079,7 @@ function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
     lastSedeDisplayName: entry.displayName,
     lastSedeOptionNumber: entry.optionNumber,
     lastSedeAtMs: Date.now(),
+    ...(healthInsuranceName ? { lastHealthInsuranceName: healthInsuranceName } : {}),
     reason,
     ...(detailsObject ? detailsObject : {}),
   };
@@ -2594,12 +2617,33 @@ function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
   return healthInsuranceName;
 }
 
+function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
+  const fromMessage = normalizeHealthInsuranceNameForStudyPricing(tryExtractHealthInsuranceName(rawText));
+  if (fromMessage && typeof fromMessage === 'string' && fromMessage.trim().length > 0) {
+    return fromMessage.trim();
+  }
+  if (!priorState || typeof priorState !== 'object') return null;
+  if (typeof priorState.healthInsuranceName === 'string' && priorState.healthInsuranceName.trim().length > 0) {
+    return normalizeHealthInsuranceNameForStudyPricing(priorState.healthInsuranceName.trim());
+  }
+  if (
+    typeof priorState.lastHealthInsuranceName === 'string' &&
+    priorState.lastHealthInsuranceName.trim().length > 0
+  ) {
+    return normalizeHealthInsuranceNameForStudyPricing(priorState.lastHealthInsuranceName.trim());
+  }
+  return null;
+}
+
 async function buildStudiesInformationReply(priorState, rawText = '') {
   const normalized = normalizeForMatch(rawText);
-  const studyType = getStudyTypeFromText(rawText) || 'estudio';
-  const inferredHealthInsuranceName = normalizeHealthInsuranceNameForStudyPricing(
-    tryExtractHealthInsuranceName(rawText)
-  );
+  const studyTypeFromMessage = getStudyTypeFromText(rawText);
+  const studyTypeFromState =
+    priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string'
+      ? priorState.lastStudyType
+      : null;
+  const studyType = studyTypeFromMessage || studyTypeFromState || 'estudio';
+  const inferredHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
   const asksPrice =
     messageLooksLikePrivatePriceQuestion(rawText) ||
     normalized.includes('cuanto sale') ||
@@ -2631,8 +2675,17 @@ async function buildStudiesInformationReply(priorState, rawText = '') {
   }
 
   if (asksPrice) {
+    if (!studyTypeFromMessage && !studyTypeFromState) {
+      return '¿Querés saber el valor de espirometría o de test de alergia?';
+    }
+    if (!inferredHealthInsuranceName) {
+      return 'Antes de pasarte el valor, ¿qué obra social/prepaga tenés?';
+    }
+    if (INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)) {
+      return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
+    }
     const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
-    return `Depende de tu obra social, ¿cuál tenés? Si es particular, consulta + ${studyType} suma $${formattedAmount}.`;
+    return `Con ${inferredHealthInsuranceName}, consulta + ${studyType} suma el valor de la consulta y $${formattedAmount} del estudio.`;
   }
 
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
@@ -4122,14 +4175,19 @@ exports.handler = async (event) => {
                   : {};
               await setConversationState(from, preservedSessionState);
             }
+            const detectedStudyType = getStudyTypeFromText(bodyText);
             const studiesReply = await buildStudiesInformationReply(priorState, bodyText);
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               studiesReply,
               profileDisplayName,
               priorState
             );
-            if (wrapped.nextStatePatch) {
-              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            const studiesStatePatch = {
+              ...(wrapped.nextStatePatch || {}),
+              ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+            };
+            if (Object.keys(studiesStatePatch).length > 0) {
+              await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
             }
             await sendWhatsAppText(from, wrapped.messageText);
             continue;

@@ -119,6 +119,7 @@ Si es solo espirometría sin consulta: $40.000.
 Consulta particular + estudio: valor de consulta particular de la sede + $30.000.
 Si tiene OSDE, Sancor o ISSUNNE, el test/espirometría queda incluido en el valor de la consulta.
 Si preguntan "cuánto cuesta la espirometría/test" sin aclarar cobertura, primero pedir obra social.
+Si preguntan "cuánto cuesta el estudio" sin aclarar cuál, primero preguntar si se refiere a espirometría o test de alergia.
 Si preguntan preparación:
 Ayuno: no requiere ayuno salvo indicación puntual.
 Antihistamínicos/corticoides: responder orientación general breve.
