@@ -175,6 +175,7 @@ const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
 const SYMPTOM_DURATION_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_TYPE_FOR_PRICE_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS = 30 * 60 * 1000;
+const VIRTUAL_VISIT_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
 const INBOUND_MESSAGE_DEDUPLICATION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -206,7 +207,7 @@ const COMPANION_ALLOWED_MESSAGE = 'Sí, podés ir con acompañante. ¿Te sirve?'
 
 const OTHER_PROVINCES_MESSAGE = 'No atendemos en otras provincias. ¿Te sirve?';
 
-const VIRTUAL_VISITS_MESSAGE = 'Sí, hacemos consulta virtual/videollamada. ¿Te sirve?';
+const VIRTUAL_VISITS_MESSAGE = 'Sí, trabajamos con modalidad virtual. ¿Te sirve?';
 
 const STUDY_FASTING_MESSAGE = 'No, no hace falta ir en ayunas.';
 
@@ -624,6 +625,15 @@ function stateLooksLikeAwaitingStudyPriceHealthInsurance(state) {
     typeof state === 'object' &&
     state.state === 'awaiting_study_price_health_insurance' &&
     Number.isFinite(Number(state.awaitingStudyPriceHealthInsuranceAtMs))
+  );
+}
+
+function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_virtual_visit_confirmation' &&
+    Number.isFinite(Number(state.awaitingVirtualVisitConfirmationAtMs))
   );
 }
 
@@ -2694,6 +2704,21 @@ function messageAsksAboutStudyPrice(rawText) {
   );
 }
 
+function messageAsksWhatStudiesDoctorDoes(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('que estudios hace') ||
+    normalized.includes('qué estudios hace') ||
+    normalized.includes('que estudios realiza') ||
+    normalized.includes('qué estudios realiza') ||
+    normalized.includes('que practicas hace') ||
+    normalized.includes('qué prácticas hace') ||
+    normalized.includes('que practicas realiza') ||
+    normalized.includes('qué prácticas realiza')
+  );
+}
+
 function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
   if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return null;
   if (/osde/i.test(healthInsuranceName)) return 'OSDE';
@@ -2722,6 +2747,13 @@ function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
 
 async function buildStudiesInformationReply(priorState, rawText = '', options = {}) {
   const normalized = normalizeForMatch(rawText);
+  if (messageAsksWhatStudiesDoctorDoes(rawText)) {
+    const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+    if (sedeFromState) {
+      return `${STUDIES_INFORMATION_MESSAGE} En ${sedeFromState.displayName} se evalúan según el caso en consulta.`;
+    }
+    return `${STUDIES_INFORMATION_MESSAGE} Se evalúan según el caso en consulta.`;
+  }
   const studyTypeFromMessage = getStudyTypeFromText(rawText);
   const studyTypeFromState =
     priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string'
@@ -3773,6 +3805,64 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
+          if (stateLooksLikeAwaitingVirtualVisitConfirmation(priorState)) {
+            const nowMs = Date.now();
+            const isInWindow =
+              nowMs - Number(priorState.awaitingVirtualVisitConfirmationAtMs) <= VIRTUAL_VISIT_CONFIRMATION_WINDOW_MS;
+            if (isInWindow && messageConfirmsLinkSend(bodyText)) {
+              const lastSede = resolveLastSedeEntryFromState(priorState);
+              if (lastSede) {
+                const virtualBookingMessage = `¡Qué bueno! ${buildLinkMessage(lastSede)}`;
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  virtualBookingMessage,
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    {},
+                    {
+                      ...(wrapped.nextStatePatch || {}),
+                      ...(buildLinkSentStatePatch(lastSede) || {}),
+                      ...(buildLastSedeStatePatch(lastSede) || {}),
+                    }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              const askSedeWrapped = buildAutoReplyWithGreetingIfNeeded(
+                '¡Qué bueno! ¿Para qué sede querés agendar? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_booking_link_sede' },
+                  askSedeWrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, askSedeWrapped.messageText);
+              continue;
+            }
+            if (isInWindow && messageClearlyRejectsLinkSend(bodyText)) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'No hay problema! ¿Puedo ayudarte en algo más?',
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, {}, wrapped.nextStatePatch)
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+          }
           if (stateLooksLikeAwaitingStudyPriceHealthInsurance(priorState)) {
             const nowMs = Date.now();
             const isInWindow =
@@ -4123,6 +4213,12 @@ exports.handler = async (event) => {
                 greeted: true,
                 lastSeenAtMs: Date.now(),
                 lastBotReplyAtMs: Date.now(),
+                // Fresh greeting should not keep pending study-pricing context from earlier turns.
+                state: undefined,
+                awaitingStudyTypeForPriceAtMs: undefined,
+                awaitingStudyPriceHealthInsuranceAtMs: undefined,
+                lastStudyType: undefined,
+                lastStudyPriceContextAtMs: undefined,
               })
             );
             await sendWhatsAppText(from, greetingOnlyReply.firstMessage);
@@ -4167,6 +4263,12 @@ exports.handler = async (event) => {
                   greeted: true,
                   lastSeenAtMs: Date.now(),
                   lastBotReplyAtMs: Date.now(),
+                  // Fresh greeting should not keep pending study-pricing context from earlier turns.
+                  state: undefined,
+                  awaitingStudyTypeForPriceAtMs: undefined,
+                  awaitingStudyPriceHealthInsuranceAtMs: undefined,
+                  lastStudyType: undefined,
+                  lastStudyPriceContextAtMs: undefined,
                 }
               )
             );
@@ -4538,11 +4640,23 @@ exports.handler = async (event) => {
 
             const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
             const nextStatePatch = { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now(), lastBotReplyAtMs: Date.now() };
-            await setConversationState(from, {
-              ...(priorState || {}),
-              ...(sedeMentionedInMessage ? buildLastSedeStatePatch(sedeMentionedInMessage) : null),
-              ...nextStatePatch,
-            });
+            const shouldAwaitVirtualVisitConfirmation = messageAsksAboutVirtualVisit(bodyText);
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                shouldAwaitVirtualVisitConfirmation
+                  ? {
+                      state: 'awaiting_virtual_visit_confirmation',
+                      awaitingVirtualVisitConfirmationAtMs: Date.now(),
+                    }
+                  : priorState || {},
+                {
+                  ...(sedeMentionedInMessage ? buildLastSedeStatePatch(sedeMentionedInMessage) : null),
+                  ...nextStatePatch,
+                }
+              )
+            );
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
