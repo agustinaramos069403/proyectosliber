@@ -2727,7 +2727,23 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
     }
     const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
-    return `Con ${inferredHealthInsuranceName}, consulta + ${studyType} suma el valor de la consulta y $${formattedAmount} del estudio.`;
+    const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+    if (sedeFromState) {
+      const plusRule = await lookupPlusRule(sedeFromState.displayName, inferredHealthInsuranceName);
+      if (
+        plusRule &&
+        plusRule.isAccepted &&
+        plusRule.hasPlus &&
+        Number.isFinite(plusRule.plusAmountArs) &&
+        plusRule.plusAmountArs != null
+      ) {
+        const formattedPlusAmount = formatArsAmount(plusRule.plusAmountArs);
+        if (formattedPlusAmount) {
+          return `Con ${inferredHealthInsuranceName}, plus de $${formattedPlusAmount} + ${studyType} sería $${formattedAmount} del estudio.`;
+        }
+      }
+    }
+    return `Con ${inferredHealthInsuranceName}, ${studyType} sería $${formattedAmount} del estudio.`;
   }
 
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
