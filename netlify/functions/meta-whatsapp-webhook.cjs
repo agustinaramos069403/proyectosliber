@@ -176,6 +176,7 @@ const BOOKING_LINK_RECENTLY_SENT_MS = 5 * 60 * 1000;
 const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
+const SYMPTOM_DURATION_WINDOW_MS = 30 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
 const INBOUND_MESSAGE_DEDUPLICATION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -477,6 +478,46 @@ function messageLooksLikeFarewell(rawText) {
     normalized.includes('nos vemos') ||
     normalized.includes('que tengas buen dia') ||
     normalized.includes('que tengas buenas noches')
+  );
+}
+
+function messageLooksLikeChronicSymptomFrustration(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('me duele la nariz') ||
+    normalized.includes('me chorrea la nariz') ||
+    normalized.includes('congestion') ||
+    normalized.includes('congestión') ||
+    normalized.includes('dolor en el pecho') ||
+    normalized.includes('pecho cerrado') ||
+    normalized.includes('dificultad para respirar') ||
+    normalized.includes('hace anos') ||
+    normalized.includes('hace años') ||
+    normalized.includes('desde hace anos') ||
+    normalized.includes('desde hace años') ||
+    normalized.includes('probe de todo') ||
+    normalized.includes('probé de todo') ||
+    normalized.includes('los sintomas vuelven') ||
+    normalized.includes('los síntomas vuelven') ||
+    normalized.includes('noches sin dormir') ||
+    normalized.includes('ojos pegados') ||
+    normalized.includes('no puedo') ||
+    normalized.includes('dejo de') ||
+    normalized.includes('cansancio') ||
+    normalized.includes('mucho tiempo asi') ||
+    normalized.includes('mucho tiempo así') ||
+    normalized.includes('nada me funciona')
+  );
+}
+
+function stateLooksLikeAwaitingSymptomDuration(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_symptom_duration' &&
+    Number.isFinite(Number(state.symptomFirstAtMs))
   );
 }
 
@@ -3376,6 +3417,51 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
+          if (stateLooksLikeAwaitingSymptomDuration(priorState)) {
+            const nowMs = Date.now();
+            const isInWindow = nowMs - Number(priorState.symptomFirstAtMs) <= SYMPTOM_DURATION_WINDOW_MS;
+            if (isInWindow) {
+              const detectedSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+              const empathyMessage =
+                'Entiendo, llevar tiempo así es frustrante. Justamente para eso está el Dr. para evaluarte, diagnosticar bien y armar un plan que funcione.';
+              const empathyWrapped = buildAutoReplyWithGreetingIfNeeded(empathyMessage, profileDisplayName, priorState);
+              const nextState = mergeConversationStatePreservingGreeting(
+                priorState,
+                {},
+                {
+                  ...(empathyWrapped.nextStatePatch || {}),
+                  ...(detectedSede ? buildLastSedeStatePatch(detectedSede) : {}),
+                }
+              );
+              await setConversationState(from, nextState);
+              await sendWhatsAppText(from, empathyWrapped.messageText);
+              if (!detectedSede) {
+                await sendWhatsAppText(
+                  from,
+                  '¿Desde qué ciudad te consultás? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+                  { skipDelay: true }
+                );
+              }
+              continue;
+            }
+          }
+          if (messageLooksLikeChronicSymptomFrustration(bodyText)) {
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Lamento mucho que estés pasando por eso. ¿Desde hace cuánto tiempo tenés estos síntomas?',
+              profileDisplayName,
+              priorState
+            );
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                { state: 'awaiting_symptom_duration', symptomFirstAtMs: Date.now() },
+                wrapped.nextStatePatch
+              )
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
           if (needsChacoProvinceClarification(bodyText)) {
             const chacoWrapped = buildAutoReplyWithGreetingIfNeeded(
               CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE,
@@ -5233,7 +5319,7 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, processed);
             } else {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildAskSedeMessage(),
+                'Contame en qué te puedo ayudar.',
                 profileDisplayName,
                 priorState
               );
