@@ -670,7 +670,7 @@ function stateLooksLikeAwaitingStudyPriceHealthInsurance(state) {
   );
 }
 
-function hasRecentStudyPriceContext(state) {
+function stateHasRecentStudyPriceContext(state) {
   return (
     state &&
     typeof state === 'object' &&
@@ -4581,7 +4581,7 @@ exports.handler = async (event) => {
             } else if (primaryIntent === 'BOOKING') {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
-                if (hasRecentStudyPriceContext(priorState)) {
+                if (stateHasRecentStudyPriceContext(priorState)) {
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(
                     buildLinkMessage(lastSede),
                     profileDisplayName,
@@ -5313,7 +5313,7 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
-              if (hasRecentStudyPriceContext(priorState)) {
+              if (stateHasRecentStudyPriceContext(priorState)) {
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(
                   buildLinkMessage(sede),
                   profileDisplayName,
@@ -5465,7 +5465,7 @@ exports.handler = async (event) => {
             if (messageLooksLikeBookingIntent(bodyText)) {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
-                if (hasRecentStudyPriceContext(priorState)) {
+                if (stateHasRecentStudyPriceContext(priorState)) {
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(
                     buildLinkMessage(lastSede),
                     profileDisplayName,
