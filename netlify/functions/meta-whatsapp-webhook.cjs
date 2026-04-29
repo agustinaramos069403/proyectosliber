@@ -534,6 +534,36 @@ function messageLooksLikeFarewell(rawText) {
   );
 }
 
+function messageConfirmsAlreadyBooked(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('ya agende') ||
+    normalized.includes('ya agendé') ||
+    normalized.includes('ya saque turno') ||
+    normalized.includes('ya saqué turno') ||
+    normalized.includes('ya reserve') ||
+    normalized.includes('ya reservé') ||
+    normalized.includes('listo ya agende') ||
+    normalized.includes('listo ya agendé')
+  );
+}
+
+function buildAlreadyBookedReply(profileDisplayName) {
+  const safeName =
+    typeof profileDisplayName === 'string' && profileDisplayName.trim().length > 0
+      ? profileDisplayName.trim()
+      : null;
+  if (safeName) {
+    return `Qué bueno ${safeName}, te esperamos en el consultorio!`;
+  }
+  return 'Qué bueno, te esperamos en el consultorio!';
+}
+
 function messageLooksLikeChronicSymptomFrustration(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
@@ -3697,6 +3727,23 @@ exports.handler = async (event) => {
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(priorState, { state: 'conversation_closed' }, wrapped.nextStatePatch)
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+          if (messageConfirmsAlreadyBooked(bodyText)) {
+            const bookedReply = buildAlreadyBookedReply(profileDisplayName);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(bookedReply, profileDisplayName, priorState);
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                { state: 'conversation_closed' },
+                {
+                  ...(wrapped.nextStatePatch || {}),
+                  bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+                }
+              )
             );
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
