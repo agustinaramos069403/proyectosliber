@@ -622,6 +622,8 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
     normalized.includes('molesta') ||
     normalizedTextContainsApproxWord(normalized, 'duele', 1);
   return (
+    normalized.includes('me duele todo') ||
+    normalized.includes('me duele el cuerpo') ||
     normalized.includes('me duele la nariz') ||
     normalized.includes('me duele la garganta') ||
     normalized.includes('me duele mucho la garganta') ||
@@ -2355,6 +2357,10 @@ function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   return (
+    normalized.includes('tenes turnos') ||
+    normalized.includes('tenés turnos') ||
+    normalized.includes('tienes turnos') ||
+    normalized.includes('hay turnos') ||
     normalized.includes('hay turno para hoy') ||
     normalized.includes('hay turnos para hoy') ||
     normalized.includes('hay turno hoy') ||
@@ -2362,6 +2368,24 @@ function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
     normalized.includes('tienen disponibilidad') ||
     normalized.includes('tienen para esta semana') ||
     normalized.includes('hay para esta semana')
+  );
+}
+
+function messageAsksHowBookingWorks(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (
+    normalized === 'como es' ||
+    normalized === 'cómo es' ||
+    normalized === 'como seria' ||
+    normalized === 'cómo sería' ||
+    normalized === 'como funciona' ||
+    normalized === 'cómo funciona' ||
+    normalized === 'como hago' ||
+    normalized === 'cómo hago'
   );
 }
 
@@ -2918,6 +2942,14 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     normalized.includes('cuánto está') ||
     normalized.includes('precio') ||
     normalized.includes('valor');
+  const asksTotalAmount =
+    normalized.includes('total') ||
+    normalized.includes('cuanto seria mi total') ||
+    normalized.includes('cuanto sería mi total') ||
+    normalized.includes('cuanto seria el total') ||
+    normalized.includes('cuanto sería el total') ||
+    normalized.includes('total final') ||
+    normalized.includes('precio final');
 
   if (messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) {
     const formattedAmount = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
@@ -2967,10 +2999,16 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
           ? formatArsAmount(plusRule.plusAmountArs)
           : null;
       if (plusFormatted) {
+        if (asksTotalAmount) {
+          return `En ${lastSede.displayName}, con ${inferredHealthInsuranceName}, ${studyType} suma $${formattedAmount} del estudio y hay plus de $${plusFormatted}. El total exacto depende del valor de la consulta.`;
+        }
         return `Con ${inferredHealthInsuranceName}, plus de $${plusFormatted} + ${studyType} sería $${formattedAmount} del estudio.`;
       }
     }
     if (plusRule && plusRule.isAccepted && !plusRule.hasPlus) {
+      if (asksTotalAmount) {
+        return `En ${lastSede.displayName}, con ${inferredHealthInsuranceName}, ${studyType} suma $${formattedAmount} sobre la consulta y no tiene plus.`;
+      }
       return `Con ${inferredHealthInsuranceName}, sin plus. ${studyType} sería $${formattedAmount} del estudio.`;
     }
     if (plusRule && !plusRule.isAccepted) {
@@ -3916,6 +3954,43 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (messageAsksHowBookingWorks(bodyText)) {
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            if (lastSede) {
+              const reply = shouldOfferBookingLink(priorState)
+                ? 'Es sencillo: elegís el día y horario que te quede cómodo desde el link, y ya queda reservado tu turno. En la consulta, el Dr. te evalúa en detalle y arma un plan según tu caso. Si querés, te paso el link para que lo veas.'
+                : 'Es sencillo: elegís el día y horario que te quede cómodo desde el link, y ya queda reservado tu turno. En la consulta, el Dr. te evalúa en detalle y arma un plan según tu caso.';
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  shouldOfferBookingLink(priorState)
+                    ? buildAwaitingLinkConfirmationState(lastSede, 'after_booking_explanation')
+                    : priorState || {},
+                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              'Es sencillo: elegís el día y horario que te quede cómodo desde el link, y ya queda reservado tu turno. En la consulta, el Dr. te evalúa en detalle y arma un plan según tu caso. ¿Desde qué ciudad te consultás? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+              profileDisplayName,
+              priorState
+            );
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                { state: 'awaiting_sede_selection', awaitingSedeSelectionAtMs: Date.now() },
+                wrapped.nextStatePatch
+              )
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
+
           if (stateLooksLikeCollectingUserMessage(priorState)) {
             const pendingAtMs = Number(priorState.pendingUserTextAtMs);
             const isWithinWindow =
@@ -4384,16 +4459,24 @@ exports.handler = async (event) => {
             const sedeFromMessage = findSedeFromText(bodyText);
             const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
             if (!lastSede) {
-              await sendAskSedeTwoStep(
-                from,
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'Sí, hay turnos disponibles 😊 ¿En qué ciudad te gustaría atenderte? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
                 profileDisplayName,
-                priorState,
-                'Los días y horarios disponibles los podés ver directo en nuestra agenda digital.'
+                priorState
               );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_sede_selection', awaitingSedeSelectionAtMs: Date.now() },
+                  wrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Los días y horarios disponibles los podés ver directo en la agenda digital, así podés agendar fácilmente.',
+              'Sí, hay turnos disponibles 😊 Si querés, te paso el link para que elijas día y horario.',
               profileDisplayName,
               priorState
             );
@@ -4401,16 +4484,14 @@ exports.handler = async (event) => {
               from,
               mergeConversationStatePreservingGreeting(
                 priorState,
-                priorState || {},
+                buildAwaitingLinkConfirmationState(lastSede, 'after_realtime_availability_question'),
                 {
                   ...(wrapped.nextStatePatch || {}),
                   ...(buildLastSedeStatePatch(lastSede) || {}),
-                  ...(buildLinkSentStatePatch(lastSede) || {}),
                 }
               )
             );
             await sendWhatsAppText(from, wrapped.messageText);
-            await sendWhatsAppText(from, buildLinkMessage(lastSede), { skipDelay: true });
             continue;
           }
 
