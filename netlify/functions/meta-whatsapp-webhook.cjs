@@ -1585,7 +1585,7 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
 }
 
 function buildAskHealthInsuranceNameMessage() {
-  return 'Perfecto. ¿Qué obra social/prepaga tenés?';
+  return '¿Qué obra social/prepaga tenés? Te digo si la aceptamos.';
 }
 
 function messageLooksLikePrivatePriceQuestion(rawText) {
