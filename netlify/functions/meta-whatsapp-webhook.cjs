@@ -4241,6 +4241,23 @@ exports.handler = async (event) => {
           }
 
           if (messageAsksIfParticularIsAvailable(bodyText)) {
+            if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
+              const askOsWrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskHealthInsuranceNameMessage(bodyText),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_health_insurance_name' },
+                  askOsWrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, askOsWrapped.messageText);
+              continue;
+            }
             const lastSede = resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
