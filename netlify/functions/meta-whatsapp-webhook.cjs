@@ -1795,6 +1795,20 @@ function messageLooksLikePrivatePriceQuestion(rawText) {
   );
 }
 
+function messageLooksLikeAnyPriceQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('precio') ||
+    normalized.includes('valor') ||
+    normalized.includes('cuanto sale') ||
+    normalized.includes('cuanto cuesta') ||
+    normalized.includes('cuanto esta') ||
+    normalized.includes('cuánto está') ||
+    normalized.includes('cuanto es')
+  );
+}
+
 function messageAsksIfParticularIsAvailable(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText)
@@ -1828,6 +1842,7 @@ function formatArsAmount(amount) {
 function messageConfirmsLinkSend(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageClearlyRejectsLinkSend(rawText)) return false;
+  if (messageLooksLikeAnyPriceQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -5024,6 +5039,7 @@ exports.handler = async (event) => {
             // Clear the pending link-confirmation routing state but preserve the greeting session.
             const shouldBypassPendingLinkConfirmation =
               messageLooksLikePrivatePriceQuestion(bodyText) ||
+              messageLooksLikeAnyPriceQuestion(bodyText) ||
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
               messageAsksAboutStudiesOrTests(bodyText) ||
               messageAsksAboutConditionTreatment(bodyText) ||
