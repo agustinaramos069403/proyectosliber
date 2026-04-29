@@ -531,23 +531,43 @@ function messageLooksLikeFarewell(rawText) {
   );
 }
 
-function messageConfirmsAlreadyBooked(rawText) {
+function messageConfirmsAlreadyBooked(rawText, priorState = null) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return false;
-  return (
+  const confirmsBooked = (
     normalized.includes('ya agende') ||
     normalized.includes('ya agendé') ||
     normalized.includes('ya saque turno') ||
     normalized.includes('ya saqué turno') ||
     normalized.includes('ya reserve') ||
     normalized.includes('ya reservé') ||
+    normalized.includes('ya me anote') ||
+    normalized.includes('ya me anoté') ||
+    normalized === 'ya esta' ||
+    normalized === 'ya está' ||
+    normalized === 'ya esta listo' ||
+    normalized === 'ya está listo' ||
+    normalized === 'listo' ||
+    normalized === 'listo ya esta' ||
+    normalized === 'listo ya está' ||
     normalized.includes('listo ya agende') ||
     normalized.includes('listo ya agendé')
   );
+  if (!confirmsBooked) return false;
+  const hasBookingContext =
+    wasBookingLinkSentRecently(priorState) ||
+    stateLooksLikeAwaitingLinkConfirmation(priorState) ||
+    (priorState &&
+      typeof priorState === 'object' &&
+      (priorState.state === 'awaiting_booking_link_sede' ||
+        priorState.state === 'awaiting_sede_selection'));
+  // Allow explicit "turno" confirmations even if context was lost.
+  if (!hasBookingContext && !normalized.includes('turno')) return false;
+  return true;
 }
 
 function buildAlreadyBookedReply(profileDisplayName) {
@@ -3788,21 +3808,22 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
-          if (messageConfirmsAlreadyBooked(bodyText)) {
+          if (messageConfirmsAlreadyBooked(bodyText, priorState)) {
             const bookedReply = buildAlreadyBookedReply(profileDisplayName);
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(bookedReply, profileDisplayName, priorState);
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(
                 priorState,
                 { state: 'conversation_closed' },
                 {
-                  ...(wrapped.nextStatePatch || {}),
+                  greeted: true,
+                  lastSeenAtMs: Date.now(),
+                  lastBotReplyAtMs: Date.now(),
                   bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
                 }
               )
             );
-            await sendWhatsAppText(from, wrapped.messageText);
+            await sendWhatsAppText(from, bookedReply);
             continue;
           }
           if (stateLooksLikeAwaitingVirtualVisitConfirmation(priorState)) {
