@@ -87,6 +87,12 @@ Reglas informativas:
 
 - Los montos **no se inventan**.
 - La intención es abastecerlos desde Google Sheets (ver implementación actual en el webhook).
+- Reglas vigentes para estudios:
+  - Test de alergia: `$30.000` en todas las sedes.
+  - Espirometría con consulta: `$30.000`.
+  - Solo espirometría sin consulta: `$40.000`.
+  - Consulta particular + estudio: precio de consulta de la sede + `$30.000`.
+  - OSDE, Sancor e ISSUNNE: test/espirometría incluido en el valor de la consulta.
 
 ---
 

@@ -185,6 +185,9 @@ const USER_REPLY_COOLDOWN_MS = 6000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
+const STUDY_PRICE_WITH_CONSULTATION_ARS = 30000;
+const STANDALONE_SPIROMETRY_PRICE_ARS = 40000;
+const INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION = ['OSDE', 'Sancor', 'Isunne'];
 
 const DOCUMENTATION_REQUIREMENTS_MESSAGE =
   'Si tenés obra social: traé orden de consulta y las prácticas autorizadas. Si no: podés venir igual. ¿Te sirve?';
@@ -2468,14 +2471,84 @@ function buildConditionTreatmentReply(priorState, rawText) {
   return `${base} Para orientarte bien según el caso, lo ideal es una consulta de evaluación. ${buildAskSedeMessage()}`;
 }
 
-function buildStudiesInformationReply(priorState, rawText = '') {
-  if (messageLooksLikePrivatePriceQuestion(rawText)) {
+function getStudyTypeFromText(rawText) {
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('espirometr')) return 'espirometría';
+  if (normalized.includes('test de alerg') || normalized.includes('prick')) return 'test de alergia';
+  return null;
+}
+
+function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsSpirometry = normalized.includes('espirometr');
+  const mentionsWithoutConsultation =
+    normalized.includes('sin consulta') ||
+    normalized.includes('solo espirometr') ||
+    normalized.includes('solo la espirometr') ||
+    normalized.includes('espirometria sola') ||
+    normalized.includes('espirometría sola');
+  return mentionsSpirometry && mentionsWithoutConsultation;
+}
+
+function messageAsksAboutConsultationPlusStudy(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsConsultation = normalized.includes('consulta');
+  const mentionsPlus = normalized.includes('+') || normalized.includes('mas') || normalized.includes('más');
+  const mentionsStudy = normalized.includes('espirometr') || normalized.includes('test de alerg') || normalized.includes('prick');
+  return mentionsConsultation && mentionsStudy && mentionsPlus;
+}
+
+function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
+  if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return null;
+  if (/osde/i.test(healthInsuranceName)) return 'OSDE';
+  if (/sancor/i.test(healthInsuranceName)) return 'Sancor';
+  if (/isunne|issune|isune/i.test(healthInsuranceName)) return 'Isunne';
+  return healthInsuranceName;
+}
+
+async function buildStudiesInformationReply(priorState, rawText = '') {
+  const normalized = normalizeForMatch(rawText);
+  const studyType = getStudyTypeFromText(rawText) || 'estudio';
+  const inferredHealthInsuranceName = normalizeHealthInsuranceNameForStudyPricing(
+    tryExtractHealthInsuranceName(rawText)
+  );
+  const asksPrice =
+    messageLooksLikePrivatePriceQuestion(rawText) ||
+    normalized.includes('cuanto sale') ||
+    normalized.includes('cuanto cuesta') ||
+    normalized.includes('cuanto esta') ||
+    normalized.includes('cuánto está') ||
+    normalized.includes('precio') ||
+    normalized.includes('valor');
+
+  if (messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) {
+    const formattedAmount = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
+    return `Si querés solo espirometría sin consulta, sale $${formattedAmount}.`;
+  }
+
+  if (
+    inferredHealthInsuranceName &&
+    INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)
+  ) {
+    return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
+  }
+
+  if (messageAsksAboutConsultationPlusStudy(rawText) || (asksPrice && normalized.includes('particular'))) {
+    const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
     const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
     if (sedeFromState) {
-      return `Los valores se confirman en la consulta. Si querés, podés sacar un turno de evaluación en ${sedeFromState.displayName} y ahí te informan según el estudio.`;
+      return `En ${sedeFromState.displayName}, consulta particular + ${studyType} es el valor de la consulta de la sede + $${formattedAmount}.`;
     }
-    return `Los valores se confirman en la consulta. Si querés, podés sacar un turno de evaluación y ahí te informan según el estudio. ${buildAskSedeMessage()}`;
+    return `Consulta particular + ${studyType} es el valor de la consulta de la sede + $${formattedAmount}. ${buildAskSedeMessage()}`;
   }
+
+  if (asksPrice) {
+    const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
+    return `Depende de tu obra social, ¿cuál tenés? Si es particular, consulta + ${studyType} suma $${formattedAmount}.`;
+  }
+
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (sedeFromState) {
     return `${STUDIES_INFORMATION_MESSAGE} Para confirmarte cómo se realiza en tu situación y en ${sedeFromState.displayName}, lo ideal es sacar un turno para evaluación.`;
@@ -3963,8 +4036,9 @@ exports.handler = async (event) => {
                   : {};
               await setConversationState(from, preservedSessionState);
             }
+            const studiesReply = await buildStudiesInformationReply(priorState, bodyText);
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              buildStudiesInformationReply(priorState, bodyText),
+              studiesReply,
               profileDisplayName,
               priorState
             );
