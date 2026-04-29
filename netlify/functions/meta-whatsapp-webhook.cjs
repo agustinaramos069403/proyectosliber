@@ -2868,10 +2868,10 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     if (!lastSede) {
       return `Sí, el Dr. realiza ${studyTypeFromMessage}. ¿Desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
     }
-    return appendBookingLinkOfferIfAllowed(
-      priorState,
-      `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName}.`
-    );
+    if (knownHealthInsuranceName) {
+      return `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName} con ${knownHealthInsuranceName}. ¿Querés que te cuente el valor o preferís agendar?`;
+    }
+    return `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName}. ¿Querés que te cuente el valor o preferís agendar?`;
   }
 
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
