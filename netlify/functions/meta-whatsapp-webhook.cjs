@@ -451,17 +451,32 @@ function messageLooksLikeFarewell(rawText) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return false;
+  // Never treat active intents as a farewell, even if they contain polite words.
+  if (messageLooksLikeBookingIntent(rawText)) return false;
+  if (messageExplicitlyRequestsBookingLink(rawText)) return false;
+  if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return false;
+  if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
+  if (messageLooksLikeScheduleAvailabilityQuestion(rawText)) return false;
+  if (messageLooksLikeRealtimeAvailabilityQuestion(rawText)) return false;
+  if (messageAsksAboutStudiesOrTests(rawText)) return false;
+  if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return false;
+  if (messageIsGreeting(rawText)) return false;
+
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  if (wordCount > 6) return false;
+
   return (
-    normalized.includes('muchas gracias') ||
     normalized === 'gracias' ||
+    normalized === 'muchas gracias' ||
     normalized === 'ok gracias' ||
+    normalized === 'gracias bye' ||
     normalized.includes('hasta luego') ||
     normalized === 'chau' ||
     normalized === 'ok chau' ||
     normalized === 'bye' ||
     normalized.includes('nos vemos') ||
-    normalized.includes('buen dia') ||
-    normalized.includes('buenas noches')
+    normalized.includes('que tengas buen dia') ||
+    normalized.includes('que tengas buenas noches')
   );
 }
 
