@@ -500,6 +500,9 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   const normalized = normalizeForMatch(rawText);
   return (
     normalized.includes('me duele la nariz') ||
+    normalized.includes('me duele la garganta') ||
+    normalized.includes('me duele mucho la garganta') ||
+    normalized.includes('dolor de garganta') ||
     normalized.includes('me chorrea la nariz') ||
     normalized.includes('congestion') ||
     normalized.includes('congestión') ||
@@ -4307,6 +4310,7 @@ exports.handler = async (event) => {
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
               messageAsksAboutStudiesOrTests(bodyText) ||
               messageAsksAboutConditionTreatment(bodyText) ||
+              messageLooksLikeChronicSymptomFrustration(bodyText) ||
               messageExplicitlyRequestsBookingLink(bodyText) ||
               messageLooksLikeBookingIntent(bodyText);
             if (shouldBypassPendingLinkConfirmation) {
