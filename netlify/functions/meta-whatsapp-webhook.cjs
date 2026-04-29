@@ -4229,7 +4229,12 @@ exports.handler = async (event) => {
             priorState.lastStudyType.trim().length > 0 &&
             Number.isFinite(Number(priorState.lastStudyPriceContextAtMs)) &&
             Date.now() - Number(priorState.lastStudyPriceContextAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
-          if (hasRecentStudyPriceContext && messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
+          const hasFreshStudyMentionInCurrentMessage = Boolean(getStudyTypeFromText(bodyText));
+          if (
+            hasRecentStudyPriceContext &&
+            messageLooksLikeHealthInsurancePlusQuestion(bodyText) &&
+            !hasFreshStudyMentionInCurrentMessage
+          ) {
             const extractedHealthInsuranceName =
               tryExtractHealthInsuranceName(bodyText) || (await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText));
             if (extractedHealthInsuranceName) {
