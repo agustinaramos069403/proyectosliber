@@ -4643,7 +4643,7 @@ exports.handler = async (event) => {
             const studiesStatePatch = {
               ...(wrapped.nextStatePatch || {}),
               ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
-              ...(messageAsksAboutStudyPrice(bodyText) || isAwaitingStudyTypeForPrice
+              ...(messageAsksAboutStudyPrice(bodyText) || isAwaitingStudyTypeForPrice || Boolean(detectedStudyType)
                 ? { lastStudyPriceContextAtMs: Date.now() }
                 : {}),
               ...(shouldAwaitStudyTypeForPrice
