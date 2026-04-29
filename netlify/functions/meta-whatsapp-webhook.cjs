@@ -2648,6 +2648,9 @@ function getStudyTypeFromText(rawText) {
   const normalized = normalizeForMatch(rawText);
   if (normalized.includes('espirometr')) return 'espirometría';
   if (normalized.includes('test de alerg') || normalized.includes('prick')) return 'test de alergia';
+  if (normalized.includes('test del parche') || normalized.includes('patch') || normalized.includes('parche')) {
+    return 'test del parche';
+  }
   return null;
 }
 
@@ -2728,6 +2731,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
   const studyType = studyTypeFromMessage || studyTypeFromState || 'estudio';
   const forcePriceFlow = Boolean(options.forcePriceFlow);
   const inferredHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+  const lastSede = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   const asksPrice =
     messageLooksLikePrivatePriceQuestion(rawText) ||
     messageAsksAboutStudyPrice(rawText) ||
@@ -2764,16 +2768,21 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     if (!studyTypeFromMessage && !studyTypeFromState) {
       return '¿Querés saber el valor de espirometría o de test de alergia?';
     }
+    if (!inferredHealthInsuranceName && !lastSede) {
+      return `Antes de pasarte el valor, contame qué obra social/prepaga tenés y desde qué ciudad te consultás. ${buildAskSedeMessage()}`;
+    }
     if (!inferredHealthInsuranceName) {
       return 'Antes de pasarte el valor, ¿qué obra social/prepaga tenés?';
+    }
+    if (!lastSede) {
+      return `Antes de pasarte el valor final, ¿desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
     }
     if (INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)) {
       return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
     }
     const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
-    const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
-    if (sedeFromState) {
-      const plusRule = await lookupPlusRule(sedeFromState.displayName, inferredHealthInsuranceName);
+    if (lastSede) {
+      const plusRule = await lookupPlusRule(lastSede.displayName, inferredHealthInsuranceName);
       if (
         plusRule &&
         plusRule.isAccepted &&
@@ -2788,6 +2797,23 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       }
     }
     return `Con ${inferredHealthInsuranceName}, ${studyType} sería $${formattedAmount} del estudio.`;
+  }
+
+  if (studyTypeFromMessage) {
+    const knownHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+    if (!knownHealthInsuranceName && !lastSede) {
+      return `Sí, el Dr. realiza ${studyTypeFromMessage}. Contame qué obra social/prepaga tenés y desde qué ciudad te consultás. ${buildAskSedeMessage()}`;
+    }
+    if (!knownHealthInsuranceName) {
+      return `Sí, el Dr. realiza ${studyTypeFromMessage}. Contame qué obra social/prepaga tenés.`;
+    }
+    if (!lastSede) {
+      return `Sí, el Dr. realiza ${studyTypeFromMessage}. ¿Desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
+    }
+    return appendBookingLinkOfferIfAllowed(
+      priorState,
+      `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName}.`
+    );
   }
 
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
