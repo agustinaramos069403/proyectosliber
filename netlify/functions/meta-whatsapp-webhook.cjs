@@ -3723,6 +3723,46 @@ exports.handler = async (event) => {
               continue;
             }
           }
+          const hasRecentStudyPriceContext =
+            priorState &&
+            typeof priorState === 'object' &&
+            typeof priorState.lastStudyType === 'string' &&
+            priorState.lastStudyType.trim().length > 0 &&
+            Number.isFinite(Number(priorState.lastStudyPriceContextAtMs)) &&
+            Date.now() - Number(priorState.lastStudyPriceContextAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
+          if (hasRecentStudyPriceContext && messageLooksLikeHealthInsurancePlusQuestion(bodyText)) {
+            const extractedHealthInsuranceName =
+              tryExtractHealthInsuranceName(bodyText) || (await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText));
+            if (extractedHealthInsuranceName) {
+              const enrichedState = mergeConversationStatePreservingGreeting(
+                priorState,
+                priorState || {},
+                {
+                  healthInsuranceName: extractedHealthInsuranceName,
+                  lastHealthInsuranceName: extractedHealthInsuranceName,
+                }
+              );
+              const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
+                forcePriceFlow: true,
+              });
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, enrichedState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  enrichedState,
+                  enrichedState || {},
+                  {
+                    ...(wrapped.nextStatePatch || {}),
+                    healthInsuranceName: extractedHealthInsuranceName,
+                    lastHealthInsuranceName: extractedHealthInsuranceName,
+                    lastStudyPriceContextAtMs: Date.now(),
+                  }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+          }
           if (stateLooksLikeAwaitingSymptomDuration(priorState)) {
             const nowMs = Date.now();
             const isInWindow = nowMs - Number(priorState.symptomFirstAtMs) <= SYMPTOM_DURATION_WINDOW_MS;
@@ -4293,6 +4333,9 @@ exports.handler = async (event) => {
             const studiesStatePatch = {
               ...(wrapped.nextStatePatch || {}),
               ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+              ...(messageAsksAboutStudyPrice(bodyText) || isAwaitingStudyTypeForPrice
+                ? { lastStudyPriceContextAtMs: Date.now() }
+                : {}),
               ...(shouldAwaitStudyTypeForPrice
                 ? {
                     state: 'awaiting_study_type_for_price',
