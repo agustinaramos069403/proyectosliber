@@ -2962,6 +2962,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     normalized.includes('valor');
   const asksTotalAmount =
     normalized.includes('total') ||
+    normalized.includes('valor final') ||
     normalized.includes('cuanto seria mi total') ||
     normalized.includes('cuanto sería mi total') ||
     normalized.includes('cuanto seria el total') ||
@@ -4230,6 +4231,30 @@ exports.handler = async (event) => {
             Number.isFinite(Number(priorState.lastStudyPriceContextAtMs)) &&
             Date.now() - Number(priorState.lastStudyPriceContextAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
           const hasFreshStudyMentionInCurrentMessage = Boolean(getStudyTypeFromText(bodyText));
+          if (hasRecentStudyPriceContext && messageLooksLikeBookingIntent(bodyText)) {
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            if (lastSede) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildLinkMessage(lastSede),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  priorState || {},
+                  {
+                    ...(wrapped.nextStatePatch || {}),
+                    ...(buildLinkSentStatePatch(lastSede) || {}),
+                    ...(buildLastSedeStatePatch(lastSede) || {}),
+                  }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+          }
           if (
             hasRecentStudyPriceContext &&
             messageLooksLikeHealthInsurancePlusQuestion(bodyText) &&
