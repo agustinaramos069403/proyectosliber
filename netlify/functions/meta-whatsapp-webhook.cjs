@@ -2004,6 +2004,10 @@ function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
     sedeEnvKey: entry.envKey,
     sedeDisplayName: entry.displayName,
     sedeOptionNumber: entry.optionNumber,
+    lastSedeEnvKey: entry.envKey,
+    lastSedeDisplayName: entry.displayName,
+    lastSedeOptionNumber: entry.optionNumber,
+    lastSedeAtMs: Date.now(),
     reason,
     ...(detailsObject ? detailsObject : {}),
   };
