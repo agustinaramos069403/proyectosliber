@@ -4483,7 +4483,11 @@ exports.handler = async (event) => {
             }
           }
 
-          if (!stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
+          if (
+            !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
+            !messageLooksLikeBookingIntent(bodyText) &&
+            messageConfirmsLinkSend(bodyText)
+          ) {
             if (messageExplicitlyRequestsBookingLink(bodyText)) {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
