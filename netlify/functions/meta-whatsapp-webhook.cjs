@@ -1656,6 +1656,7 @@ function tryExtractHealthInsuranceName(rawText) {
     if (normalized.includes('ase')) return 'AMMECO ASE';
     if (normalized.includes('ospuaye')) return 'AMMECO OSPUAYE';
   }
+  if (normalized.includes('sancor mutual') || normalized.includes('mutual sancor')) return 'Sancor Mutual';
   if (normalized.includes('sancor')) return 'Sancor';
   if (normalized.includes('osde')) return 'OSDE';
   if (normalized.includes('isunne') || normalized.includes('issune') || normalized.includes('isune')) return 'Isunne';
@@ -1710,7 +1711,7 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     const osNormalized = normalizeForMatch(healthInsuranceName);
     const isOsde = osNormalized.includes('osde');
     const isIsunne = osNormalized.includes('isunne');
-    const isSancor = osNormalized.includes('sancor');
+    const isSancor = osNormalized.includes('sancor') && !osNormalized.includes('mutual');
     const isKnownNoPlus =
       (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
       (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
@@ -2124,7 +2125,7 @@ async function buildHealthInsuranceSummary(cityEntry, healthInsuranceName) {
     const osNormalized = normalizeForMatch(healthInsuranceName);
     const isOsde = osNormalized.includes('osde');
     const isIsunne = osNormalized.includes('isunne');
-    const isSancor = osNormalized.includes('sancor');
+    const isSancor = osNormalized.includes('sancor') && !osNormalized.includes('mutual');
     const isKnownNoPlus =
       (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
       (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
@@ -2404,6 +2405,8 @@ function messageAsksIfDoctorTreatsChildren(rawText) {
     /\bnini(?:o|a|os|as)\b/.test(normalized) ||
     /\bbebes?\b/.test(normalized) ||
     /\bnenes?\b/.test(normalized) ||
+    normalized.includes('adolesc') ||
+    normalized.includes('adolecent') ||
     normalized.includes('pediatr') ||
     normalized.includes('infantil')
   );
@@ -2824,7 +2827,7 @@ function messageAsksWhatStudiesDoctorDoes(rawText) {
 function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
   if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return null;
   if (/osde/i.test(healthInsuranceName)) return 'OSDE';
-  if (/sancor/i.test(healthInsuranceName)) return 'Sancor';
+  if (/sancor/i.test(healthInsuranceName) && !/mutual/i.test(healthInsuranceName)) return 'Sancor';
   if (/isunne|issune|isune/i.test(healthInsuranceName)) return 'Isunne';
   return healthInsuranceName;
 }
@@ -4689,7 +4692,7 @@ exports.handler = async (event) => {
             const lastSede = resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                'Sí, el Dr. atiende niños y adultos.',
+                'Sí, el Dr. atiende niños, adolescentes y adultos.',
                 profileDisplayName,
                 priorState
               );
@@ -4699,7 +4702,12 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
-            await sendAskSedeTwoStep(from, profileDisplayName, priorState, 'Sí, el Dr. atiende niños y adultos.');
+            await sendAskSedeTwoStep(
+              from,
+              profileDisplayName,
+              priorState,
+              'Sí, el Dr. atiende niños, adolescentes y adultos.'
+            );
             continue;
           }
 
