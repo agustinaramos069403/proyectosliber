@@ -1420,12 +1420,15 @@ function buildGreetingSentence(profileDisplayName) {
   return 'Hola, soy la asistente del Dr. Liber Acosta 😊.';
 }
 
-function buildGreetingOnlyOpeningMessage(profileDisplayName, priorState) {
+function buildGreetingOnlyOpeningMessages(profileDisplayName, priorState) {
   const alreadyGreetedInSession = shouldTreatAsAlreadyGreeted(priorState, Date.now());
   if (alreadyGreetedInSession) {
-    return 'Hola de nuevo 😊 Contame en qué te puedo ayudar.';
+    return {
+      firstMessage: '¡Hola! 😊 Qué bueno que volvés a elegir al Dr.',
+      secondMessage: 'Contame en qué te puedo ayudar.',
+    };
   }
-  return `${buildGreetingSentence(profileDisplayName)} Contame en qué te puedo ayudar.`;
+  return { firstMessage: `${buildGreetingSentence(profileDisplayName)} Contame en qué te puedo ayudar.`, secondMessage: null };
 }
 
 const GREETING_SESSION_RESET_MS = 20 * 60 * 1000;
@@ -4117,7 +4120,7 @@ exports.handler = async (event) => {
               );
               continue;
             }
-            const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, priorState);
+            const greetingOnlyReply = buildGreetingOnlyOpeningMessages(profileDisplayName, priorState);
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
@@ -4126,7 +4129,10 @@ exports.handler = async (event) => {
                 lastBotReplyAtMs: Date.now(),
               })
             );
-            await sendWhatsAppText(from, greetingOnlyReply);
+            await sendWhatsAppText(from, greetingOnlyReply.firstMessage);
+            if (greetingOnlyReply.secondMessage) {
+              await sendWhatsAppText(from, greetingOnlyReply.secondMessage, { skipDelay: true });
+            }
             continue;
           }
 
@@ -4155,7 +4161,7 @@ exports.handler = async (event) => {
           }
 
           if (messageLooksLikeGreetingOnly(bodyText)) {
-            const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, priorState);
+            const greetingOnlyReply = buildGreetingOnlyOpeningMessages(profileDisplayName, priorState);
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(
@@ -4168,7 +4174,10 @@ exports.handler = async (event) => {
                 }
               )
             );
-            await sendWhatsAppText(from, greetingOnlyReply);
+            await sendWhatsAppText(from, greetingOnlyReply.firstMessage);
+            if (greetingOnlyReply.secondMessage) {
+              await sendWhatsAppText(from, greetingOnlyReply.secondMessage, { skipDelay: true });
+            }
             continue;
           }
 
@@ -4841,27 +4850,26 @@ exports.handler = async (event) => {
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
             !messageLooksLikeBookingIntent(bodyText) &&
+            (messageExplicitlyRequestsBookingLink(bodyText) || wasBookingLinkSentRecently(priorState)) &&
             messageConfirmsLinkSend(bodyText)
           ) {
-            if (messageExplicitlyRequestsBookingLink(bodyText)) {
-              const lastSede = resolveLastSedeEntryFromState(priorState);
-              if (lastSede) {
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                  buildLinkMessage(lastSede),
-                  profileDisplayName,
-                  priorState
-                );
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(
-                    priorState,
-                    priorState || {},
-                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
-                  )
-                );
-                await sendWhatsAppText(from, wrapped.messageText);
-                continue;
-              }
+            const lastSede = resolveLastSedeEntryFromState(priorState);
+            if (messageExplicitlyRequestsBookingLink(bodyText) && lastSede) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildLinkMessage(lastSede),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  priorState || {},
+                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
             }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               'Perfecto. ¿Para qué sede querés el link? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
