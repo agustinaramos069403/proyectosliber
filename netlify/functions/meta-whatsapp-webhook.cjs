@@ -498,11 +498,19 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  const hasThroatPainSignal =
+    normalized.includes('garganta') ||
+    normalized.includes('grganta') ||
+    normalized.includes('gargnta') ||
+    normalized.includes('garaganta') ||
+    /\bg[ae]?r?g?anta\b/.test(normalized);
   return (
     normalized.includes('me duele la nariz') ||
     normalized.includes('me duele la garganta') ||
     normalized.includes('me duele mucho la garganta') ||
     normalized.includes('dolor de garganta') ||
+    (hasThroatPainSignal &&
+      (normalized.includes('me duele') || normalized.includes('dolor') || normalized.includes('molesta'))) ||
     normalized.includes('me chorrea la nariz') ||
     normalized.includes('congestion') ||
     normalized.includes('congestión') ||
