@@ -176,6 +176,7 @@ const SYMPTOM_DURATION_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_TYPE_FOR_PRICE_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS = 30 * 60 * 1000;
 const VIRTUAL_VISIT_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
+const CONVERSATION_CLOSED_GRACE_WINDOW_MS = 3 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
 const INBOUND_MESSAGE_DEDUPLICATION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -528,6 +529,27 @@ function messageLooksLikeFarewell(rawText) {
     normalized.includes('nos vemos') ||
     normalized.includes('que tengas buen dia') ||
     normalized.includes('que tengas buenas noches')
+  );
+}
+
+function messageLooksLikeClosingAcknowledgement(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const tokens = tokenizeNormalizedText(normalized);
+  const hasThanksToken =
+    tokens.some((token) => token.includes('grac')) ||
+    tokens.some((token) => computeLevenshteinDistance(token, 'gracias') <= 2);
+  return (
+    hasThanksToken ||
+    normalized === 'ok' ||
+    normalized === 'oka' ||
+    normalized === 'listo' ||
+    normalized === 'ya esta' ||
+    normalized === 'ya está'
   );
 }
 
@@ -1433,8 +1455,8 @@ function appendBookingLinkOfferIfAllowed(priorState, messageText) {
   return `${messageText} ¿Querés que te pase el link para ver horarios disponibles y reservar?`.trim();
 }
 
-function buildMicroCommitmentMessageWithState(priorState) {
-  if (!shouldOfferBookingLink(priorState)) return buildAnythingElseHelpMessage(priorState);
+function buildMicroCommitmentMessageWithState(priorState, forceOffer = false) {
+  if (!forceOffer && !shouldOfferBookingLink(priorState)) return buildAnythingElseHelpMessage(priorState);
   return buildMicroCommitmentMessage();
 }
 
@@ -2988,6 +3010,43 @@ function messageAsksToBookWithoutLink(rawText) {
   );
 }
 
+function messageAsksIfAssistantCanBookForUser(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('vos no lo podes hacer por mi') ||
+    normalized.includes('vos no lo podés hacer por mí') ||
+    normalized.includes('no lo podes hacer por mi') ||
+    normalized.includes('no lo podés hacer por mí') ||
+    normalized.includes('lo podes hacer por mi') ||
+    normalized.includes('lo podés hacer por mí') ||
+    normalized.includes('podes hacerlo vos') ||
+    normalized.includes('podés hacerlo vos') ||
+    normalized.includes('lo haces vos') ||
+    normalized.includes('lo hacés vos') ||
+    normalized.includes('agendamelo vos') ||
+    normalized.includes('agendámelo vos')
+  );
+}
+
+function buildSelfBookingRequiredReply(priorState) {
+  const urlFromState =
+    priorState && typeof priorState === 'object' && typeof priorState.lastBookingLinkUrl === 'string'
+      ? priorState.lastBookingLinkUrl
+      : null;
+  if (urlFromState) {
+    return `Entiendo, me encantaría ayudarte con eso. No puedo agendar por vos desde acá, pero podés hacerlo en este link:\n${urlFromState}\nSi querés, te acompaño paso a paso.`;
+  }
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (lastSede) {
+    const url = getAgendaUrl(lastSede);
+    if (url) {
+      return `Entiendo, me encantaría ayudarte con eso. No puedo agendar por vos desde acá, pero podés hacerlo en este link:\n${url}\nSi querés, te acompaño paso a paso.`;
+    }
+  }
+  return 'Entiendo, me encantaría ayudarte con eso. No puedo agendar por vos desde acá, pero te paso el link y lo hacemos juntos.';
+}
+
 function messageAsksToRescheduleOrCancelBooking(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -3795,6 +3854,24 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, urgencyWrapped.messageText);
             continue;
           }
+          if (
+            priorState &&
+            typeof priorState === 'object' &&
+            priorState.state === 'conversation_closed' &&
+            Number.isFinite(Number(priorState.conversationClosedAtMs)) &&
+            Date.now() - Number(priorState.conversationClosedAtMs) <= CONVERSATION_CLOSED_GRACE_WINDOW_MS &&
+            (messageLooksLikeFarewell(bodyText) ||
+              messageLooksLikeClosingAcknowledgement(bodyText) ||
+              messageIsAcknowledgement(bodyText))
+          ) {
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                lastSeenAtMs: Date.now(),
+              })
+            );
+            continue;
+          }
           if (messageLooksLikeFarewell(bodyText)) {
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               'Gracias a vos 😊 Cualquier consulta que te surja, escribime. Hasta pronto.',
@@ -3803,7 +3880,11 @@ exports.handler = async (event) => {
             );
             await setConversationState(
               from,
-              mergeConversationStatePreservingGreeting(priorState, { state: 'conversation_closed' }, wrapped.nextStatePatch)
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                { state: 'conversation_closed' },
+                { ...(wrapped.nextStatePatch || {}), conversationClosedAtMs: Date.now() }
+              )
             );
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
@@ -3819,6 +3900,7 @@ exports.handler = async (event) => {
                   greeted: true,
                   lastSeenAtMs: Date.now(),
                   lastBotReplyAtMs: Date.now(),
+                  conversationClosedAtMs: Date.now(),
                   bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
                 }
               )
@@ -4034,6 +4116,17 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (messageAsksIfAssistantCanBookForUser(bodyText)) {
+            const preservedSessionState = mergeConversationStatePreservingGreeting(priorState, priorState || {}, null);
+            await setConversationState(from, preservedSessionState);
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(
+              buildSelfBookingRequiredReply(priorState),
+              profileDisplayName,
+              preservedSessionState
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
+          }
           if (messageAsksToBookWithoutLink(bodyText)) {
             const preservedSessionState = mergeConversationStatePreservingGreeting(
               priorState,
@@ -4492,7 +4585,7 @@ exports.handler = async (event) => {
             } else if (primaryIntent === 'BOOKING') {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
-                const micro = buildMicroCommitmentMessageWithState(priorState);
+                const micro = buildMicroCommitmentMessageWithState(priorState, true);
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
                 await setConversationState(
                   from,
@@ -5204,7 +5297,7 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
-              const micro = buildMicroCommitmentMessageWithState(priorState);
+              const micro = buildMicroCommitmentMessageWithState(priorState, true);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
               await setConversationState(
                 from,
@@ -5339,7 +5432,7 @@ exports.handler = async (event) => {
             if (messageLooksLikeBookingIntent(bodyText)) {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
-                const micro = buildMicroCommitmentMessageWithState(priorState);
+                const micro = buildMicroCommitmentMessageWithState(priorState, true);
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
                 await setConversationState(
                   from,
