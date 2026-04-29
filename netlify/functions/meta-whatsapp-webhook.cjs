@@ -178,6 +178,7 @@ const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
 const SYMPTOM_DURATION_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_TYPE_FOR_PRICE_WINDOW_MS = 30 * 60 * 1000;
+const STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS = 30 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
 const SENSITIVE_DATA_WARNING_COOLDOWN_MS = 10 * 60 * 1000;
 const INBOUND_MESSAGE_DEDUPLICATION_TTL_MS = 2 * 60 * 60 * 1000;
@@ -574,6 +575,15 @@ function stateLooksLikeAwaitingStudyTypeForPrice(state) {
     typeof state === 'object' &&
     state.state === 'awaiting_study_type_for_price' &&
     Number.isFinite(Number(state.awaitingStudyTypeForPriceAtMs))
+  );
+}
+
+function stateLooksLikeAwaitingStudyPriceHealthInsurance(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    state.state === 'awaiting_study_price_health_insurance' &&
+    Number.isFinite(Number(state.awaitingStudyPriceHealthInsuranceAtMs))
   );
 }
 
@@ -3661,6 +3671,58 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
+          if (stateLooksLikeAwaitingStudyPriceHealthInsurance(priorState)) {
+            const nowMs = Date.now();
+            const isInWindow =
+              nowMs - Number(priorState.awaitingStudyPriceHealthInsuranceAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
+            if (isInWindow) {
+              const extractedHealthInsuranceName =
+                tryExtractHealthInsuranceName(bodyText) || (await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText));
+              if (extractedHealthInsuranceName) {
+                const enrichedState = mergeConversationStatePreservingGreeting(
+                  priorState,
+                  {},
+                  {
+                    healthInsuranceName: extractedHealthInsuranceName,
+                    lastHealthInsuranceName: extractedHealthInsuranceName,
+                  }
+                );
+                const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
+                  forcePriceFlow: true,
+                });
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, enrichedState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    enrichedState,
+                    {},
+                    {
+                      ...(wrapped.nextStatePatch || {}),
+                      healthInsuranceName: extractedHealthInsuranceName,
+                      lastHealthInsuranceName: extractedHealthInsuranceName,
+                    }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                'Antes de pasarte el valor, ¿qué obra social/prepaga tenés?',
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_study_price_health_insurance', awaitingStudyPriceHealthInsuranceAtMs: nowMs },
+                  wrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+          }
           if (stateLooksLikeAwaitingSymptomDuration(priorState)) {
             const nowMs = Date.now();
             const isInWindow = nowMs - Number(priorState.symptomFirstAtMs) <= SYMPTOM_DURATION_WINDOW_MS;
@@ -4224,6 +4286,10 @@ exports.handler = async (event) => {
               (priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string');
             const shouldAwaitStudyTypeForPrice =
               messageAsksAboutStudyPrice(bodyText) && !hasStudyTypeContext;
+            const shouldAwaitStudyPriceHealthInsurance =
+              messageAsksAboutStudyPrice(bodyText) &&
+              hasStudyTypeContext &&
+              !resolveKnownHealthInsuranceNameForStudyPricing(priorState, bodyText);
             const studiesStatePatch = {
               ...(wrapped.nextStatePatch || {}),
               ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
@@ -4231,6 +4297,12 @@ exports.handler = async (event) => {
                 ? {
                     state: 'awaiting_study_type_for_price',
                     awaitingStudyTypeForPriceAtMs: Date.now(),
+                  }
+                : {}),
+              ...(shouldAwaitStudyPriceHealthInsurance
+                ? {
+                    state: 'awaiting_study_price_health_insurance',
+                    awaitingStudyPriceHealthInsuranceAtMs: Date.now(),
                   }
                 : {}),
               ...(!shouldAwaitStudyTypeForPrice && isAwaitingStudyTypeForPrice
