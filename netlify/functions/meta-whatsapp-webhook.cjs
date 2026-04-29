@@ -2709,6 +2709,30 @@ function messageAsksToTalkToDoctor(rawText) {
   );
 }
 
+function messageAsksForPhoneCall(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('me pueden llamar') ||
+    normalized.includes('me podrian llamar') ||
+    normalized.includes('me podrían llamar') ||
+    normalized.includes('pueden llamarme') ||
+    normalized.includes('podrian llamarme') ||
+    normalized.includes('podrían llamarme') ||
+    normalized.includes('llamenme') ||
+    normalized.includes('llámenme') ||
+    normalized.includes('llamame') ||
+    normalized.includes('llamame por telefono') ||
+    normalized.includes('llamame por teléfono') ||
+    normalized.includes('llamar por telefono') ||
+    normalized.includes('llamar por teléfono')
+  );
+}
+
+function buildPhoneCallRequestReply() {
+  return 'Te recomiendo que me envíes tu consulta por acá. Así puedo ayudarte mejor, ya que no recibimos llamadas.';
+}
+
 function buildTalkToDoctorReply(priorState) {
   const base =
     'El Dr. no atiende consultas previas por WhatsApp, pero en el turno te dedica el tiempo completo.';
@@ -4893,6 +4917,31 @@ exports.handler = async (event) => {
             if (shouldOfferBookingLink(priorState) && !lastSede) {
               await sendAskSedeTwoStep(from, profileDisplayName, priorState);
             }
+            continue;
+          }
+
+          if (messageAsksForPhoneCall(bodyText)) {
+            if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+              const preservedSessionState =
+                priorState && typeof priorState === 'object'
+                  ? {
+                      greeted: Boolean(priorState.greeted),
+                      lastSeenAtMs: priorState.lastSeenAtMs,
+                      lastSedeEnvKey: priorState.lastSedeEnvKey,
+                      lastSedeDisplayName: priorState.lastSedeDisplayName,
+                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+                      lastSedeAtMs: priorState.lastSedeAtMs,
+                      lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+                    }
+                  : {};
+              await setConversationState(from, preservedSessionState);
+            }
+            const reply = buildPhoneCallRequestReply();
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+            if (wrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...wrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
 
