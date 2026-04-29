@@ -1819,11 +1819,14 @@ function messageLooksLikeAnyPriceQuestion(rawText) {
   return (
     normalized.includes('precio') ||
     normalized.includes('valor') ||
+    normalized.includes('total') ||
     normalized.includes('cuanto sale') ||
     normalized.includes('cuanto cuesta') ||
     normalized.includes('cuanto esta') ||
     normalized.includes('cuánto está') ||
-    normalized.includes('cuanto es')
+    normalized.includes('cuanto es') ||
+    normalized.includes('cuanto seria') ||
+    normalized.includes('cuánto sería')
   );
 }
 
@@ -4240,6 +4243,25 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
+          }
+          if (hasRecentStudyPriceContext && messageLooksLikeAnyPriceQuestion(bodyText)) {
+            const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
+              forcePriceFlow: true,
+            });
+            const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
+            await setConversationState(
+              from,
+              mergeConversationStatePreservingGreeting(
+                priorState,
+                priorState || {},
+                {
+                  ...(wrapped.nextStatePatch || {}),
+                  lastStudyPriceContextAtMs: Date.now(),
+                }
+              )
+            );
+            await sendWhatsAppText(from, wrapped.messageText);
+            continue;
           }
           if (stateLooksLikeAwaitingSymptomDuration(priorState)) {
             const nowMs = Date.now();
