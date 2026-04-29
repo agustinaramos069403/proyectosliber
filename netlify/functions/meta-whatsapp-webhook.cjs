@@ -1584,7 +1584,10 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
   );
 }
 
-function buildAskHealthInsuranceNameMessage() {
+function buildAskHealthInsuranceNameMessage(rawText = '') {
+  if (messageAsksIfParticularIsAvailable(rawText)) {
+    return 'Sí, también atendemos de forma particular. ¿Qué obra social/prepaga tenés? Te digo si la aceptamos.';
+  }
   return '¿Qué obra social/prepaga tenés? Te digo si la aceptamos.';
 }
 
@@ -1628,6 +1631,10 @@ function messageAsksIfParticularIsAvailable(rawText) {
     normalized.includes('atenden particular') ||
     normalized.includes('atiende por particular') ||
     normalized.includes('atienden por particular') ||
+    normalized.includes('solo particular') ||
+    normalized.includes('o es solo particular') ||
+    normalized.includes('es solo particular') ||
+    normalized.includes('o particular') ||
     normalized === 'particular' ||
     normalized === 'particular?' ||
     normalized === 'particular.'
@@ -4661,7 +4668,7 @@ exports.handler = async (event) => {
                 continue;
               }
               const askOsWrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildAskHealthInsuranceNameMessage(),
+                buildAskHealthInsuranceNameMessage(bodyText),
                 profileDisplayName,
                 priorState
               );
@@ -4864,7 +4871,7 @@ exports.handler = async (event) => {
             if (priorState && priorState.state === 'awaiting_health_insurance_name') {
               if (messageIsAcknowledgement(bodyText) || messageConfirmsLinkSend(bodyText)) {
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                  buildAskHealthInsuranceNameMessage(),
+                  buildAskHealthInsuranceNameMessage(bodyText),
                   profileDisplayName,
                   priorState
                 );
@@ -4960,7 +4967,7 @@ exports.handler = async (event) => {
               }
               if (messageLooksLikeGenericInstitutionHealthInsurance(bodyText)) {
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                  buildAskHealthInsuranceNameMessage(),
+                  buildAskHealthInsuranceNameMessage(bodyText),
                   profileDisplayName,
                   priorState
                 );
@@ -5100,7 +5107,7 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, wrapped.messageText);
                 continue;
               }
-              const askAgainText = buildAskHealthInsuranceNameMessage();
+              const askAgainText = buildAskHealthInsuranceNameMessage(bodyText);
               const askAgain = buildAutoReplyWithGreetingIfNeeded(
                 askAgainText,
                 profileDisplayName,
@@ -5449,7 +5456,7 @@ exports.handler = async (event) => {
               }
               // They asked about obra social/plus but did not specify which one.
               const askOsWrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildAskHealthInsuranceNameMessage(),
+                buildAskHealthInsuranceNameMessage(bodyText),
                 profileDisplayName,
                 priorState
               );
