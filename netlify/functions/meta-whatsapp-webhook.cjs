@@ -1408,6 +1408,14 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
           lastSedeAtMs: priorState.lastSedeAtMs,
         }
       : null;
+  const priorActiveSede =
+    priorState && typeof priorState === 'object'
+      ? {
+          sedeEnvKey: priorState.sedeEnvKey,
+          sedeDisplayName: priorState.sedeDisplayName,
+          sedeOptionNumber: priorState.sedeOptionNumber,
+        }
+      : null;
   const merged = { ...(nextState || {}) };
   if (patch && typeof patch === 'object') {
     Object.assign(merged, patch);
@@ -1418,6 +1426,10 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
   // Keep last known sede unless explicitly overwritten.
   if (priorLastSede && typeof merged.lastSedeEnvKey !== 'string') {
     Object.assign(merged, priorLastSede);
+  }
+  // Keep active/pending sede context unless explicitly overwritten.
+  if (priorActiveSede && typeof merged.sedeEnvKey !== 'string') {
+    Object.assign(merged, priorActiveSede);
   }
   return merged;
 }
