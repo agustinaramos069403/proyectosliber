@@ -4006,19 +4006,12 @@ exports.handler = async (event) => {
             const isInCooldown =
               Number.isFinite(lastBotReplyAtMs) && Date.now() - lastBotReplyAtMs <= SMALL_TALK_COOLDOWN_MS;
             if (isInCooldown) {
-              const preservedSessionState =
-                priorState && typeof priorState === 'object'
-                  ? {
-                      greeted: Boolean(priorState.greeted),
-                      lastSeenAtMs: Date.now(),
-                      lastSedeEnvKey: priorState.lastSedeEnvKey,
-                      lastSedeDisplayName: priorState.lastSedeDisplayName,
-                      lastSedeOptionNumber: priorState.lastSedeOptionNumber,
-                      lastSedeAtMs: priorState.lastSedeAtMs,
-                      lastBotReplyAtMs: priorState.lastBotReplyAtMs,
-                    }
-                  : { lastSeenAtMs: Date.now() };
-              await setConversationState(from, preservedSessionState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                  lastSeenAtMs: Date.now(),
+                })
+              );
               continue;
             }
             const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, priorState);
@@ -4059,24 +4052,12 @@ exports.handler = async (event) => {
           }
 
           if (messageLooksLikeGreetingOnly(bodyText)) {
-            const preservedSessionState =
-              priorState && typeof priorState === 'object'
-                ? {
-                    greeted: Boolean(priorState.greeted),
-                    lastSeenAtMs: priorState.lastSeenAtMs,
-                    lastSedeEnvKey: priorState.lastSedeEnvKey,
-                    lastSedeDisplayName: priorState.lastSedeDisplayName,
-                    lastSedeOptionNumber: priorState.lastSedeOptionNumber,
-                    lastSedeAtMs: priorState.lastSedeAtMs,
-                    lastBotReplyAtMs: priorState.lastBotReplyAtMs,
-                  }
-                : {};
-            const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, preservedSessionState);
+            const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, priorState);
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(
-                preservedSessionState,
-                preservedSessionState || {},
+                priorState,
+                priorState || {},
                 {
                   greeted: true,
                   lastSeenAtMs: Date.now(),
