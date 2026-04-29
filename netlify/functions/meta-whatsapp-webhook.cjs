@@ -1323,6 +1323,14 @@ function buildGreetingSentence(profileDisplayName) {
   return 'Hola, soy la asistente del Dr. Liber Acosta 😊.';
 }
 
+function buildGreetingOnlyOpeningMessage(profileDisplayName, priorState) {
+  const alreadyGreetedInSession = shouldTreatAsAlreadyGreeted(priorState, Date.now());
+  if (alreadyGreetedInSession) {
+    return 'Hola de nuevo 😊 Contame en qué te puedo ayudar.';
+  }
+  return `${buildGreetingSentence(profileDisplayName)} Contame en qué te puedo ayudar.`;
+}
+
 const GREETING_SESSION_RESET_MS = 20 * 60 * 1000;
 
 function shouldTreatAsAlreadyGreeted(priorState, nowMs) {
@@ -3756,16 +3764,16 @@ exports.handler = async (event) => {
               await setConversationState(from, preservedSessionState);
               continue;
             }
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Contame en qué te puedo ayudar.',
-              profileDisplayName,
-              priorState
-            );
+            const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, priorState);
             await setConversationState(
               from,
-              mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
+              mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                greeted: true,
+                lastSeenAtMs: Date.now(),
+                lastBotReplyAtMs: Date.now(),
+              })
             );
-            await sendWhatsAppText(from, wrapped.messageText);
+            await sendWhatsAppText(from, greetingOnlyReply);
             continue;
           }
 
@@ -3806,20 +3814,20 @@ exports.handler = async (event) => {
                     lastBotReplyAtMs: priorState.lastBotReplyAtMs,
                   }
                 : {};
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Contame en qué te puedo ayudar.',
-              profileDisplayName,
-              preservedSessionState
-            );
+            const greetingOnlyReply = buildGreetingOnlyOpeningMessage(profileDisplayName, preservedSessionState);
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(
                 preservedSessionState,
                 preservedSessionState || {},
-                wrapped.nextStatePatch
+                {
+                  greeted: true,
+                  lastSeenAtMs: Date.now(),
+                  lastBotReplyAtMs: Date.now(),
+                }
               )
             );
-            await sendWhatsAppText(from, wrapped.messageText);
+            await sendWhatsAppText(from, greetingOnlyReply);
             continue;
           }
 
