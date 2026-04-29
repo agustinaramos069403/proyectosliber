@@ -5047,6 +5047,25 @@ exports.handler = async (event) => {
               messageExplicitlyRequestsBookingLink(bodyText) ||
               messageLooksLikeBookingIntent(bodyText);
             if (shouldBypassPendingLinkConfirmation) {
+              if (stateHasRecentStudyPriceContext(priorState) && messageLooksLikeAnyPriceQuestion(bodyText)) {
+                const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
+                  forcePriceFlow: true,
+                });
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    priorState || {},
+                    {
+                      ...(wrapped.nextStatePatch || {}),
+                      lastStudyPriceContextAtMs: Date.now(),
+                    }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const preservedSessionState =
                 priorState && typeof priorState === 'object'
                   ? {
