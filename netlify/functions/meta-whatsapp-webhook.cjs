@@ -1,11 +1,7 @@
 /**
  * WhatsApp Cloud API (Meta) webhook — Netlify Function
  *
- * Env vars (Netlify UI → Site settings → Environment variables):
- * - WHATSAPP_VERIFY_TOKEN fdf dsfdfgbfg   (you choose it; same in Meta app webhook config)
- * - cfACCESSdfsdfd_TOKEN     (temporary or system user token from Meta)
- * - WHAfdgfdgTSAfdggPP_ttydftyfdgdPHdsvgdfvONE_NUMBER_ID  (from Meta WhatsApp > API setup)
- * ional; if set, nondfgd-sede messages use OpdsfdsenAI with docs/agente-liber-reglas.md prompt file)
+e OpdsfdsenAI with docs/agente-liber-reglas.md prompt file)
  * - OPENAI_MODEL (optional; default gpt-4o-mini)
  *
  * Conversational rules: docs/agente-liber-reglas.md — system prompt text: agente-liber-system-prompt.txt (same folder)
