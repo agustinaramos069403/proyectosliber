@@ -580,6 +580,14 @@ function messageConfirmsAlreadyBooked(rawText, priorState = null) {
     normalized.includes('listo ya agendé')
   );
   if (!confirmsBooked) return false;
+  const hasAdditionalActiveIntent =
+    messageLooksLikePrivatePriceQuestion(rawText) ||
+    messageAsksAboutStudyPrice(rawText) ||
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageAsksAboutStudiesOrTests(rawText) ||
+    messageLooksLikeScheduleAvailabilityQuestion(rawText) ||
+    messageExplicitlyRequestsBookingLink(rawText);
+  if (hasAdditionalActiveIntent) return false;
   const hasBookingContext =
     wasBookingLinkSentRecently(priorState) ||
     stateLooksLikeAwaitingLinkConfirmation(priorState) ||
@@ -1550,6 +1558,18 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
           ? priorState.healthInsuranceName.trim()
           : null
       : null;
+  const priorStudyContext =
+    priorState && typeof priorState === 'object'
+      ? {
+          lastStudyType:
+            typeof priorState.lastStudyType === 'string' && priorState.lastStudyType.trim().length > 0
+              ? priorState.lastStudyType.trim()
+              : null,
+          lastStudyPriceContextAtMs: Number.isFinite(Number(priorState.lastStudyPriceContextAtMs))
+            ? Number(priorState.lastStudyPriceContextAtMs)
+            : null,
+        }
+      : null;
   const merged = { ...(nextState || {}) };
   if (patch && typeof patch === 'object') {
     Object.assign(merged, patch);
@@ -1574,6 +1594,20 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
     typeof merged.lastHealthInsuranceName !== 'string'
   ) {
     merged.lastHealthInsuranceName = merged.healthInsuranceName.trim();
+  }
+  if (
+    priorStudyContext &&
+    priorStudyContext.lastStudyType &&
+    !Object.prototype.hasOwnProperty.call(merged, 'lastStudyType')
+  ) {
+    merged.lastStudyType = priorStudyContext.lastStudyType;
+  }
+  if (
+    priorStudyContext &&
+    Number.isFinite(priorStudyContext.lastStudyPriceContextAtMs) &&
+    !Object.prototype.hasOwnProperty.call(merged, 'lastStudyPriceContextAtMs')
+  ) {
+    merged.lastStudyPriceContextAtMs = priorStudyContext.lastStudyPriceContextAtMs;
   }
   return merged;
 }
@@ -2836,7 +2870,10 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     inferredHealthInsuranceName &&
     INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)
   ) {
-    return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
+    if (lastSede) {
+      return `Con ${inferredHealthInsuranceName} en ${lastSede.displayName}, sin plus: el ${studyType} queda incluido en el valor de la consulta.`;
+    }
+    return `Con ${inferredHealthInsuranceName}, sin plus: el ${studyType} queda incluido en el valor de la consulta.`;
   }
 
   if (messageAsksAboutConsultationPlusStudy(rawText) || (asksPrice && normalized.includes('particular'))) {
@@ -2862,10 +2899,26 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       return `Antes de pasarte el valor final, ¿desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
     }
     if (INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)) {
-      return `Con ${inferredHealthInsuranceName}, el ${studyType} queda incluido en el valor de la consulta.`;
+      return `Con ${inferredHealthInsuranceName} en ${lastSede.displayName}, sin plus: el ${studyType} queda incluido en el valor de la consulta.`;
     }
     const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
-    return `Con ${inferredHealthInsuranceName}, el ${studyType} tiene un costo adicional de $${formattedAmount} a la consulta. ¿Deseás agendar?`;
+    const plusRule = await lookupPlusRule(lastSede.displayName, inferredHealthInsuranceName);
+    if (plusRule && plusRule.isAccepted && plusRule.hasPlus) {
+      const plusFormatted =
+        Number.isFinite(plusRule.plusAmountArs) && plusRule.plusAmountArs != null
+          ? formatArsAmount(plusRule.plusAmountArs)
+          : null;
+      if (plusFormatted) {
+        return `Con ${inferredHealthInsuranceName}, plus de $${plusFormatted} + ${studyType} sería $${formattedAmount} del estudio.`;
+      }
+    }
+    if (plusRule && plusRule.isAccepted && !plusRule.hasPlus) {
+      return `Con ${inferredHealthInsuranceName}, sin plus. ${studyType} sería $${formattedAmount} del estudio.`;
+    }
+    if (plusRule && !plusRule.isAccepted) {
+      return `Con ${inferredHealthInsuranceName} no trabajamos en ${lastSede.displayName}. Si querés hacerlo particular, ${studyType} sería $${formattedAmount} del estudio más la consulta.`;
+    }
+    return `Con ${inferredHealthInsuranceName}, ${studyType} sería $${formattedAmount} del estudio.`;
   }
 
   if (studyTypeFromMessage) {
