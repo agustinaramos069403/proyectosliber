@@ -3261,6 +3261,22 @@ function buildDoesNotKnowHealthInsuranceReply(priorState) {
   return 'No pasa nada. Si te acordás, decime el nombre de la obra social/prepaga (sin números). Si no, lo vemos en la consulta.';
 }
 
+function messageLooksLikeShortUnknownHealthInsurance(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (
+    normalized === 'no se' ||
+    normalized === 'no sé' ||
+    normalized === 'ni idea' ||
+    normalized === 'no tengo' ||
+    normalized === 'no lo se' ||
+    normalized === 'no lo sé'
+  );
+}
+
 function messageLooksLikeNoAvailability(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -5835,6 +5851,42 @@ exports.handler = async (event) => {
                   mergeConversationStatePreservingGreeting(
                     priorState,
                     { state: 'awaiting_health_insurance_name' },
+                    wrapped.nextStatePatch
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              if (
+                messageLooksLikeShortUnknownHealthInsurance(bodyText) ||
+                messageLooksLikeDoesNotKnowHealthInsurance(bodyText)
+              ) {
+                const lastSede = resolveLastSedeEntryFromState(priorState);
+                if (lastSede) {
+                  const privatePriceReply = await buildPrivatePriceReply(lastSede);
+                  const reply = `No pasa nada. Si no la recordás, también podés atenderte particular. ${privatePriceReply} Si después te acordás la obra social, te digo si tiene plus.`;
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      priorState || {},
+                      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  'No pasa nada. Si no la recordás, también podés atenderte particular. ¿Desde qué ciudad te consultás? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    { state: 'awaiting_private_price_city' },
                     wrapped.nextStatePatch
                   )
                 );
