@@ -670,6 +670,17 @@ function stateLooksLikeAwaitingStudyPriceHealthInsurance(state) {
   );
 }
 
+function hasRecentStudyPriceContext(state) {
+  return (
+    state &&
+    typeof state === 'object' &&
+    typeof state.lastStudyType === 'string' &&
+    state.lastStudyType.trim().length > 0 &&
+    Number.isFinite(Number(state.lastStudyPriceContextAtMs)) &&
+    Date.now() - Number(state.lastStudyPriceContextAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS
+  );
+}
+
 function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
   return (
     state &&
@@ -4570,6 +4581,26 @@ exports.handler = async (event) => {
             } else if (primaryIntent === 'BOOKING') {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
+                if (hasRecentStudyPriceContext(priorState)) {
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                    buildLinkMessage(lastSede),
+                    profileDisplayName,
+                    priorState
+                  );
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      priorState || {},
+                      {
+                        ...(wrapped.nextStatePatch || {}),
+                        ...(buildLastSedeStatePatch(lastSede) || {}),
+                      }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
                 const micro = buildMicroCommitmentMessageWithState(priorState, true);
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
                 await setConversationState(
@@ -5282,6 +5313,23 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             } else if (/(agendar|agenda|turno|reserv)/i.test(normalizeForMatch(bodyText))) {
+              if (hasRecentStudyPriceContext(priorState)) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  buildLinkMessage(sede),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    priorState || {},
+                    { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
               const micro = buildMicroCommitmentMessageWithState(priorState, true);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
               await setConversationState(
@@ -5417,6 +5465,26 @@ exports.handler = async (event) => {
             if (messageLooksLikeBookingIntent(bodyText)) {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
+                if (hasRecentStudyPriceContext(priorState)) {
+                  const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                    buildLinkMessage(lastSede),
+                    profileDisplayName,
+                    priorState
+                  );
+                  await setConversationState(
+                    from,
+                    mergeConversationStatePreservingGreeting(
+                      priorState,
+                      priorState || {},
+                      {
+                        ...(wrapped.nextStatePatch || {}),
+                        ...(buildLastSedeStatePatch(lastSede) || {}),
+                      }
+                    )
+                  );
+                  await sendWhatsAppText(from, wrapped.messageText);
+                  continue;
+                }
                 const micro = buildMicroCommitmentMessageWithState(priorState, true);
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
                 await setConversationState(
