@@ -4284,7 +4284,16 @@ exports.handler = async (event) => {
           if (stateLooksLikeAwaitingSymptomDuration(priorState)) {
             const nowMs = Date.now();
             const isInWindow = nowMs - Number(priorState.symptomFirstAtMs) <= SYMPTOM_DURATION_WINDOW_MS;
-            if (isInWindow) {
+            const shouldBypassSymptomDurationCapture =
+              messageLooksLikeBookingIntent(bodyText) ||
+              messageExplicitlyRequestsBookingLink(bodyText) ||
+              messageLooksLikeBookingLinkTrouble(bodyText) ||
+              messageLooksLikePrivatePriceQuestion(bodyText) ||
+              messageLooksLikeAnyPriceQuestion(bodyText) ||
+              messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
+              messageAsksAboutStudiesOrTests(bodyText) ||
+              messageLooksLikeRealtimeAvailabilityQuestion(bodyText);
+            if (isInWindow && !shouldBypassSymptomDurationCapture) {
               const detectedSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
               const empathyMessage =
                 'Entiendo, llevar tiempo así es frustrante. Justamente para eso está el Dr. para evaluarte, diagnosticar bien y armar un plan que funcione.';
