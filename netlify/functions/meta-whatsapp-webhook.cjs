@@ -616,11 +616,26 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  const hasBookingContext =
+    normalized.includes('agendar') ||
+    normalized.includes('turno') ||
+    normalized.includes('reserv') ||
+    normalized.includes('link') ||
+    normalized.includes('agenda');
+  if (hasBookingContext) return false;
   const hasThroatPainSignal = normalizedTextContainsApproxWord(normalized, 'garganta', 2);
   const hasPainSignal =
     normalized.includes('dolor') ||
     normalized.includes('molesta') ||
     normalizedTextContainsApproxWord(normalized, 'duele', 1);
+  const hasClinicalLimitationContext =
+    normalized.includes('respirar') ||
+    normalized.includes('dormir') ||
+    normalized.includes('deporte') ||
+    normalized.includes('cansancio') ||
+    normalized.includes('congestion') ||
+    normalized.includes('congestión') ||
+    normalized.includes('pecho');
   return (
     normalized.includes('me duele todo') ||
     normalized.includes('me duele el cuerpo') ||
@@ -645,7 +660,7 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
     normalized.includes('los síntomas vuelven') ||
     normalized.includes('noches sin dormir') ||
     normalized.includes('ojos pegados') ||
-    normalized.includes('no puedo') ||
+    (normalized.includes('no puedo') && hasClinicalLimitationContext) ||
     normalized.includes('dejo de') ||
     normalized.includes('cansancio') ||
     normalized.includes('mucho tiempo asi') ||
@@ -3016,6 +3031,9 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     }
     if (plusRule && !plusRule.isAccepted) {
       return `Con ${inferredHealthInsuranceName} no trabajamos en ${lastSede.displayName}. Si querés hacerlo particular, ${studyType} sería $${formattedAmount} del estudio más la consulta.`;
+    }
+    if (asksTotalAmount) {
+      return `En ${lastSede.displayName}, con ${inferredHealthInsuranceName}, el total sería valor de la consulta + $${formattedAmount} del ${studyType}. Si tu plan tiene plus, se suma a ese total.`;
     }
     return `Con ${inferredHealthInsuranceName}, ${studyType} sería $${formattedAmount} del estudio.`;
   }
