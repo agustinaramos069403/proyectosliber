@@ -1,8 +1,8 @@
 /**
  * WhatsApp Cloud API (Meta) webhook — Netlify Function
  *
-e Op with dorffrcs/agente-liber-reglas.md prompt file)
- * - OPENAI_MODEL (optional; default gpt-4o-mini)
+e Op with /agente-liber-reglas.md prompt file)
+ * - OPENAI_MODELss (optional; default gpt-4o-mini)
  *
  * Conversational rules: docs/agente-liber-reglas.md — system prompt text: agente-liber-system-prompt.txt (same folder)
  */
