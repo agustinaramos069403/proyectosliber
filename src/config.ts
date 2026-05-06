@@ -28,11 +28,16 @@ export const GOOGLE_REVIEWS_URL =
 
 export const SEDES = ['Corrientes', 'Resistencia', 'Sáenz Peña', 'Formosa'] as const;
 
-export function buildWhatsAppBookingMessage(sedeDisplayName: string): string {
-  return `Hola Dr. Liber, vi la información del Sistema 360 y me gustaría agendar una consulta en la sede de ${sedeDisplayName}.`;
+export function buildWhatsAppBookingMessage(sedeDisplayName?: string): string {
+  const baseMessage =
+    'Hola Dr. Liber, vi la información de su método Control 360° para Alergia y Asma. Me gustaría agendar una consulta';
+  if (typeof sedeDisplayName === 'string' && sedeDisplayName.trim().length > 0) {
+    return `${baseMessage} en ${sedeDisplayName.trim()}.`;
+  }
+  return `${baseMessage}.`;
 }
 
-export function getWhatsAppUrl(sede: string): string {
+export function getWhatsAppUrl(sede?: string): string {
   const encodedMessage = encodeURIComponent(buildWhatsAppBookingMessage(sede));
   return `https://wa.me/${WHATSAPP_NUMBER}?text=${encodedMessage}`;
 }

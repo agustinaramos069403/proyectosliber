@@ -9,6 +9,14 @@ const SYMPTOMS = [
   'Síntomas que aparecen y desaparecen sin explicación',
   'Dependencia de medicación sin mejoría real',
 ];
+
+const MOBILE_VISIBLE_SYMPTOMS = [
+  'Estornudos repetidos',
+  'Tos, silbidos en el pecho o falta de aire',
+  'Congestión nasal constante',
+];
+
+const MOBILE_HIDDEN_SYMPTOMS = SYMPTOMS.filter((symptom) => !MOBILE_VISIBLE_SYMPTOMS.includes(symptom));
 ---
 <section
   id="sintomas"
@@ -25,7 +33,7 @@ const SYMPTOMS = [
       </h2>
     </div>
 
-    <div class="mb-12 grid gap-4 sm:grid-cols-2">
+    <div class="mb-12 hidden gap-4 sm:grid sm:grid-cols-2">
       {SYMPTOMS.map((symptom) => (
         <div
           class="flex items-center gap-4 rounded-xl border border-white/20 bg-white/10 p-5 backdrop-blur-sm transition-all hover:bg-white/15"
@@ -44,6 +52,67 @@ const SYMPTOMS = [
           <span class="font-serif text-lg text-white/90">{symptom}</span>
         </div>
       ))}
+    </div>
+
+    <div class="mb-12 space-y-3 sm:hidden">
+      {MOBILE_VISIBLE_SYMPTOMS.map((symptom) => (
+        <div
+          class="flex items-center gap-4 rounded-xl border border-white/20 bg-white/10 p-5 backdrop-blur-sm transition-all hover:bg-white/15"
+        >
+          <div class="shrink-0">
+            <svg
+              class="h-6 w-6 text-brand-immune"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <span class="font-serif text-lg text-white/90">{symptom}</span>
+        </div>
+      ))}
+
+      <details class="group rounded-xl border border-white/20 bg-white/10 backdrop-blur-sm">
+        <summary class="flex cursor-pointer list-none items-center justify-center gap-2 px-5 py-4 font-sans font-medium text-brand-immune">
+          Ver más
+          <svg
+            class="h-4 w-4 transition-transform group-open:rotate-180"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+          </svg>
+        </summary>
+        <div class="space-y-3 px-3 pb-3">
+          {MOBILE_HIDDEN_SYMPTOMS.map((symptom) => (
+            <div
+              class="flex items-center gap-4 rounded-xl border border-white/20 bg-white/10 p-5 transition-all hover:bg-white/15"
+            >
+              <div class="shrink-0">
+                <svg
+                  class="h-6 w-6 text-brand-immune"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+              </div>
+              <span class="font-serif text-lg text-white/90">{symptom}</span>
+            </div>
+          ))}
+        </div>
+      </details>
     </div>
 
     <div class="text-center">

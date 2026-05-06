@@ -46,7 +46,7 @@ const testimonials = [
   },
 ];
 ---
-<section id="testimonios" class="py-24 bg-brand-clinical/20">
+<section id="testimonios" class="pt-16 pb-8 sm:py-24 bg-brand-clinical/20">
   <div class="mx-auto max-w-7xl px-6 lg:px-12">
     <div class="mx-auto mb-16 max-w-2xl text-center">
       <p class="mb-4 text-sm uppercase tracking-widest text-primary">Testimonios</p>
@@ -130,7 +130,7 @@ const testimonials = [
       ></div>
     </div>
 
-    <div class="mt-12 text-center">
+    <div class="mt-8 sm:mt-12 text-center">
       <a
         href={GOOGLE_REVIEWS_URL}
         target="_blank"
@@ -150,17 +150,6 @@ const testimonials = [
     </div>
   </div>
 </section>
-
-<style>
-  @media (max-width: 640px) {
-    .reviews-carousel__text {
-      display: -webkit-box;
-      -webkit-line-clamp: 4;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-  }
-</style>
 
 <script is:inline>
   (function () {
