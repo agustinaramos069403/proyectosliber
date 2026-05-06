@@ -64,9 +64,9 @@ const testimonials = [
       aria-roledescription="carrusel"
       tabindex="0"
     >
-      <div class="overflow-hidden rounded-2xl">
+      <div class="reviews-carousel__viewport overflow-hidden rounded-2xl">
         <div
-          class="reviews-carousel__track flex transition-transform duration-500 ease-out will-change-transform"
+          class="reviews-carousel__track flex items-start sm:items-stretch transition-transform duration-500 ease-out will-change-transform"
           style="transform: translateX(0px)"
         >
           {testimonials.map((testimonial, slideIndex) => (
@@ -76,7 +76,10 @@ const testimonials = [
               aria-roledescription="diapositiva"
               aria-label={`${slideIndex + 1} de ${testimonials.length}`}
             >
-              <div class="flex h-full min-h-[220px] flex-col rounded-2xl border border-border/50 bg-card p-6 shadow-sm sm:min-h-[240px] sm:p-8">
+              <div
+                data-review-card
+                class="flex h-full min-h-[220px] flex-col rounded-2xl border border-border/50 bg-card p-6 shadow-sm sm:min-h-[240px] sm:p-8"
+              >
                 <div class="mb-4 flex gap-1">
                   {Array.from({ length: testimonial.rating }).map(() => (
                     <svg class="h-5 w-5 fill-primary text-primary" viewBox="0 0 24 24" aria-hidden="true">
@@ -124,13 +127,13 @@ const testimonials = [
       </button>
 
       <div
-        class="reviews-carousel__dots mt-8 flex justify-center gap-2"
+        class="reviews-carousel__dots mt-5 sm:mt-8 flex justify-center gap-2"
         role="tablist"
         aria-label="Seleccionar grupo de reseñas"
       ></div>
     </div>
 
-    <div class="mt-8 sm:mt-12 text-center">
+    <div class="mt-5 sm:mt-12 text-center">
       <a
         href={GOOGLE_REVIEWS_URL}
         target="_blank"
@@ -175,6 +178,7 @@ const testimonials = [
     }
 
     function initCarousel(root) {
+      const viewport = root.querySelector('.reviews-carousel__viewport');
       const track = root.querySelector('.reviews-carousel__track');
       const previousButton = root.querySelector('.reviews-carousel__prev');
       const nextButton = root.querySelector('.reviews-carousel__next');
@@ -211,11 +215,35 @@ const testimonials = [
         return Math.floor(activeIndex / slidesPerView);
       }
 
+      function updateViewportHeight() {
+        if (!viewport) return;
+        if (slidesPerView !== 1) {
+          viewport.style.height = '';
+          return;
+        }
+
+        window.requestAnimationFrame(function () {
+          window.requestAnimationFrame(function () {
+            let maximumVisibleHeightPixels = 0;
+            const lastVisibleSlideIndex = Math.min(activeIndex + slidesPerView - 1, slides.length - 1);
+            for (let slideIndex = activeIndex; slideIndex <= lastVisibleSlideIndex; slideIndex += 1) {
+              const slide = slides[slideIndex];
+              const card = slide && slide.querySelector('[data-review-card]');
+              if (!card) continue;
+              maximumVisibleHeightPixels = Math.max(maximumVisibleHeightPixels, card.getBoundingClientRect().height);
+            }
+            if (maximumVisibleHeightPixels > 0)
+              viewport.style.height = Math.ceil(maximumVisibleHeightPixels) + 'px';
+          });
+        });
+      }
+
       function goToSlide(nextIndex) {
         activeIndex = clampIndex(nextIndex);
         const slideWidthPx = getSlideWidthPx();
         track.style.transform = 'translateX(-' + activeIndex * slideWidthPx + 'px)';
         updateDots(dots, getActivePageIndex());
+        updateViewportHeight();
       }
 
       function buildDots() {
@@ -302,6 +330,12 @@ const testimonials = [
 
       recalc();
       startAutoPlay();
+
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function () {
+          updateViewportHeight();
+        });
+      }
     }
 
     document.querySelectorAll(ROOT_SELECTOR).forEach(initCarousel);
