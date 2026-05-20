@@ -6,10 +6,10 @@
   command = "npm run build"
   publish = "dist"
 
-# Astro inlines PUBLIC_* at build time. Without this, wa.me uses the clinic default in src/config.ts.
-# Override or remove in Netlify UI when you publish the real WhatsApp number.
+# Astro inlines PUBLIC_* at build time. wa.me uses this E.164 number (digits only, no +).
+# +54 9 379 498 3065 — production clinic line. Override in Netlify UI only if you need a different number.
 [build.environment]
-  PUBLIC_WHATSAPP_NUMBER = "15556489769"
+  PUBLIC_WHATSAPP_NUMBER = "5493794983065"
 
 [[headers]]
   for = "/index.html"
