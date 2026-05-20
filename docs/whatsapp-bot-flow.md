@@ -1,4 +1,4 @@
-# Circuito del bot de WhatsApp (Meta Cloud API)
+# Circuidddto del bot de WhatsApp (Meta Cloud API)
 
 Este documento describe el flujo exacto del bot implementado en `netlify/functions/meta-whatsapp-webhook.cjs`, incluyendo los **mensajes literales** que envía.
 
