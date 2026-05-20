@@ -1,0 +1,280 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/global.css';
+import SiteFooter from '../components/SiteFooter.astro';
+
+const lastUpdated = '20 de mayo de 2026';
+const privacyContactEmail = 'contacto@liberacosta.com';
+---
+
+<BaseLayout
+  title="Política de privacidad | Dr. Liber Acosta"
+  description="Política de privacidad del sitio liberacosta.com y del asistente por WhatsApp del consultorio del Dr. Liber Acosta."
+>
+  <header
+    class="border-b border-border/40 bg-background/95"
+    role="banner"
+  >
+    <div class="mx-auto flex h-16 max-w-3xl items-center justify-between px-6 lg:px-8">
+      <a href="/" class="flex items-center gap-2 shrink-0">
+        <img
+          src="/images/logo-la.png"
+          alt="Dr. Liber Acosta"
+          class="h-10 w-auto"
+          width="48"
+          height="48"
+        />
+      </a>
+      <a
+        href="/"
+        class="font-serif text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+      >
+        Volver al inicio
+      </a>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-3xl px-6 py-12 lg:px-8 lg:py-16">
+    <article class="font-serif text-foreground">
+      <h1 class="font-sans text-3xl font-semibold text-primary md:text-4xl">
+        Política de privacidad
+      </h1>
+      <p class="mt-3 text-sm text-muted-foreground">
+        Última actualización: {lastUpdated}
+      </p>
+
+      <p class="mt-8 leading-relaxed text-muted-foreground">
+        Esta política describe cómo se tratan los datos personales en el sitio web{' '}
+        <a href="https://liberacosta.com/" class="text-primary underline hover:no-underline">
+          liberacosta.com
+        </a>{' '}
+        y en el asistente automatizado por WhatsApp del consultorio del Dr. Liber Acosta,
+        especialista en Asma, Alergia e Inmunología.
+      </p>
+
+      <section class="mt-10" aria-labelledby="responsable-heading">
+        <h2 id="responsable-heading" class="font-sans text-xl font-semibold text-primary">
+          1. Responsable del tratamiento
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          El responsable del tratamiento es el <strong class="text-foreground">Dr. Liber Acosta</strong>{' '}
+          (consultorio médico de alergia e inmunología), con atención en Corrientes, Resistencia,
+          Sáenz Peña y Formosa, Argentina.
+        </p>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Para consultas sobre privacidad o ejercicio de derechos podés escribir a{' '}
+          <a
+            href={`mailto:${privacyContactEmail}`}
+            class="text-primary underline hover:no-underline"
+          >
+            {privacyContactEmail}
+          </a>{' '}
+          o contactarnos por WhatsApp desde el número publicado en este sitio.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="datos-heading">
+        <h2 id="datos-heading" class="font-sans text-xl font-semibold text-primary">
+          2. Qué datos recopilamos
+        </h2>
+        <ul class="mt-4 list-disc space-y-2 pl-6 leading-relaxed text-muted-foreground">
+          <li>
+            <strong class="text-foreground">Sitio web:</strong> datos técnicos habituales del navegador
+            (dirección IP, tipo de dispositivo, páginas visitadas) que pueden registrarse en el
+            proveedor de hosting por motivos de seguridad y funcionamiento.
+          </li>
+          <li>
+            <strong class="text-foreground">WhatsApp (asistente automatizado):</strong> número de
+            teléfono de WhatsApp, nombre de perfil visible, mensajes de texto que envíes, sede u
+            opciones que elijas en el menú, y cualquier información que decidas escribir en el chat
+            (por ejemplo ciudad, obra social o motivo de consulta).
+          </li>
+          <li>
+            <strong class="text-foreground">Agenda online:</strong> si usás un enlace de reserva
+            (por ejemplo Calendly), los datos que completes allí se rigen por la política de ese
+            servicio.
+          </li>
+        </ul>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Te pedimos que <strong class="text-foreground">no envíes por WhatsApp</strong> datos
+          sensibles innecesarios (historias clínicas completas, estudios, imágenes médicas o
+          documentos con información muy detallada). La atención médica formal se coordina en
+          consulta presencial o por los canales que el consultorio indique.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="finalidad-heading">
+        <h2 id="finalidad-heading" class="font-sans text-xl font-semibold text-primary">
+          3. Para qué usamos los datos
+        </h2>
+        <ul class="mt-4 list-disc space-y-2 pl-6 leading-relaxed text-muted-foreground">
+          <li>Responder consultas iniciales y orientar sobre sedes y turnos.</li>
+          <li>Enviar enlaces de reserva según la sede que elijas.</li>
+          <li>Operar y mejorar el asistente automatizado (incluida orientación conversacional cuando corresponda).</li>
+          <li>Cumplir obligaciones legales y de seguridad del servicio.</li>
+        </ul>
+      </section>
+
+      <section class="mt-10" aria-labelledby="terceros-heading">
+        <h2 id="terceros-heading" class="font-sans text-xl font-semibold text-primary">
+          4. Con quién compartimos información
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Podemos apoyarnos en proveedores que procesan datos por nuestra cuenta, solo para
+          prestar el servicio:
+        </p>
+        <ul class="mt-4 list-disc space-y-2 pl-6 leading-relaxed text-muted-foreground">
+          <li>
+            <strong class="text-foreground">Meta (WhatsApp Cloud API):</strong> envío y recepción de
+            mensajes de WhatsApp.
+          </li>
+          <li>
+            <strong class="text-foreground">Netlify:</strong> alojamiento del sitio y ejecución del
+            webhook del bot.
+          </li>
+          <li>
+            <strong class="text-foreground">Calendly u otras plataformas de agenda:</strong> cuando
+            te derivamos a reservar un turno online.
+          </li>
+          <li>
+            <strong class="text-foreground">OpenAI:</strong> solo si está habilitado en el servidor,
+            para generar respuestas breves cuando no se detecta una sede; no usamos tus mensajes
+            para entrenar modelos públicos.
+          </li>
+          <li>
+            <strong class="text-foreground">Google (Hojas de cálculo):</strong> solo si está
+            configurado, para consultar información de obras sociales o aranceles que el bot puede
+            mostrar.
+          </li>
+          <li>
+            <strong class="text-foreground">Upstash (Redis):</strong> solo si está configurado, para
+            recordar de forma temporal el estado de la conversación (por ejemplo sede elegida o
+            pasos recientes).
+          </li>
+        </ul>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Estos proveedores pueden ubicar servidores fuera de Argentina. Cuando corresponda,
+          utilizamos sus medidas contractuales y de seguridad estándar.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="conservacion-heading">
+        <h2 id="conservacion-heading" class="font-sans text-xl font-semibold text-primary">
+          5. Conservación de los datos
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Conservamos los datos el tiempo necesario para las finalidades indicadas o el que exija
+          la ley. El estado conversacional en memoria temporal (si aplica) suele expirar en un
+          plazo corto (por ejemplo 30 minutos), salvo configuración distinta del servidor.
+          Los registros en Meta, Netlify o proveedores de agenda pueden tener plazos propios según
+          sus políticas.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="derechos-heading">
+        <h2 id="derechos-heading" class="font-sans text-xl font-semibold text-primary">
+          6. Tus derechos
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          De acuerdo con la normativa aplicable en Argentina (Ley 25.326 y normas complementarias),
+          podés solicitar acceso, rectificación, actualización o supresión de tus datos, y oponerte
+          a determinados tratamientos cuando corresponda.
+        </p>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Para ejercer estos derechos escribinos a{' '}
+          <a
+            href={`mailto:${privacyContactEmail}`}
+            class="text-primary underline hover:no-underline"
+          >
+            {privacyContactEmail}
+          </a>{' '}
+          indicando tu número de WhatsApp y el pedido concreto. Responderemos en un plazo razonable.
+        </p>
+      </section>
+
+      <section
+        id="eliminacion-datos"
+        class="mt-10 scroll-mt-24"
+        aria-labelledby="eliminacion-heading"
+      >
+        <h2 id="eliminacion-heading" class="font-sans text-xl font-semibold text-primary">
+          7. Eliminación de datos
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Si querés que eliminemos o dejemos de usar la información asociada a tu conversación por
+          WhatsApp o a tu contacto con el consultorio:
+        </p>
+        <ol class="mt-4 list-decimal space-y-2 pl-6 leading-relaxed text-muted-foreground">
+          <li>
+            Enviá un correo a{' '}
+            <a
+              href={`mailto:${privacyContactEmail}?subject=Solicitud%20de%20eliminaci%C3%B3n%20de%20datos`}
+              class="text-primary underline hover:no-underline"
+            >
+              {privacyContactEmail}
+            </a>{' '}
+            con el asunto «Solicitud de eliminación de datos».
+          </li>
+          <li>
+            Incluí tu número de WhatsApp (con código de país, por ejemplo +54 9 …) y, si aplica,
+            la sede o fecha aproximada de la conversación.
+          </li>
+          <li>
+            Procesaremos la solicitud y te confirmaremos por el mismo medio. También podés dejar de
+            escribir al número del bot en cualquier momento.
+          </li>
+        </ol>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Algunos registros mínimos en proveedores (por ejemplo logs de seguridad de Netlify o
+          registros exigidos por Meta) pueden conservarse por obligación legal o técnica durante
+          los plazos que esas plataformas establezcan.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="seguridad-heading">
+        <h2 id="seguridad-heading" class="font-sans text-xl font-semibold text-primary">
+          8. Seguridad
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Aplicamos medidas razonables para proteger la información (conexiones cifradas HTTPS,
+          variables de entorno para credenciales en el servidor, acceso restringido a configuración).
+          Ningún sistema en internet es 100 % seguro; te recomendamos no compartir más datos de los
+          necesarios por chat.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="cambios-heading">
+        <h2 id="cambios-heading" class="font-sans text-xl font-semibold text-primary">
+          9. Cambios en esta política
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Podemos actualizar este texto para reflejar cambios en el sitio, el bot o la normativa.
+          Publicaremos la versión vigente en esta misma URL con la fecha de actualización al inicio.
+        </p>
+      </section>
+
+      <section class="mt-10" aria-labelledby="contacto-heading">
+        <h2 id="contacto-heading" class="font-sans text-xl font-semibold text-primary">
+          10. Contacto
+        </h2>
+        <p class="mt-4 leading-relaxed text-muted-foreground">
+          Consultorio del Dr. Liber Acosta — Asma, Alergia e Inmunología<br />
+          Sitio:{' '}
+          <a href="https://liberacosta.com/" class="text-primary underline hover:no-underline">
+            https://liberacosta.com/
+          </a>
+          <br />
+          Correo:{' '}
+          <a
+            href={`mailto:${privacyContactEmail}`}
+            class="text-primary underline hover:no-underline"
+          >
+            {privacyContactEmail}
+          </a>
+        </p>
+      </section>
+    </article>
+  </main>
+
+  <SiteFooter />
+</BaseLayout>
