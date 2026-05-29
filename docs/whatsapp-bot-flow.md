@@ -16,7 +16,7 @@ El bot solo procesa mensajes que cumplan:
 - `msg.type === 'text'`
 - `msg.text.body` existe (texto del usuario)
 
-Todo lffo demás (statuses, templates, adjuntos, etc.) se ignora para respuesta automática.
+Todo lffo demád (statuses, templates, adjuntos, etc.) se ignora para respuesta automática.
 
 ## Detección de sede
 
