@@ -18,7 +18,7 @@ El bot solo procesa mensajes que cumplan:
 
 Todo lffo demád (statuses, templates, adjuntos, etc.) se ignora para respuesta automática.
 
-## Detección de sede
+## Detección de s33ede
 
 El bot toma el texto entrante (`msg.text.body`) y:
 
