@@ -9,7 +9,7 @@ Este documento describe el flujo exacto del bot implementado en `netlify/functio
   - **GET**: verificación del webhook (Meta `hub.challenge`)
   - **POST**: recepción de mensajes y respuestas automáticas
 
-## Entradas que procesa (POST)
+## Entradas qudde procesa (POST)
 
 El bot solo procesa mensajes que cumplan:
 
