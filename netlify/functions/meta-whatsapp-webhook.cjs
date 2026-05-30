@@ -186,6 +186,8 @@ const USER_REPLY_COOLDOWN_MS = 6000;
 
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
+const STUDIES_TO_BRING_MESSAGE =
+  'Si ya te realizaste estudios (por ejemplo espirometría, análisis o informes de alergia), sí: traé los resultados o informes que tengas, aunque sean de otro centro. Si tenés obra social, también conviene traer credencial y orden de consulta o prácticas autorizadas si te las dieron.';
 const STUDY_PRICE_WITH_CONSULTATION_ARS = 30000;
 const STANDALONE_SPIROMETRY_PRICE_ARS = 40000;
 const INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION = ['OSDE', 'Sancor', 'Isunne'];
@@ -373,6 +375,7 @@ function messageLooksLikeGreetingOnly(rawText) {
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return false;
   if (messageAsksAboutStudiesOrTests(rawText)) return false;
+  if (messageAsksWhatStudiesToBring(rawText)) return false;
   if (messageAsksAboutConditionTreatment(rawText) || messageAsksAboutTreatmentCost(rawText)) return false;
   if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return false;
   if (
@@ -512,6 +515,7 @@ function messageLooksLikeFarewell(rawText) {
   if (messageLooksLikeScheduleAvailabilityQuestion(rawText)) return false;
   if (messageLooksLikeRealtimeAvailabilityQuestion(rawText)) return false;
   if (messageAsksAboutStudiesOrTests(rawText)) return false;
+  if (messageAsksWhatStudiesToBring(rawText)) return false;
   if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return false;
   if (messageIsGreeting(rawText)) return false;
 
@@ -2491,6 +2495,7 @@ function messageAsksAboutStudiesOrTests(rawText) {
 
 function messageAsksAboutDocumentationOrRequirements(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksWhatStudiesToBring(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   return (
     normalized.includes('que tengo que llevar') ||
@@ -2498,6 +2503,10 @@ function messageAsksAboutDocumentationOrRequirements(rawText) {
     normalized.includes('que llevo') ||
     normalized.includes('qué llevo') ||
     normalized.includes('que hay que llevar') ||
+    normalized.includes('debo llevar') ||
+    normalized.includes('debo traer') ||
+    normalized.includes('que debo llevar') ||
+    normalized.includes('que debo traer') ||
     normalized.includes('documentacion') ||
     normalized.includes('documentación') ||
     normalized.includes('orden') ||
@@ -2906,6 +2915,42 @@ function messageAsksWhatStudiesDoctorDoes(rawText) {
   );
 }
 
+function messageAsksWhatStudiesToBring(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksWhatStudiesDoctorDoes(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  const asksToBring =
+    normalized.includes('debo llevar') ||
+    normalized.includes('debo traer') ||
+    normalized.includes('tengo que llevar') ||
+    normalized.includes('tengo que traer') ||
+    normalized.includes('hay que llevar') ||
+    normalized.includes('hay que traer') ||
+    normalized.includes('que debo llevar') ||
+    normalized.includes('que debo traer') ||
+    normalized.includes('que tengo que traer') ||
+    normalized.includes('estudios previos') ||
+    normalized.includes('estudios anteriores') ||
+    normalized.includes('estudios que ya') ||
+    normalized.includes('resultados de estudios') ||
+    normalized.includes('informes de estudios') ||
+    normalized.includes('traer estudios') ||
+    normalized.includes('llevar estudios') ||
+    (normalized.includes('llevar') && normalized.includes('estudio')) ||
+    (normalized.includes('traer') && normalized.includes('estudio')) ||
+    ((normalized.includes('que llevar') || normalized.includes('que llevo')) &&
+      normalized.includes('estudio'));
+  return asksToBring;
+}
+
+function buildStudiesToBringReply(priorState) {
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  if (sedeFromState) {
+    return `${STUDIES_TO_BRING_MESSAGE} Así el Dr. puede revisarlos en la consulta en ${sedeFromState.displayName}.`;
+  }
+  return `${STUDIES_TO_BRING_MESSAGE} Así el Dr. puede revisarlos en la consulta.`;
+}
+
 function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
   if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return null;
   if (/osde/i.test(healthInsuranceName)) return 'OSDE';
@@ -2934,6 +2979,9 @@ function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
 
 async function buildStudiesInformationReply(priorState, rawText = '', options = {}) {
   const normalized = normalizeForMatch(rawText);
+  if (messageAsksWhatStudiesToBring(rawText)) {
+    return buildStudiesToBringReply(priorState);
+  }
   if (messageAsksWhatStudiesDoctorDoes(rawText)) {
     const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
     if (sedeFromState) {

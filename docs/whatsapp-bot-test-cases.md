@@ -89,6 +89,10 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 ## Estudios / prácticas
 - Estudios detectados:
   - “prick test”, “test de alergia”, “espirometría”, “test del parche/patch”
+- Estudios que el Dr. realiza vs. estudios que el paciente debe traer:
+  - “¿qué estudios hace/realiza el Dr.?” → info de prácticas (Prick Test, espirometría, etc.)
+  - “¿cuáles son los estudios que debo llevar?”, “¿qué estudios previos traigo?” → sí traer resultados/informes si ya los tiene + credencial/orden si tiene OS
+  - Con sede guardada (ej. Resistencia): mencionar la sede en la respuesta
 - Precio de estudios:
   - “¿cuánto cuesta el prick test?” → “se confirma en consulta”
 - Preparación de estudios:
@@ -115,7 +119,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Mensaje: “El Dr. no atiende urgencias…” + guardia/107
 
 ## Documentación / requisitos / administración (FAQ)
-- “¿Qué tengo que llevar?” (orden + prácticas autorizadas si tiene OS)
+- “¿Qué tengo que llevar?” / “¿qué debo llevar?” (orden + prácticas autorizadas si tiene OS)
+- “¿Cuáles son los estudios que debo llevar?” → estudios previos (no confundir con prácticas del Dr.)
 - “¿Necesito orden?”, “¿receta/derivación?” (no necesita)
 - “¿Atienden con autorización?”, “¿aceptan credencial digital?” (sí)
 - “¿Dan factura?” (sí)
