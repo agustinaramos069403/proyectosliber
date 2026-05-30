@@ -90,8 +90,14 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Estudios detectados:
   - “prick test”, “test de alergia”, “espirometría”, “test del parche/patch”
 - Estudios que el Dr. realiza vs. estudios que el paciente debe traer:
-  - “¿qué estudios hace/realiza el Dr.?” → info de prácticas (Prick Test, espirometría, etc.)
-  - “¿cuáles son los estudios que debo llevar?”, “¿qué estudios previos traigo?” → sí traer resultados/informes si ya los tiene + credencial/orden si tiene OS
+  - “¿qué estudios hace/realiza el Dr.?”, “¿hacen espirometría/prick en consulta?” → info de prácticas (Prick Test, espirometría, etc.) vía `messageAsksAboutStudiesOrTests`
+  - “¿cuáles son los estudios que debo llevar?”, “¿qué estudios previos traigo?” → sí traer resultados/informes si ya los tiene + DNI + credencial/orden si tiene OS
+  - “¿qué historia clínica / informes de otro médico debo llevar?” → sí traer informes/historia clínica + DNI + credencial/orden si aplica
+  - “no tengo estudios previos / nunca me hice estudios” → podés venir igual; el Dr. evalúa en consulta
+  - “¿qué estudios me van a pedir?” / “¿qué debo hacerme antes?” → depende del caso; se define en evaluación
+  - “me mandaron a hacerme estudios antes de ir” → traer orden/informe y resultados si ya los tiene
+  - “¿puedo llevar foto/PDF en el celular?” → sí en consulta; no enviar informes por este chat
+  - Pediatría: “¿qué estudios lleva mi hijo/a?” → variante con DNI del menor
   - Con sede guardada (ej. Resistencia): mencionar la sede en la respuesta
 - Precio de estudios:
   - “¿cuánto cuesta el prick test?” → “se confirma en consulta”

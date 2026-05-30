@@ -187,7 +187,21 @@ const USER_REPLY_COOLDOWN_MS = 6000;
 const STUDIES_INFORMATION_MESSAGE =
   'Sí, según el caso el Dr. puede indicar y/o coordinar estudios como tests de alergia (Prick Test), espirometría, laboratorio y test del parche.';
 const STUDIES_TO_BRING_MESSAGE =
-  'Si ya te realizaste estudios (por ejemplo espirometría, análisis o informes de alergia), sí: traé los resultados o informes que tengas, aunque sean de otro centro. Si tenés obra social, también conviene traer credencial y orden de consulta o prácticas autorizadas si te las dieron.';
+  'Si ya te realizaste estudios (por ejemplo espirometría, análisis o informes de alergia), sí: traé los resultados o informes que tengas, aunque sean de otro centro. También conviene llevar DNI y, si tenés obra social, credencial y orden de consulta o prácticas autorizadas si te las dieron.';
+const STUDIES_CHILD_TO_BRING_MESSAGE =
+  'Si tu hijo/a ya se realizó estudios (espirometría, análisis o informes de alergia), sí: traé los resultados que tengan, aunque sean de otro centro. También conviene llevar DNI del menor y, si tienen obra social, credencial y orden o prácticas autorizadas.';
+const STUDIES_MEDICAL_HISTORY_TO_BRING_MESSAGE =
+  'Sí: si tenés informes de otro médico, historia clínica o resultados de estudios anteriores, traélos. También DNI y, si tenés obra social, credencial y orden si te la dieron.';
+const STUDIES_NO_PRIOR_STUDIES_MESSAGE =
+  'No hay problema: podés venir igual. El Dr. evalúa tu caso en consulta y ahí ve qué hace falta. Traé DNI y, si tenés obra social, credencial y orden si te la dieron.';
+const STUDIES_CHILD_NO_PRIOR_STUDIES_MESSAGE =
+  'No hay problema: podés venir igual con tu hijo/a. El Dr. evalúa en consulta y ahí ve qué hace falta. Traé DNI del menor y, si tienen obra social, credencial y orden si la dieron.';
+const STUDIES_WILL_BE_REQUESTED_MESSAGE =
+  'Depende de tu caso: eso lo define el Dr. en la consulta de evaluación. No siempre se piden estudios antes; a veces se coordinan después de ver al paciente.';
+const STUDIES_DIGITAL_RESULTS_MESSAGE =
+  'Sí, podés traer fotos o PDF en el celular para mostrar en consulta. Por este chat no conviene enviar informes ni datos personales.';
+const STUDIES_SENT_FOR_STUDIES_BEFORE_VISIT_MESSAGE =
+  'Si otro médico te indicó estudios, traé la orden o informe que te hayan dado y los resultados si ya los tenés. En la consulta el Dr. los revisa y ve si hace falta algo más.';
 const STUDY_PRICE_WITH_CONSULTATION_ARS = 30000;
 const STANDALONE_SPIROMETRY_PRICE_ARS = 40000;
 const INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION = ['OSDE', 'Sancor', 'Isunne'];
@@ -374,8 +388,7 @@ function messageLooksLikeGreetingOnly(rawText) {
   if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return false;
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return false;
-  if (messageAsksAboutStudiesOrTests(rawText)) return false;
-  if (messageAsksWhatStudiesToBring(rawText)) return false;
+  if (messageMatchesStudiesTopic(rawText)) return false;
   if (messageAsksAboutConditionTreatment(rawText) || messageAsksAboutTreatmentCost(rawText)) return false;
   if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return false;
   if (
@@ -514,8 +527,7 @@ function messageLooksLikeFarewell(rawText) {
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   if (messageLooksLikeScheduleAvailabilityQuestion(rawText)) return false;
   if (messageLooksLikeRealtimeAvailabilityQuestion(rawText)) return false;
-  if (messageAsksAboutStudiesOrTests(rawText)) return false;
-  if (messageAsksWhatStudiesToBring(rawText)) return false;
+  if (messageMatchesStudiesTopic(rawText)) return false;
   if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return false;
   if (messageIsGreeting(rawText)) return false;
 
@@ -589,7 +601,7 @@ function messageConfirmsAlreadyBooked(rawText, priorState = null) {
     messageLooksLikePrivatePriceQuestion(rawText) ||
     messageAsksAboutStudyPrice(rawText) ||
     messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
-    messageAsksAboutStudiesOrTests(rawText) ||
+    messageMatchesStudiesTopic(rawText) ||
     messageLooksLikeScheduleAvailabilityQuestion(rawText) ||
     messageExplicitlyRequestsBookingLink(rawText);
   if (hasAdditionalActiveIntent) return false;
@@ -2033,7 +2045,7 @@ function messageLooksLikeMultiIntentCandidate(rawText) {
     messageLooksLikeHealthInsurancePlusQuestion(rawText),
     messageLooksLikePrivatePriceQuestion(rawText),
     messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText),
-    messageAsksAboutStudiesOrTests(rawText),
+    messageMatchesStudiesTopic(rawText),
     messageAsksAboutConditionTreatment(rawText) || messageAsksAboutTreatmentCost(rawText),
     messageAsksAboutSedeAddressOrHowToArrive(rawText),
     messageAsksAboutDocumentationOrRequirements(rawText) ||
@@ -2495,7 +2507,7 @@ function messageAsksAboutStudiesOrTests(rawText) {
 
 function messageAsksAboutDocumentationOrRequirements(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (messageAsksWhatStudiesToBring(rawText)) return false;
+  if (messageAsksAboutStudiesOrTests(rawText) || messageMatchesStudiesPatientOnlyFaq(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   return (
     normalized.includes('que tengo que llevar') ||
@@ -2903,22 +2915,59 @@ function messageAsksAboutStudyPrice(rawText) {
 function messageAsksWhatStudiesDoctorDoes(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('debo llevar') ||
+    normalized.includes('debo traer') ||
+    normalized.includes('tengo que llevar') ||
+    normalized.includes('tengo que traer') ||
+    normalized.includes('estudios previos') ||
+    normalized.includes('estudios anteriores') ||
+    normalized.includes('no tengo estudios') ||
+    normalized.includes('no me hice estudios')
+  ) {
+    return false;
+  }
   return (
     normalized.includes('que estudios hace') ||
     normalized.includes('qué estudios hace') ||
+    normalized.includes('que estudios hacen') ||
+    normalized.includes('qué estudios hacen') ||
     normalized.includes('que estudios realiza') ||
     normalized.includes('qué estudios realiza') ||
+    normalized.includes('que estudios realizan') ||
+    normalized.includes('qué estudios realizan') ||
+    normalized.includes('cuales estudios hace') ||
+    normalized.includes('cuáles estudios hace') ||
+    normalized.includes('cuales estudios hacen') ||
+    normalized.includes('cuáles estudios hacen') ||
+    normalized.includes('cuales estudios realiza') ||
+    normalized.includes('cuáles estudios realiza') ||
     normalized.includes('que practicas hace') ||
     normalized.includes('qué prácticas hace') ||
+    normalized.includes('que practicas hacen') ||
+    normalized.includes('qué prácticas hacen') ||
     normalized.includes('que practicas realiza') ||
-    normalized.includes('qué prácticas realiza')
+    normalized.includes('qué prácticas realiza') ||
+    (normalized.includes('estudio') && normalized.includes('en consulta')) ||
+    (normalized.includes('estudio') && normalized.includes('en la consulta'))
   );
 }
 
 function messageAsksWhatStudiesToBring(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (messageAsksWhatStudiesDoctorDoes(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('que estudios hace') ||
+    normalized.includes('que estudios hacen') ||
+    normalized.includes('que estudios realiza') ||
+    normalized.includes('que estudios realizan') ||
+    normalized.includes('cuales estudios hace') ||
+    normalized.includes('cuales estudios hacen') ||
+    (normalized.includes('estudio') && normalized.includes('en consulta') && !normalized.includes('llevar')) ||
+    (normalized.includes('estudio') && normalized.includes('en la consulta') && !normalized.includes('llevar'))
+  ) {
+    return false;
+  }
   const asksToBring =
     normalized.includes('debo llevar') ||
     normalized.includes('debo traer') ||
@@ -2939,16 +2988,182 @@ function messageAsksWhatStudiesToBring(rawText) {
     (normalized.includes('llevar') && normalized.includes('estudio')) ||
     (normalized.includes('traer') && normalized.includes('estudio')) ||
     ((normalized.includes('que llevar') || normalized.includes('que llevo')) &&
-      normalized.includes('estudio'));
+      (normalized.includes('estudio') || normalized.includes('informe') || normalized.includes('historia clinica')));
   return asksToBring;
 }
 
-function buildStudiesToBringReply(priorState) {
+function messageSaysHasNoPriorStudies(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('no tengo estudios') ||
+    normalized.includes('no me hice estudios') ||
+    normalized.includes('nunca me hice estudios') ||
+    normalized.includes('no tengo informes') ||
+    normalized.includes('no tengo ningun estudio') ||
+    normalized.includes('no tengo ningun informe') ||
+    normalized.includes('sin estudios previos') ||
+    normalized.includes('sin estudios anteriores') ||
+    normalized.includes('no traigo estudios') ||
+    normalized.includes('no hice estudios') ||
+    normalized.includes('no tiene estudios') ||
+    normalized.includes('no se hizo estudios') ||
+    normalized.includes('no hizo estudios')
+  );
+}
+
+function messageAsksWhatStudiesWillBeRequested(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksWhatStudiesToBring(rawText)) return false;
+  if (messageSaysHasNoPriorStudies(rawText)) return false;
+  if (messageWasSentForStudiesBeforeVisit(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsStudies =
+    normalized.includes('estudio') ||
+    normalized.includes('practica') ||
+    normalized.includes('prick') ||
+    normalized.includes('espirometr') ||
+    normalized.includes('laboratorio');
+  if (!mentionsStudies) return false;
+  return (
+    normalized.includes('que estudios me van a pedir') ||
+    normalized.includes('que estudios me piden') ||
+    normalized.includes('que estudios me van a hacer') ||
+    normalized.includes('que estudios necesito') ||
+    normalized.includes('que estudios debo hacerme') ||
+    normalized.includes('que me van a pedir') ||
+    normalized.includes('que practicas me van a pedir') ||
+    normalized.includes('que tengo que hacerme antes') ||
+    normalized.includes('que debo hacerme antes') ||
+    normalized.includes('necesito hacerme algun estudio') ||
+    normalized.includes('necesito algun estudio antes')
+  );
+}
+
+function messageAsksAboutDigitalStudyResults(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsDigitalFormat =
+    normalized.includes('foto') ||
+    normalized.includes('fotografia') ||
+    normalized.includes('pdf') ||
+    normalized.includes('celular') ||
+    normalized.includes('telefono') ||
+    normalized.includes('digital') ||
+    normalized.includes('escaneado') ||
+    normalized.includes('captura');
+  if (!mentionsDigitalFormat) return false;
+  const mentionsMedicalRecord =
+    normalized.includes('informe') ||
+    normalized.includes('estudio') ||
+    normalized.includes('resultado') ||
+    normalized.includes('analisis');
+  const asksAboutBringingOrSending =
+    normalized.includes('llevar') ||
+    normalized.includes('traer') ||
+    normalized.includes('mostrar') ||
+    normalized.includes('sirve') ||
+    normalized.includes('puedo') ||
+    normalized.includes('enviar') ||
+    normalized.includes('mandar') ||
+    normalized.includes('pasar');
+  return mentionsMedicalRecord || asksAboutBringingOrSending;
+}
+
+function messageWasSentForStudiesBeforeVisit(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksWhatStudiesToBring(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('me mandaron a hacerme') ||
+    normalized.includes('me mandaron a hacer') ||
+    normalized.includes('me derivaron para') ||
+    normalized.includes('me derivaron a hacerme') ||
+    normalized.includes('otro medico me mando') ||
+    normalized.includes('otro medico me dijo') ||
+    normalized.includes('me pidieron que me haga') ||
+    normalized.includes('me pidieron hacerme') ||
+    (normalized.includes('antes de ir') &&
+      (normalized.includes('estudio') || normalized.includes('espirometr') || normalized.includes('prick')))
+  );
+}
+
+function messageAsksAboutMedicalHistoryToBring(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsHistory =
+    normalized.includes('historia clinica') ||
+    normalized.includes('informe de otro medico') ||
+    normalized.includes('informe medico') ||
+    normalized.includes('informes de otro') ||
+    normalized.includes('receta de otro') ||
+    normalized.includes('derivacion de otro');
+  const asksToBring =
+    normalized.includes('llevar') ||
+    normalized.includes('traer') ||
+    normalized.includes('debo') ||
+    normalized.includes('tengo que') ||
+    normalized.includes('hay que') ||
+    normalized.includes('necesito');
+  return mentionsHistory && asksToBring;
+}
+
+function messageMentionsChildPatientContext(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    messageAsksIfDoctorTreatsChildren(rawText) ||
+    normalized.includes('mi hijo') ||
+    normalized.includes('mi hija') ||
+    normalized.includes('de mi hijo') ||
+    normalized.includes('de mi hija') ||
+    normalized.includes('para mi hijo') ||
+    normalized.includes('para mi hija') ||
+    normalized.includes('del nene') ||
+    normalized.includes('del nena') ||
+    normalized.includes('mi menor')
+  );
+}
+
+function messageMatchesStudiesPatientOnlyFaq(rawText) {
+  return (
+    messageAsksWhatStudiesToBring(rawText) ||
+    messageSaysHasNoPriorStudies(rawText) ||
+    messageAsksWhatStudiesWillBeRequested(rawText) ||
+    messageAsksAboutDigitalStudyResults(rawText) ||
+    messageWasSentForStudiesBeforeVisit(rawText) ||
+    messageAsksAboutMedicalHistoryToBring(rawText)
+  );
+}
+
+function messageMatchesStudiesTopic(rawText) {
+  return messageAsksAboutStudiesOrTests(rawText) || messageMatchesStudiesPatientOnlyFaq(rawText);
+}
+
+function appendSedeContextIfKnown(baseMessage, priorState) {
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (sedeFromState) {
-    return `${STUDIES_TO_BRING_MESSAGE} Así el Dr. puede revisarlos en la consulta en ${sedeFromState.displayName}.`;
+    return `${baseMessage} Te esperamos en ${sedeFromState.displayName}.`;
   }
-  return `${STUDIES_TO_BRING_MESSAGE} Así el Dr. puede revisarlos en la consulta.`;
+  return baseMessage;
+}
+
+function buildStudiesToBringReply(priorState, rawText = '') {
+  const isChildContext = messageMentionsChildPatientContext(rawText);
+  const isMedicalHistoryOnly =
+    messageAsksAboutMedicalHistoryToBring(rawText) && !messageAsksWhatStudiesToBring(rawText);
+  let baseMessage = STUDIES_TO_BRING_MESSAGE;
+  if (isChildContext) {
+    baseMessage = STUDIES_CHILD_TO_BRING_MESSAGE;
+  } else if (isMedicalHistoryOnly) {
+    baseMessage = STUDIES_MEDICAL_HISTORY_TO_BRING_MESSAGE;
+  }
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  const childReviewSuffix = isChildContext ? ' con tu hijo/a' : '';
+  if (sedeFromState) {
+    return `${baseMessage} Así el Dr. puede revisarlos en la consulta${childReviewSuffix} en ${sedeFromState.displayName}.`;
+  }
+  return `${baseMessage} Así el Dr. puede revisarlos en la consulta${childReviewSuffix}.`;
 }
 
 function normalizeHealthInsuranceNameForStudyPricing(healthInsuranceName) {
@@ -2979,8 +3194,23 @@ function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
 
 async function buildStudiesInformationReply(priorState, rawText = '', options = {}) {
   const normalized = normalizeForMatch(rawText);
-  if (messageAsksWhatStudiesToBring(rawText)) {
-    return buildStudiesToBringReply(priorState);
+  if (messageAsksAboutDigitalStudyResults(rawText)) {
+    return STUDIES_DIGITAL_RESULTS_MESSAGE;
+  }
+  if (messageSaysHasNoPriorStudies(rawText)) {
+    const baseMessage = messageMentionsChildPatientContext(rawText)
+      ? STUDIES_CHILD_NO_PRIOR_STUDIES_MESSAGE
+      : STUDIES_NO_PRIOR_STUDIES_MESSAGE;
+    return appendSedeContextIfKnown(baseMessage, priorState);
+  }
+  if (messageAsksWhatStudiesToBring(rawText) || messageAsksAboutMedicalHistoryToBring(rawText)) {
+    return buildStudiesToBringReply(priorState, rawText);
+  }
+  if (messageWasSentForStudiesBeforeVisit(rawText)) {
+    return appendSedeContextIfKnown(STUDIES_SENT_FOR_STUDIES_BEFORE_VISIT_MESSAGE, priorState);
+  }
+  if (messageAsksWhatStudiesWillBeRequested(rawText)) {
+    return appendSedeContextIfKnown(STUDIES_WILL_BE_REQUESTED_MESSAGE, priorState);
   }
   if (messageAsksWhatStudiesDoctorDoes(rawText)) {
     const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
@@ -4385,7 +4615,7 @@ exports.handler = async (event) => {
               messageLooksLikePrivatePriceQuestion(bodyText) ||
               messageLooksLikeAnyPriceQuestion(bodyText) ||
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
-              messageAsksAboutStudiesOrTests(bodyText) ||
+              messageMatchesStudiesTopic(bodyText) ||
               messageLooksLikeRealtimeAvailabilityQuestion(bodyText);
             if (isInWindow && !shouldBypassSymptomDurationCapture) {
               const detectedSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
@@ -4976,7 +5206,8 @@ exports.handler = async (event) => {
             continue;
           }
 
-          if (messageAsksAboutStudiesOrTests(bodyText)) {
+          // Primary studies gate: doctor-performed studies (messageAsksAboutStudiesOrTests) plus patient FAQ.
+          if (messageAsksAboutStudiesOrTests(bodyText) || messageMatchesStudiesPatientOnlyFaq(bodyText)) {
             if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
               const preservedSessionState =
                 priorState && typeof priorState === 'object'
@@ -5339,7 +5570,7 @@ exports.handler = async (event) => {
               messageLooksLikePrivatePriceQuestion(bodyText) ||
               messageLooksLikeAnyPriceQuestion(bodyText) ||
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
-              messageAsksAboutStudiesOrTests(bodyText) ||
+              messageMatchesStudiesTopic(bodyText) ||
               messageAsksAboutConditionTreatment(bodyText) ||
               messageLooksLikeChronicSymptomFrustration(bodyText) ||
               messageExplicitlyRequestsBookingLink(bodyText) ||
