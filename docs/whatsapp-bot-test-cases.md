@@ -95,7 +95,9 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Evitar confusión con estudios:
   - “cuánto cuesta espirometría/prick/parche” no debe activar el precio de consulta; pedir obra social y sede para el estudio
   - Typos de espirometría: “estirometria”, “espirometria” → mismo flujo de precio de estudio (no $40.000 de consulta)
-  - “precio de la consulta” sí debe responder precio particular de consulta (distinto del estudio)
+  - “precio de la consulta” / “qué costo tiene la consulta” sí debe responder precio particular de consulta (distinto del estudio)
+  - Tras pedir ciudad por costo consulta: “Corrientes” → precio desde Sheets en Corrientes (NO “¿En qué te puedo ayudar?”)
+  - Repetir “quiero saber qué costo tiene la consulta” con sede ya informada → precio (NO link de agenda)
   - Después de hablar de precio de estudio: “precio consulta particular?” → precio de consulta desde Google Sheets (NO mandar link de agenda por la palabra “consulta”)
   - Router OpenAI primero (con contexto de sede/estudio previo) para desambiguar precio consulta vs agendar vs estudio
 
@@ -120,6 +122,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - Typos: “estirometria” en preguntas de preparación → misma respuesta de espirometría
   - Preparación de estudios: siempre intenta OpenAI primero (con sede/estudio en contexto); si falla, respuesta fija de respaldo
   - Precio de estudio nuevo sin obra social en el mensaje: “hola precio de estirometria?” → pedir obra social y ciudad (no reutilizar IOSCOR/sede de sesiones viejas)
+  - Mensaje combinado obra social + ciudad (IA primero): “osde y soy de corrientes” tras pedir datos para espirometría → precio con OSDE en Corrientes y guardar sede/OS en estado (NO volver a pedir ciudad después)
+  - Tras precio espirometría + OSDE + Corrientes: “perfecto y para mañana hay turno?” → link o micro-compromiso en Corrientes (NO “¿para qué sede es?”)
   - Follow-up de precio de estudio (IA + reglas): tras “¿Querés que te cuente el valor o preferís agendar?” con espirometría + IOSCOR + Resistencia, “si dame el precio” → plus + $30.000 del estudio (NO $45.000 de consulta particular sola)
   - Router OpenAI: token `STUDY_PRICE` vs `PRIVATE_PRICE`; contexto incluye último mensaje del bot (`lastBotReplyText`)
   - Ayunas: “¿tengo que ir en ayunas?” → no
