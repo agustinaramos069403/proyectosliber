@@ -556,6 +556,20 @@ function findSedeFromText(rawText) {
       }
     }
   }
+
+  const withoutLeadingInitial = normalized.replace(/^[a-z]\s+/, '');
+  if (withoutLeadingInitial !== normalized) {
+    for (const entry of SEDE_ENTRIES) {
+      for (const keyword of entry.match) {
+        if (/^[12]$/.test(keyword)) continue;
+        const keyNorm = normalizeForMatch(keyword);
+        if (withoutLeadingInitial === keyNorm || withoutLeadingInitial.includes(keyNorm)) {
+          return entry;
+        }
+      }
+    }
+  }
+
   return null;
 }
 
@@ -1918,6 +1932,38 @@ function buildPendingBookingIntentStatePatch() {
   return { pendingBookingIntentAtMs: Date.now() };
 }
 
+function buildPendingBookingDetailsStatePatch(rawText) {
+  if (!rawText || typeof rawText !== 'string') return {};
+  const trimmed = rawText.trim();
+  if (!trimmed.length) return {};
+  const weekdayName = extractWeekdayNameFromText(rawText);
+  return {
+    lastPendingBookingRequestText: trimmed.slice(0, 280),
+    ...(weekdayName ? { pendingBookingWeekday: weekdayName } : {}),
+    ...(messageIncludesSpecificAppointmentTime(rawText) ? { pendingBookingIncludesTime: true } : {}),
+  };
+}
+
+function buildClearedPendingBookingDetailsPatch() {
+  return {
+    lastPendingBookingRequestText: null,
+    pendingBookingWeekday: null,
+    pendingBookingIncludesTime: null,
+  };
+}
+
+function resolvePendingBookingRequestText(priorState, currentMessage = '') {
+  const fromState =
+    priorState &&
+    typeof priorState === 'object' &&
+    typeof priorState.lastPendingBookingRequestText === 'string'
+      ? priorState.lastPendingBookingRequestText.trim()
+      : '';
+  if (messageLooksLikeSedeOnlyAnswer(currentMessage)) return fromState;
+  const fromCurrent = typeof currentMessage === 'string' ? currentMessage.trim() : '';
+  return fromCurrent || fromState;
+}
+
 function buildClearedPendingBookingIntentPatch() {
   return { pendingBookingIntentAtMs: null };
 }
@@ -2018,9 +2064,121 @@ function buildPreferredDayBookingReply(sede, weekdayName, priorState = null, raw
     const timeNote = includesSpecificTime
       ? ' Por acá no confirmamos horarios puntuales; en el link ves qué hay disponible.'
       : '';
-    return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, en el link ves los días y horarios disponibles del Dr.${timeNote} Por acá no agendamos. ¿Te lo mando?`;
+    return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, elegí día y horario en el link.${timeNote} Por acá no agendamos.\n${getAgendaUrl(sede) || ''}`.trim();
   }
   return buildScheduleQuestionLinkMessage(sede, priorState);
+}
+
+async function fetchOpenAiBookingPolicyReply(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+
+  const modelName = getOpenAiModelName();
+  const basePrompt = loadAgenteLiberSystemPrompt();
+  const sede = options.sede;
+  const linkUrl = options.linkUrl || (sede ? getAgendaUrl(sede) : null);
+  const systemPrompt = [
+    typeof basePrompt === 'string' && basePrompt.trim().length > 0
+      ? basePrompt.trim()
+      : FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT,
+    '',
+    'Situación: el paciente quiere sacar turno (a veces con día u hora concreta) por WhatsApp.',
+    'Reglas obligatorias en tu respuesta:',
+    '- Explicá brevemente que por este chat NO se agendan turnos ni se confirman horarios puntuales.',
+    '- Indicá que debe usar el link de agenda online para ver disponibilidad y reservar.',
+    linkUrl ? `- Incluí este link de agenda en una línea aparte: ${linkUrl}` : '',
+    sede && sede.displayName ? `- Sede: ${sede.displayName}.` : '',
+    options.weekdayName ? `- El paciente mencionó preferencia: ${options.weekdayName}.` : '',
+    options.includesTime ? '- Mencionó un horario concreto; no confirmes que hay turno a esa hora.' : '',
+    'Máximo 3 oraciones cortas. Empático, sin repetir preguntas innecesarias. No uses markdown.',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const priorState = options.priorState;
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    profileDisplayName: options.profileDisplayName,
+    conversationContext: priorState ? buildIntentRoutingOpenAiContext(priorState) : '',
+    lastAssistantMessage:
+      priorState && typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '',
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: OPENAI_CHAT_TEMPERATURE,
+        max_tokens: OPENAI_MAX_OUTPUT_TOKENS,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || text.trim().length === 0) return null;
+    return text.trim();
+  } catch (error) {
+    console.error('OpenAI booking policy reply failed', error);
+    return null;
+  }
+}
+
+async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage = '', options = {}) {
+  const requestText = resolvePendingBookingRequestText(priorState, currentMessage);
+  const weekdayName =
+    extractWeekdayNameFromText(requestText) ||
+    (priorState &&
+    typeof priorState.pendingBookingWeekday === 'string' &&
+    priorState.pendingBookingWeekday.trim().length > 0
+      ? priorState.pendingBookingWeekday.trim()
+      : null);
+  const includesTime =
+    messageIncludesSpecificAppointmentTime(requestText) ||
+    Boolean(priorState && priorState.pendingBookingIncludesTime);
+  const linkUrl = getAgendaUrl(sede);
+
+  const openAiReply = await fetchOpenAiBookingPolicyReply(requestText || currentMessage, {
+    priorState,
+    profileDisplayName: options.profileDisplayName,
+    sede,
+    weekdayName,
+    includesTime,
+    linkUrl,
+  });
+  if (openAiReply) {
+    const processed = processAssistantReplyForPatient(openAiReply);
+    if (linkUrl && !processed.includes(linkUrl)) {
+      return `${processed}\n${linkUrl}`;
+    }
+    return processed;
+  }
+
+  const replyParts = [];
+  if (weekdayName && includesTime) {
+    replyParts.push(
+      `Entiendo que querés turno el ${weekdayName} a esa hora en ${sede.displayName}. Por acá no agendamos ni confirmamos horarios puntuales.`
+    );
+  } else if (weekdayName) {
+    replyParts.push(
+      `Perfecto, para el ${weekdayName} en ${sede.displayName}. Por acá no agendamos por este chat.`
+    );
+  } else {
+    replyParts.push(
+      `Dale, te ayudo con el turno en ${sede.displayName}. Por acá no agendamos por WhatsApp.`
+    );
+  }
+  if (linkUrl) {
+    replyParts.push(`Podés ver días y horarios disponibles y reservar acá:\n${linkUrl}`);
+  }
+  return replyParts.join('\n');
 }
 
 function buildPreservedIntentSessionPatch(priorState) {
@@ -2195,17 +2353,11 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
     return await buildPrivatePriceReply(sede);
   }
   if (stateHasPendingBookingIntent(priorState) || messageLooksLikeBookingIntent(bodyText)) {
-    if (stateHasRecentStudyPriceContext(priorState)) {
-      return buildLinkMessage(sede);
-    }
-    return buildMicroCommitmentMessageWithState(priorState, true);
+    return buildBookingPolicyReplyForSede(sede, priorState, bodyText);
   }
   if (messageLooksLikeSedeOnlyAnswer(bodyText)) {
     if (stateHasRecentBookingConversationContext(priorState)) {
-      if (stateHasRecentStudyPriceContext(priorState)) {
-        return buildLinkMessage(sede);
-      }
-      return buildMicroCommitmentMessageWithState(priorState, true);
+      return buildBookingPolicyReplyForSede(sede, priorState, bodyText);
     }
     if (priorState && priorState.state === 'awaiting_private_price_city') {
       return await buildPrivatePriceReply(sede);
@@ -2286,10 +2438,14 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
     : continuesPrivatePriceFlow
     ? buildAwaitingLinkConfirmationState(sede, 'after_private_price')
     : continuesBookingFlow
-      ? stateHasRecentStudyPriceContext(priorState)
-        ? priorState || {}
-        : buildAwaitingLinkConfirmationState(sede, 'after_sede_selection')
+      ? buildClearedAwaitingLinkConfirmationStatePatch()
       : priorState || {};
+  const bookingFlowStatePatch = continuesBookingFlow
+    ? {
+        ...(buildLinkSentStatePatch(sede) || {}),
+        ...buildClearedPendingBookingDetailsPatch(),
+      }
+    : {};
   await setConversationState(
     from,
     mergeConversationStatePreservingGreeting(
@@ -2300,6 +2456,7 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
         ...(buildLastSedeStatePatch(sede) || {}),
         ...(continuesPrivatePriceFlow ? buildClearedPendingPrivatePriceIntentPatch() : {}),
         ...(continuesBookingFlow ? buildClearedPendingBookingIntentPatch() : buildClearedStudyPricingContextPatch()),
+        ...bookingFlowStatePatch,
         ...buildLastBotReplyStatePatch(wrapped.messageText),
       }
     )
@@ -4069,23 +4226,28 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
         ...(buildLastSedeStatePatch(lastSede) || {}),
         ...(buildLinkSentStatePatch(lastSede) || {}),
         ...buildClearedPendingBookingIntentPatch(),
+        ...buildClearedPendingBookingDetailsPatch(),
         ...buildLastBotReplyStatePatch(wrapped.messageText),
       })
     );
     await sendWhatsAppText(from, wrapped.messageText);
     return true;
   }
-  const micro = buildMicroCommitmentMessageWithState(priorState, true);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
+  const policyReply = await buildBookingPolicyReplyForSede(lastSede, priorState, bodyText, {
+    profileDisplayName,
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(policyReply, profileDisplayName, priorState);
   await setConversationState(
     from,
     mergeConversationStatePreservingGreeting(
       priorState,
-      buildAwaitingLinkConfirmationState(lastSede, 'after_booking_intent'),
+      buildClearedAwaitingLinkConfirmationStatePatch(),
       {
         ...(wrapped.nextStatePatch || {}),
         ...(buildLastSedeStatePatch(lastSede) || {}),
+        ...(buildLinkSentStatePatch(lastSede) || {}),
         ...buildClearedPendingBookingIntentPatch(),
+        ...buildClearedPendingBookingDetailsPatch(),
         ...buildLastBotReplyStatePatch(wrapped.messageText),
       }
     )
@@ -4618,31 +4780,34 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
   if (!lastSede) {
     await setConversationState(
       from,
-      mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, buildPendingBookingIntentStatePatch())
+      mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, {
+        ...buildPendingBookingIntentStatePatch(),
+        ...buildPendingBookingDetailsStatePatch(bodyText),
+      })
     );
     await sendAskSedeTwoStep(from, profileDisplayName, {
       ...mergedState,
       ...buildPendingBookingIntentStatePatch(),
+      ...buildPendingBookingDetailsStatePatch(bodyText),
     });
     return true;
   }
   const weekdayName = extractWeekdayNameFromText(bodyText);
-  const reply = buildPreferredDayBookingReply(lastSede, weekdayName, mergedState, bodyText);
+  const reply = await buildBookingPolicyReplyForSede(lastSede, mergedState, bodyText, {
+    profileDisplayName,
+  });
   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
-  const linkAlreadyShared = hasBookingLinkInStateForSede(mergedState, lastSede);
-  const preferredDayStateBase = linkAlreadyShared
-    ? buildClearedAwaitingLinkConfirmationStatePatch()
-    : buildAwaitingLinkConfirmationState(lastSede, 'after_preferred_day');
   await setConversationState(
     from,
-    mergeConversationStatePreservingGreeting(mergedState, preferredDayStateBase, {
-        ...(wrapped.nextStatePatch || {}),
-        ...(buildLastSedeStatePatch(lastSede) || {}),
-        ...buildPendingBookingIntentStatePatch(),
-        ...buildLastScheduleDiscussedStatePatch(),
-        ...buildLastBotReplyStatePatch(wrapped.messageText),
-      }
-    )
+    mergeConversationStatePreservingGreeting(mergedState, buildClearedAwaitingLinkConfirmationStatePatch(), {
+      ...(wrapped.nextStatePatch || {}),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...(buildLinkSentStatePatch(lastSede) || {}),
+      ...buildClearedPendingBookingIntentPatch(),
+      ...buildClearedPendingBookingDetailsPatch(),
+      ...buildLastScheduleDiscussedStatePatch(),
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
   );
   await sendWhatsAppText(from, wrapped.messageText);
   return true;
@@ -4689,11 +4854,15 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
 
   await setConversationState(
     from,
-    mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, buildPendingBookingIntentStatePatch())
+    mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, {
+      ...buildPendingBookingIntentStatePatch(),
+      ...buildPendingBookingDetailsStatePatch(bodyText),
+    })
   );
   await sendAskSedeTwoStep(from, profileDisplayName, {
     ...mergedState,
     ...buildPendingBookingIntentStatePatch(),
+    ...buildPendingBookingDetailsStatePatch(bodyText),
   });
   return true;
 }
@@ -4954,11 +5123,15 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     }
     await setConversationState(
       from,
-      mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, buildPendingBookingIntentStatePatch())
+      mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, {
+        ...buildPendingBookingIntentStatePatch(),
+        ...buildPendingBookingDetailsStatePatch(bodyText),
+      })
     );
     await sendAskSedeTwoStep(from, profileDisplayName, {
       ...mergedState,
       ...buildPendingBookingIntentStatePatch(),
+      ...buildPendingBookingDetailsStatePatch(bodyText),
     });
     return true;
   }
@@ -6061,6 +6234,13 @@ async function sendAskSedeTwoStep(toPhoneId, profileDisplayName, priorState, pre
       lastSeenAtMs: Date.now(),
       lastBotReplyAtMs: Date.now(),
       ...(stateHasPendingBookingIntent(priorState) ? buildPendingBookingIntentStatePatch() : {}),
+      ...(priorState && typeof priorState.lastPendingBookingRequestText === 'string'
+        ? {
+            lastPendingBookingRequestText: priorState.lastPendingBookingRequestText,
+            ...(priorState.pendingBookingWeekday ? { pendingBookingWeekday: priorState.pendingBookingWeekday } : {}),
+            ...(priorState.pendingBookingIncludesTime ? { pendingBookingIncludesTime: true } : {}),
+          }
+        : {}),
       ...(stateHasPendingConsultationPriceIntent(priorState)
         ? buildPendingConsultationPriceIntentStatePatch()
         : {}),
