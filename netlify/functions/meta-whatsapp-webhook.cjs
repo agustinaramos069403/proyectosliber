@@ -1905,6 +1905,14 @@ function processAssistantReplyForPatient(rawModelText, options = {}) {
     normalized.includes('por favor indicame el dia') ||
     normalized.includes('por favor indicame el día');
   if (asksForSpecificDateOrTime) {
+    const confirmedSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState);
+    if (confirmedSede) {
+      return sanitizePatientReplyWhenSedeUnknown(
+        `Entendido. Por acá no confirmamos horarios puntuales; revisá la agenda online para ver disponibilidad en ${confirmedSede.displayName}.`,
+        priorState,
+        bodyText
+      );
+    }
     return sanitizePatientReplyWhenSedeUnknown(
       `Entendido. ¿En qué sede querés atenderte: 1 Corrientes o 2 Resistencia?`,
       priorState,
@@ -2447,11 +2455,18 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
     linkUrl,
   });
   if (openAiReply) {
-    const processed = processAssistantReplyForPatient(openAiReply);
-    if (linkUrl && !processed.includes(linkUrl)) {
+    const processed = processAssistantReplyForPatient(openAiReply, {
+      priorState,
+      bodyText: currentMessage,
+    });
+    const mayIncludeLink =
+      linkUrl &&
+      !assistantReplyAsksForSedeCity(processed) &&
+      !shouldWithholdBookingLinkUntilSedeConfirmed(priorState, currentMessage, sede);
+    if (mayIncludeLink && !processed.includes(linkUrl)) {
       return `${processed}\n${linkUrl}`;
     }
-    return processed;
+    return stripAgendaLinksFromReplyText(processed);
   }
 
   const replyParts = [];
@@ -4713,14 +4728,14 @@ async function tryExtractPatientContextWithOpenAi(rawText, priorState) {
 }
 
 async function resolvePatientContextFromMessage(rawText, priorState) {
-  let sedeEntry =
-    resolveSedeEntryFromState(priorState) ||
-    resolveLastSedeEntryFromState(priorState) ||
-    findSedeFromText(rawText) ||
-    null;
+  const requiresFreshSede = userMessageRequiresFreshSedeForBooking(rawText);
+  let sedeEntry = findSedeFromText(rawText) || null;
+  if (!sedeEntry && !requiresFreshSede) {
+    sedeEntry = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState) || null;
+  }
   let healthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
 
-  if (!sedeEntry) {
+  if (!sedeEntry && !requiresFreshSede) {
     sedeEntry = await resolveSedeFromTextWithOpenAi(rawText);
   }
   if (!healthInsuranceName) {
@@ -4732,7 +4747,7 @@ async function resolvePatientContextFromMessage(rawText, priorState) {
   if (getOpenAiApiKey() && (!sedeEntry || !healthInsuranceName)) {
     const openAiPatientContext = await tryExtractPatientContextWithOpenAi(rawText, priorState);
     if (openAiPatientContext) {
-      if (!sedeEntry && openAiPatientContext.sedeEntry) {
+      if (!sedeEntry && openAiPatientContext.sedeEntry && !requiresFreshSede) {
         sedeEntry = openAiPatientContext.sedeEntry;
       }
       if (!healthInsuranceName && openAiPatientContext.healthInsuranceName) {
@@ -5439,6 +5454,7 @@ async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDi
   if (!weekdayName) return false;
   if (
     messageLooksLikeBookingIntent(bodyText) &&
+    !messageLooksLikePreferredDayForBooking(bodyText) &&
     !resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState)
   ) {
     return false;
@@ -5448,7 +5464,8 @@ async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDi
     stateHasRecentBookingConversationContext(priorState) ||
     stateHasPendingBookingIntent(priorState) ||
     stateLooksLikeAwaitingLinkConfirmation(priorState) ||
-    Boolean(resolveConfirmedSedeEntryForBookingFlow('', priorState));
+    Boolean(resolveConfirmedSedeEntryForBookingFlow('', priorState)) ||
+    messageLooksLikePreferredDayForBooking(bodyText);
   if (!hasConversationContext) return false;
   if (getOpenAiApiKey()) {
     const openAiDecision = await tryResolvePreferredDayBookingWithOpenAi(bodyText, {
@@ -5472,8 +5489,19 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
     priorState || {},
     patientContext.statePatch
   );
-  const lastSede = patientContext.sedeEntry || resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
+  const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
   if (!lastSede) {
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, buildFreshBookingWithoutSedeStatePatch(bodyText))
+    );
+    await sendAskSedeTwoStep(from, profileDisplayName, {
+      ...mergedState,
+      ...buildFreshBookingWithoutSedeStatePatch(bodyText),
+    });
+    return true;
+  }
+  if (shouldWithholdBookingLinkUntilSedeConfirmed(mergedState, bodyText, lastSede)) {
     await setConversationState(
       from,
       mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, buildFreshBookingWithoutSedeStatePatch(bodyText))
@@ -5542,7 +5570,7 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
     priorState || {},
     patientContext.statePatch
   );
-  const lastSede = patientContext.sedeEntry || resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
+  const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
   if (lastSede) {
     return sendBookingFlowReplyForSede(from, bodyText, mergedState, profileDisplayName, lastSede);
   }
@@ -5593,6 +5621,14 @@ function messageShouldSkipOpenAiCentralRouting(rawText, priorState) {
   if (
     conversationRecentlyAskedSedeSelection(priorState) &&
     (messageLooksLikeSedeOnlyAnswer(rawText) || messageLooksLikeBareSedeOptionAnswer(rawText))
+  ) {
+    return true;
+  }
+  if (
+    userMessageRequiresFreshSedeForBooking(rawText) &&
+    (messageLooksLikeBookingIntent(rawText) ||
+      messageExplicitlyRequestsBookingLink(rawText) ||
+      (Boolean(extractWeekdayNameFromText(rawText)) && messageIncludesSpecificAppointmentTime(rawText)))
   ) {
     return true;
   }
@@ -5812,7 +5848,7 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
       priorState || {},
       patientContext.statePatch
     );
-    const lastSede = patientContext.sedeEntry || resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
+    const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
     if (lastSede) {
       return sendBookingFlowReplyForSede(from, bodyText, mergedState, profileDisplayName, lastSede);
     }
@@ -6654,6 +6690,18 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
   if (!getOpenAiApiKey()) return false;
   if (messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText)) {
     if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
+  }
+  if (
+    messageLooksLikeBookingIntent(bodyText) ||
+    messageExplicitlyRequestsBookingLink(bodyText) ||
+    userMessageRequiresFreshSedeForBooking(bodyText)
+  ) {
+    if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
+    if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
   }
@@ -9370,6 +9418,12 @@ exports.handler = async (event) => {
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -9396,12 +9450,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
