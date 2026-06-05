@@ -24,7 +24,7 @@ Además del chat directo, el repo incluye un **asistente automático** vía [Wha
 
 1. Llega un mensaje de texto del usuario.
 2. Si el texto coincide con una sede (nombre, alias o número `1`–`4`), el bot responde con el link de esa sede (Calendly u otra URL).
-3. Si no reconoce sede, responde con el menú numerado (Corrientes, Resistencia, Sáenz Peña, Formosa).
+3. Si no reconoce sede, responde con el menú numerado (Corrientes, Resistencia).
 
 **URL del webhook** (después del deploy en Netlify):
 
@@ -45,8 +45,6 @@ En Meta (App → WhatsApp → Configuration) configurá:
 | `WHATSAPP_PHONE_NUMBER_ID` | ID del número de WhatsApp Business en la API (Meta → API setup). |
 | `CALENDLY_CORRIENTES` | URL completa de reserva (https…) para esa sede. |
 | `CALENDLY_RESISTENCIA` | Igual. |
-| `CALENDLY_SAENZ_PENA` | Igual. |
-| `CALENDLY_FORMOSA` | Igual. |
 | `OPENAI_API_KEY` | Opcional. Si está definida, cuando el usuario no elige sede el bot responde con un texto breve vía OpenAI (modelo por defecto `gpt-4o-mini`) y orienta a elegir sede. |
 | `OPENAI_MODEL` | Opcional. Sobrescribe el modelo de OpenAI (por defecto `gpt-4o-mini`). |
 

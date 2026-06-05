@@ -35,7 +35,7 @@ No es “código ejecutable”: el runtime real está en `netlify/functions/meta
 
 - **Archivo**: `netlify/functions/meta-whatsapp-webhook.cjs`
 - **Ejemplos**:
-  - Detección de sede, typos y desambiguación “Chaco”.
+  - Detección de sede, typos, sedes inactivas y redirección de opciones legacy (3/4).
   - Respuestas fijas para emergencias, no-text, privacidad, link trouble, “no hay turnos”, etc.
   - Gestión de estado por usuario (última sede, opt-out de link, cooldowns, dedupe).
 
@@ -66,12 +66,11 @@ Sedes válidas del Dr. Liber Acosta (únicamente estas):
 
 - Corrientes capital
 - Resistencia (Chaco)
-- Formosa capital
-- Sáenz Peña (Chaco)
 
 Reglas informativas:
 
-- “Chaco” sin ciudad específica es **ambiguo** → pedir “Resistencia o Sáenz Peña”.
+- “Chaco” sin ciudad específica se interpreta como **Resistencia** (única sede en esa provincia).
+- Si el paciente menciona Formosa, Sáenz Peña u otra ciudad sin atención, el bot aclara que por ahora solo hay consultorio en Corrientes y Resistencia.
 - Se toleran typos comunes (ver QA) y abreviaturas habituales.
 
 ---

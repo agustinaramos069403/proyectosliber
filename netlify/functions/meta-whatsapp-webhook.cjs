@@ -30,8 +30,6 @@ const conversationStateByPhoneNumber = new Map();
 const PRIVATE_PRICE_CITY_KEY_BY_DISPLAY_NAME = {
   Corrientes: 'Corrientes',
   Resistencia: 'Resistencia',
-  Formosa: 'Formosa',
-  'Sáenz Peña': 'Saenz Pena',
 };
 
 /** Safe log line to confirm Netlify picked up a new token (never log the raw token). */
@@ -76,35 +74,33 @@ const SEDE_ENTRIES = [
       'rcia',
       'capital chaco',
       'capital del chaco',
+      'chaco',
     ],
     envKey: 'CALENDLY_RESISTENCIA',
     optionNumber: '2',
   },
-  {
-    displayName: 'Sáenz Peña',
-    match: [
-      'sáenz peña',
-      'saenz pena',
-      'saens pena',
-      'saenz peña',
-      'saenz',
-      'santa maria',
-      'santa maría',
-      'presidencia roca',
-      'pcia roca',
-      'pres roca',
-      'presidente roca',
-      'saenzpena',
-    ],
-    envKey: 'CALENDLY_SAENZ_PENA',
-    optionNumber: '3',
-  },
-  {
-    displayName: 'Formosa',
-    match: ['formosa', 'formoza', 'gastroenterologia', 'gastroenterología', 'fsa'],
-    envKey: 'CALENDLY_FORMOSA',
-    optionNumber: '4',
-  },
+];
+
+const ACTIVE_SEDE_OPTIONS_MESSAGE = 'Podés responder con 1 Corrientes o 2 Resistencia.';
+const ACTIVE_SEDE_CITIES_LIST_MESSAGE = 'Corrientes o Resistencia';
+const INACTIVE_SEDE_RESPONSE_MESSAGE =
+  'Por ahora el Dr. atiende solo en Corrientes y Resistencia. ¿Desde cuál de esas ciudades te consultás?';
+const LEGACY_SEDE_OPTION_RESPONSE_MESSAGE =
+  'Por ahora solo atendemos en Corrientes (1) y Resistencia (2). ¿Cuál elegís?';
+
+const INACTIVE_SEDE_NORMALIZED_SUBSTRINGS = [
+  'formosa',
+  'formoza',
+  'fsa',
+  'gastroenterologia',
+  'saenz pena',
+  'saenz peña',
+  'saens pena',
+  'saenzpena',
+  'santa maria',
+  'presidencia roca',
+  'presidente roca',
+  'pcia roca',
 ];
 
 /** Normalized substrings; must match after normalizeForMatch (no accents). */
@@ -158,9 +154,6 @@ const MEDICAL_EMERGENCY_RESPONSE_MESSAGE =
   'El Dr. no atiende urgencias. Si es una emergencia o urgencia, por favor acudí a la guardia/urgencias más cercana o llamá al 107 ahora.';
 const AMBIGUOUS_URGENCY_CLARIFICATION_MESSAGE =
   '¿Es una urgencia médica o necesitás turno lo antes posible?';
-
-const CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE =
-  '¿Estás en Resistencia o en Sáenz Peña?';
 
 const DEFAULT_RESPONSE_DELAY_MS = 3500;
 const MAX_LEVENSHTEIN_DISTANCE = 3;
@@ -242,24 +235,16 @@ const SEDE_ADDRESS_DETAILS_BY_ENV_KEY = {
     'Clínica del Pilar: San Martín 555. Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
   CALENDLY_RESISTENCIA:
     'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678. Martes 9:30 a 12:00.',
-  CALENDLY_SAENZ_PENA:
-    'Sáenz Peña (Clínica Santa María): Calle 5 entre 12 y 14. Miércoles (dos veces al mes) 8:00 a 12:00 hs.',
-  CALENDLY_FORMOSA:
-    'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580. Miércoles (dos veces al mes) 8:00 a 12:00.',
 };
 
 const SEDE_LOCATION_ONLY_BY_ENV_KEY = {
   CALENDLY_CORRIENTES: 'Clínica del Pilar: San Martín 555.',
   CALENDLY_RESISTENCIA: 'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678.',
-  CALENDLY_SAENZ_PENA: 'Sáenz Peña (Clínica Santa María): Calle 5 entre 12 y 14.',
-  CALENDLY_FORMOSA: 'Formosa (Instituto Modelo de Gastroenterología): Maipú 1580.',
 };
 
 const SEDE_SCHEDULE_ONLY_BY_ENV_KEY = {
   CALENDLY_CORRIENTES: 'Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
   CALENDLY_RESISTENCIA: 'Martes 9:30 a 12:00.',
-  CALENDLY_SAENZ_PENA: 'Miércoles (dos veces al mes) 8:00 a 12:00 hs.',
-  CALENDLY_FORMOSA: 'Miércoles (dos veces al mes) 8:00 a 12:00.',
 };
 
 const SEDE_MAPS_URL_BY_ENV_KEY = {
@@ -267,10 +252,6 @@ const SEDE_MAPS_URL_BY_ENV_KEY = {
     'https://google.com/maps/place/Cl%C3%ADnica+del+Pilar/data=!4m2!3m1!1s0x0:0x49146846c8c3ca7a?sa=X&ved=1t:2428&ictx=111',
   CALENDLY_RESISTENCIA:
     'https://www.google.com/maps/place/Immi,+Instituto+Modelo+de+Medicina+Infantil/@-27.4595693,-58.9866954,736m/data=!3m2!1e3!4b1!4m6!3m5!1s0x94450cedd359d8f5:0xefe1f0c59533241e!8m2!3d-27.4595741!4d-58.9841205!16s%2Fg%2F1tfczxpj?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D',
-  CALENDLY_SAENZ_PENA:
-    'https://www.google.com/maps/place/Cl%C3%ADnica+Santa+Mar%C3%ADa/@-26.8004379,-60.4361063,740m/data=!3m2!1e3!4b1!4m6!3m5!1s0x94412d00746e10b5:0xac9d69f86ead35d0!8m2!3d-26.8004428!4d-60.4312354!16s%2Fg%2F11xztntc_h?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D',
-  CALENDLY_FORMOSA:
-    'https://www.google.com/maps/place/Instituto+IMG+Formosa+(Instituto+Modelo+de+Gastroenterolog%C3%ADa)/@-26.1837531,-58.1864783,744m/data=!3m2!1e3!4b1!4m6!3m5!1s0x945ca5f9f106b2dd:0x4cc784833c09beb3!8m2!3d-26.1837579!4d-58.1839034!16s%2Fg%2F11bzvxmbt1?entry=ttu&g_ep=EgoyMDI2MDQyMi4wIKXMDSoASAFQAw%3D%3D',
 };
 
 const CORRIENTES_HOW_TO_ARRIVE_MESSAGE =
@@ -283,7 +264,7 @@ const MISSING_INFORMATION_CALL_OFFICE_MESSAGE =
   'No cuento con esa información en este momento. Por favor, llamá al consultorio y te lo confirman.';
 
 const FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT =
-  'Sos la asistente del consultorio del Dr. Liber Acosta (alergista). Respondé en español argentino, texto plano, sin markdown ni asteriscos, máximo 2 oraciones. No des diagnósticos ni montos. Si pueden decir ciudad o 1-4 para sede, mejor. Reglas completas no cargadas en el servidor.';
+  'Sos la asistente del consultorio del Dr. Liber Acosta (alergista). Respondé en español argentino, texto plano, sin markdown ni asteriscos, máximo 2 oraciones. No des diagnósticos ni montos. Si pueden decir ciudad o 1-2 para sede (Corrientes o Resistencia), mejor. Reglas completas no cargadas en el servidor.';
 
 let cachedAgenteLiberSystemPrompt = undefined;
 
@@ -477,14 +458,14 @@ function findSedeFromText(rawText) {
   const trimmed = rawText.trim();
   const normalized = normalizeForMatch(rawText);
 
-  if (/^[1-4]$/.test(trimmed)) {
+  if (/^[12]$/.test(trimmed)) {
     const index = parseInt(trimmed, 10) - 1;
     return SEDE_ENTRIES[index] || null;
   }
 
   for (const entry of SEDE_ENTRIES) {
     for (const keyword of entry.match) {
-      if (/^[1-4]$/.test(keyword)) continue;
+      if (/^[12]$/.test(keyword)) continue;
       const keyNorm = normalizeForMatch(keyword);
       if (normalized === keyNorm || normalized.includes(keyNorm)) {
         return entry;
@@ -732,20 +713,32 @@ function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
   );
 }
 
-/**
- * "Chaco" without Resistencia vs Sáenz Peña disambiguation (see docs/agente-liber-reglas.md).
- */
-function needsChacoProvinceClarification(rawText) {
+function messageMentionsInactiveSede(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  const normalized = normalizeForMatch(rawText);
-  if (!normalized.includes('chaco')) return false;
   if (findSedeFromText(rawText)) return false;
-  const hasResistenciaOrSaenzHint =
-    /resistencia|\brcia\b|saenz|pena|presidencia|presidente(\s*roca)?|pcia\s*roca|\broca\b|inmi|imm|capital(\s*del)?\s*chaco/.test(
-      normalized
-    );
-  if (hasResistenciaOrSaenzHint) return false;
-  return true;
+  const normalized = normalizeForMatch(rawText);
+  for (const phrase of INACTIVE_SEDE_NORMALIZED_SUBSTRINGS) {
+    if (normalized.includes(phrase)) return true;
+  }
+  return /\bsaenz\b/.test(normalized);
+}
+
+function messageUsesLegacySedeOption(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return /^[34]$/.test(rawText.trim());
+}
+
+function messageUsesLegacySedeOptionInContext(rawText, priorState) {
+  if (!messageUsesLegacySedeOption(rawText)) return false;
+  if (stateLooksLikeAwaitingSedeSelection(priorState)) return true;
+  return Boolean(
+    priorState &&
+      typeof priorState === 'object' &&
+      (priorState.state === 'awaiting_booking_link_sede' ||
+        priorState.state === 'awaiting_health_insurance_city' ||
+        priorState.state === 'awaiting_private_price_city' ||
+        priorState.state === 'awaiting_schedule_sede')
+  );
 }
 
 function resolveWhatsAppProfileDisplayName(value, fromPhoneId) {
@@ -1410,7 +1403,7 @@ function processAssistantReplyForPatient(rawModelText) {
     normalized.includes('traigas la') ||
     normalized.includes('trae la');
   if (mentionsDocumentation) {
-    return 'Entendido. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+    return `Entendido. ¿Desde qué ciudad consultás: ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}?`;
   }
   const suggestsContactingThirdParty =
     normalized.includes('comunicate') ||
@@ -1427,7 +1420,7 @@ function processAssistantReplyForPatient(rawModelText) {
     normalized.includes('directamente con la obra social') ||
     normalized.includes('con tu obra social');
   if (suggestsContactingThirdParty) {
-    return 'Entendido. ¿Desde qué ciudad consultás: Corrientes, Resistencia, Sáenz Peña o Formosa?';
+    return `Entendido. ¿Desde qué ciudad consultás: ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}?`;
   }
   const mentionsNonSedeCity =
     normalized.includes('buenos aires') ||
@@ -1439,7 +1432,7 @@ function processAssistantReplyForPatient(rawModelText) {
     normalized.includes('rosario') ||
     normalized.includes('mendoza');
   if (mentionsNonSedeCity) {
-    return 'Entendido. El Dr. atiende solo en Corrientes, Resistencia, Sáenz Peña y Formosa. ¿Desde qué ciudad consultás?';
+    return `Entendido. El Dr. atiende solo en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}. ¿Desde qué ciudad consultás?`;
   }
   const asksForSpecificDateOrTime =
     normalized.includes('fecha') ||
@@ -1455,7 +1448,7 @@ function processAssistantReplyForPatient(rawModelText) {
     normalized.includes('por favor indicame el dia') ||
     normalized.includes('por favor indicame el día');
   if (asksForSpecificDateOrTime) {
-    return 'Entendido. ¿En qué sede querés atenderte: 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa?';
+    return `Entendido. ¿En qué sede querés atenderte: 1 Corrientes o 2 Resistencia?`;
   }
   return trimmed;
 }
@@ -1466,7 +1459,7 @@ function getAgendaUrl(entry) {
 }
 
 function buildAskSedeMessage() {
-  return 'Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.';
+  return ACTIVE_SEDE_OPTIONS_MESSAGE;
 }
 
 function buildFriendlyAcknowledgeSentence() {
@@ -1487,7 +1480,7 @@ function buildAskSedeForHealthInsuranceMismatchMessage(lastSedeDisplayName, heal
       ? healthInsuranceName.trim()
       : 'esa obra social';
   if (safeSede) {
-    return `Para ${safeOs} no tengo registro en ${safeSede}. ¿Desde qué ciudad consultás? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.`;
+    return `Para ${safeOs} no tengo registro en ${safeSede}. ¿Desde qué ciudad consultás? ${ACTIVE_SEDE_OPTIONS_MESSAGE}`;
   }
   return buildAskSedeMessage();
 }
@@ -1762,9 +1755,7 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     const isSancor = osNormalized.includes('sancor') && !osNormalized.includes('mutual');
     const isKnownNoPlus =
       (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
-      (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
-      (cityNormalized.includes('formosa') && (isOsde || isSancor)) ||
-      (cityNormalized.includes('saenz pena') && (isOsde || isIsunne || isSancor));
+      (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor));
     if (isKnownNoPlus) {
       return appendBookingLinkOfferIfAllowed(
         priorState,
@@ -2179,9 +2170,7 @@ async function buildHealthInsuranceSummary(cityEntry, healthInsuranceName) {
     const isSancor = osNormalized.includes('sancor') && !osNormalized.includes('mutual');
     const isKnownNoPlus =
       (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
-      (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor)) ||
-      (cityNormalized.includes('formosa') && (isOsde || isSancor)) ||
-      (cityNormalized.includes('saenz pena') && (isOsde || isIsunne || isSancor));
+      (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor));
     if (isKnownNoPlus) {
       return `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus.`;
     }
@@ -2411,6 +2400,20 @@ function messageAsksHowBookingWorks(rawText) {
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  const hasBookingKeyword =
+    /\b(agendar|agenda|turno|turnos|reservar|reserva|cita)\b/.test(normalized) ||
+    normalized.includes('para agendar') ||
+    normalized.includes('sacar turno');
+  const hasHowQuestion =
+    normalized.includes('como hago') ||
+    normalized.includes('cómo hago') ||
+    normalized.includes('como funciona') ||
+    normalized.includes('cómo funciona') ||
+    normalized.includes('como es') ||
+    normalized.includes('cómo es') ||
+    normalized.includes('como seria') ||
+    normalized.includes('cómo sería');
+  if (hasBookingKeyword && hasHowQuestion) return true;
   return (
     normalized === 'como es' ||
     normalized === 'cómo es' ||
@@ -3383,8 +3386,9 @@ function wasBookingLinkSentRecently(priorState) {
 
 function messageLooksLikeBookingLinkTrouble(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeBookingIntent(rawText) || messageAsksHowBookingWorks(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
-  return (
+  const hasLinkTroubleSignal =
     normalized.includes('no me abre') ||
     normalized.includes('no abre') ||
     normalized.includes('no funciona') ||
@@ -3394,24 +3398,29 @@ function messageLooksLikeBookingLinkTrouble(rawText) {
     normalized.includes('no carga') ||
     normalized.includes('error en el link') ||
     normalized.includes('link caido') ||
-    normalized.includes('link caído') ||
+    normalized.includes('link caído');
+  if (hasLinkTroubleSignal) return true;
+  const hasAvailabilityComplaint =
     normalized.includes('no hay turnos') ||
     normalized.includes('no hay disponibles') ||
     normalized.includes('sin turnos') ||
     normalized.includes('no hay disponibilidad') ||
     normalized.includes('no aparecen turnos') ||
-    normalized.includes('no aparece disponibilidad') ||
+    normalized.includes('no aparece disponibilidad');
+  if (hasAvailabilityComplaint) return true;
+  const hasBookingFailure =
     normalized.includes('no pude agendar') ||
     normalized.includes('no pude reservar') ||
     normalized.includes('no pude sacar turno') ||
     normalized.includes('no me dejo reservar') ||
-    normalized.includes('no me dejó reservar') ||
+    normalized.includes('no me dejó reservar');
+  if (!hasBookingFailure) return false;
+  return (
+    hasLinkTroubleSignal ||
     normalized.includes('que hago') ||
     normalized.includes('qué hago') ||
     normalized.includes('no se que hacer') ||
-    normalized.includes('no sé qué hacer') ||
-    normalized.includes('como hago') ||
-    normalized.includes('cómo hago')
+    normalized.includes('no sé qué hacer')
   );
 }
 
@@ -4291,7 +4300,7 @@ exports.handler = async (event) => {
               continue;
             }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Es sencillo: elegís el día y horario que te quede cómodo desde el link, y ya queda reservado tu turno. En la consulta, el Dr. te evalúa en detalle y arma un plan según tu caso. ¿Desde qué ciudad te consultás? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+              `Es sencillo: elegís el día y horario que te quede cómodo desde el link, y ya queda reservado tu turno. En la consulta, el Dr. te evalúa en detalle y arma un plan según tu caso. ¿Desde qué ciudad te consultás? Atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}.`,
               profileDisplayName,
               priorState
             );
@@ -4436,7 +4445,7 @@ exports.handler = async (event) => {
                 continue;
               }
               const askSedeWrapped = buildAutoReplyWithGreetingIfNeeded(
-                '¡Qué bueno! ¿Para qué sede querés agendar? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
+                `¡Qué bueno! ¿Para qué sede querés agendar? ${ACTIVE_SEDE_OPTIONS_MESSAGE}`,
                 profileDisplayName,
                 priorState
               );
@@ -4470,15 +4479,24 @@ exports.handler = async (event) => {
             const isInWindow =
               nowMs - Number(priorState.awaitingStudyPriceHealthInsuranceAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
             if (isInWindow) {
+              const sedeFromMessage = findSedeFromText(bodyText);
+              const workingState = sedeFromMessage
+                ? mergeConversationStatePreservingGreeting(
+                    priorState,
+                    priorState || {},
+                    buildLastSedeStatePatch(sedeFromMessage) || {}
+                  )
+                : priorState;
               const extractedHealthInsuranceName =
                 tryExtractHealthInsuranceName(bodyText) || (await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText));
               if (extractedHealthInsuranceName) {
                 const enrichedState = mergeConversationStatePreservingGreeting(
-                  priorState,
+                  workingState,
                   {},
                   {
                     healthInsuranceName: extractedHealthInsuranceName,
                     lastHealthInsuranceName: extractedHealthInsuranceName,
+                    ...(sedeFromMessage ? buildLastSedeStatePatch(sedeFromMessage) || {} : {}),
                   }
                 );
                 const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
@@ -4494,6 +4512,32 @@ exports.handler = async (event) => {
                       ...(wrapped.nextStatePatch || {}),
                       healthInsuranceName: extractedHealthInsuranceName,
                       lastHealthInsuranceName: extractedHealthInsuranceName,
+                      lastStudyPriceContextAtMs: nowMs,
+                      ...(sedeFromMessage ? buildLastSedeStatePatch(sedeFromMessage) || {} : {}),
+                    }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              if (sedeFromMessage) {
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  'Antes de pasarte el valor, ¿qué obra social/prepaga tenés?',
+                  profileDisplayName,
+                  workingState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    workingState,
+                    {
+                      state: 'awaiting_study_price_health_insurance',
+                      awaitingStudyPriceHealthInsuranceAtMs: nowMs,
+                      lastStudyPriceContextAtMs: nowMs,
+                    },
+                    {
+                      ...(wrapped.nextStatePatch || {}),
+                      ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
                     }
                   )
                 );
@@ -4526,7 +4570,7 @@ exports.handler = async (event) => {
             Date.now() - Number(priorState.lastStudyPriceContextAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
           const hasFreshStudyMentionInCurrentMessage = Boolean(getStudyTypeFromText(bodyText));
           if (hasRecentStudyPriceContext && messageLooksLikeBookingIntent(bodyText)) {
-            const lastSede = resolveLastSedeEntryFromState(priorState);
+            const lastSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildLinkMessage(lastSede),
@@ -4635,7 +4679,7 @@ exports.handler = async (event) => {
               if (!detectedSede) {
                 await sendWhatsAppText(
                   from,
-                  '¿Desde qué ciudad te consultás? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+                  `¿Desde qué ciudad te consultás? Atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}.`,
                   { skipDelay: true }
                 );
               }
@@ -4659,16 +4703,28 @@ exports.handler = async (event) => {
             await sendWhatsAppText(from, wrapped.messageText);
             continue;
           }
-          if (needsChacoProvinceClarification(bodyText)) {
-            const chacoWrapped = buildAutoReplyWithGreetingIfNeeded(
-              CHACO_AMBIGUOUS_CLARIFICATION_MESSAGE,
+          if (messageMentionsInactiveSede(bodyText)) {
+            const inactiveSedeWrapped = buildAutoReplyWithGreetingIfNeeded(
+              INACTIVE_SEDE_RESPONSE_MESSAGE,
               profileDisplayName,
               priorState
             );
-            if (chacoWrapped.nextStatePatch) {
-              await setConversationState(from, { ...(priorState || {}), ...chacoWrapped.nextStatePatch });
+            if (inactiveSedeWrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...inactiveSedeWrapped.nextStatePatch });
             }
-            await sendWhatsAppText(from, chacoWrapped.messageText);
+            await sendWhatsAppText(from, inactiveSedeWrapped.messageText);
+            continue;
+          }
+          if (messageUsesLegacySedeOptionInContext(bodyText, priorState)) {
+            const legacyOptionWrapped = buildAutoReplyWithGreetingIfNeeded(
+              LEGACY_SEDE_OPTION_RESPONSE_MESSAGE,
+              profileDisplayName,
+              priorState
+            );
+            if (legacyOptionWrapped.nextStatePatch) {
+              await setConversationState(from, { ...(priorState || {}), ...legacyOptionWrapped.nextStatePatch });
+            }
+            await sendWhatsAppText(from, legacyOptionWrapped.messageText);
             continue;
           }
 
@@ -4723,14 +4779,8 @@ exports.handler = async (event) => {
                 priorState && typeof priorState === 'object' && typeof priorState.lastBookingLinkUrl === 'string'
                   ? priorState.lastBookingLinkUrl
                   : null;
-              const sedeFromLink = resolveLastBookingLinkSedeEntryFromState(priorState);
-              const isFormosaOrSaenz =
-                sedeFromLink &&
-                (sedeFromLink.envKey === 'CALENDLY_FORMOSA' || sedeFromLink.envKey === 'CALENDLY_SAENZ_PENA');
-              const goodbye = isFormosaOrSaenz
-                ? (url
-                    ? `Sin problema. Cuando quieras el link te queda acá:\n${url}\nHasta pronto 😊`
-                    : 'Sin problema. Hasta pronto 😊')
+              const goodbye = url
+                ? `Sin problema. Cuando quieras el link te queda acá:\n${url}\nHasta pronto 😊`
                 : 'Sin problema.';
               const preservedSessionState = mergeConversationStatePreservingGreeting(
                 priorState,
@@ -4750,10 +4800,6 @@ exports.handler = async (event) => {
               priorState && typeof priorState === 'object' && typeof priorState.lastBookingLinkUrl === 'string'
                 ? priorState.lastBookingLinkUrl
                 : null;
-            const sedeFromLink = resolveLastBookingLinkSedeEntryFromState(priorState);
-            const isFormosaOrSaenz =
-              sedeFromLink &&
-              (sedeFromLink.envKey === 'CALENDLY_FORMOSA' || sedeFromLink.envKey === 'CALENDLY_SAENZ_PENA');
             const nextState = mergeConversationStatePreservingGreeting(
               priorState,
               {
@@ -4763,16 +4809,6 @@ exports.handler = async (event) => {
               { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
             );
             await setConversationState(from, nextState);
-
-            if (isFormosaOrSaenz) {
-              const message1 =
-                `Para ${sedeFromLink.displayName} las fechas las carga el Dr. con anticipación, por ahora no hay turnos cargados.`;
-              const message2 = '¿Querés que te avisemos cuando estén disponibles?';
-              const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
-              await sendWhatsAppText(from, wrapped1.messageText);
-              await sendWhatsAppText(from, message2, { skipDelay: true });
-              continue;
-            }
 
             const message1 = 'La agenda se llena rápido, pero se van liberando turnos por cancelaciones.';
             const message2 = url
@@ -4833,7 +4869,7 @@ exports.handler = async (event) => {
             const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
             if (!lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                'Sí, hay turnos disponibles 😊 ¿En qué ciudad te gustaría atenderte? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+                `Sí, hay turnos disponibles 😊 ¿En qué ciudad te gustaría atenderte? Atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}.`,
                 profileDisplayName,
                 priorState
               );
@@ -4913,7 +4949,7 @@ exports.handler = async (event) => {
             !messageLooksLikeScheduleAvailabilityQuestion(bodyText) &&
             !messageExplicitlyRequestsBookingLink(bodyText) &&
             !textMatchesMedicalEmergency(bodyText) &&
-            !needsChacoProvinceClarification(bodyText) &&
+            !messageMentionsInactiveSede(bodyText) &&
             messageLooksLikeFragment(bodyText)
           ) {
             const pendingUserText = stateLooksLikeCollectingUserMessage(priorState)
@@ -5729,7 +5765,7 @@ exports.handler = async (event) => {
               continue;
             }
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              'Perfecto. ¿Para qué sede querés el link? Podés responder con 1 Corrientes, 2 Resistencia, 3 Sáenz Peña o 4 Formosa.',
+              `Perfecto. ¿Para qué sede querés el link? ${ACTIVE_SEDE_OPTIONS_MESSAGE}`,
               profileDisplayName,
               priorState
             );
@@ -5746,7 +5782,7 @@ exports.handler = async (event) => {
           // Note: awaiting_link_confirmation is handled above (with hard rules + optional OpenAI YES/NO classifier).
 
           const trimmedBodyText = typeof bodyText === 'string' ? bodyText.trim() : '';
-          const isBareSedeOption = /^[1-4]$/.test(trimmedBodyText);
+          const isBareSedeOption = /^[12]$/.test(trimmedBodyText);
           const canTreatBareSedeOptionAsSede =
             !isBareSedeOption ||
             (stateLooksLikeAwaitingSedeSelection(priorState) &&
@@ -6080,7 +6116,7 @@ exports.handler = async (event) => {
             }
             // Booking intent without sede: always ask sede (never ask for date/time).
             if (messageLooksLikeBookingIntent(bodyText)) {
-              const lastSede = resolveLastSedeEntryFromState(priorState);
+              const lastSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
                 if (stateHasRecentStudyPriceContext(priorState)) {
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -6157,7 +6193,7 @@ exports.handler = async (event) => {
                   continue;
                 }
                 const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                  'No pasa nada. Si no la recordás, también podés atenderte particular. ¿Desde qué ciudad te consultás? Atiende en Corrientes, Resistencia, Formosa y Sáenz Peña.',
+                  `No pasa nada. Si no la recordás, también podés atenderte particular. ¿Desde qué ciudad te consultás? Atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}.`,
                   profileDisplayName,
                   priorState
                 );

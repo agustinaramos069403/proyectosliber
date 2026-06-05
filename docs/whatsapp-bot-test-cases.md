@@ -8,9 +8,10 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - Respuesta vago en selección: “sí”, “ok”, “dale”, “no sé”, “cualquiera”
 - Typos fuertes de sede:
   - Corrientes: “corriente”, “ctes”, “capital corrientes”
-  - Resistencia: “resis”, “resi”, “resitencia”, “rcia”
-  - Sáenz Peña: “saenz pena”, “saenz peña”, “saens pena”, “saenzpena”
-  - Formosa: “formoza”, “fsa”
+  - Resistencia: “resis”, “resi”, “resitencia”, “rcia”, “chaco”
+- Sedes fuera de cobertura (Formosa, Sáenz Peña, etc.):
+  - Respuesta: solo atiende en Corrientes y Resistencia; pedir cuál de esas dos
+  - Opciones legacy “3” o “4”: redirigir a 1 Corrientes o 2 Resistencia
 - Respuestas numéricas ambiguas:
   - “1” solo cuenta como sede si el bot estaba pidiendo sede (ventana de selección) o en estados relevantes.
 
@@ -28,6 +29,9 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “Buenas, cuánto sale la consulta”
 
 ## Turnos / reservas / link
+- Después de precio de estudio (espirometría/test) con sede y obra social ya informadas:
+  - “perfecto, entonces para agendar turno como hago?” → explicar proceso o pasar link (NO mensaje de “no abre el link”)
+  - “quiero agendar” → no volver a pedir sede si ya dijo Corrientes/Resistencia; ofrecer link
 - Intención de reservar:
   - “quiero reservar”, “quiero un turno”, “necesito turno”, “agendar”, “reservar”, “cita”
   - Typos: “urno”, “un urno”
@@ -57,9 +61,6 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
     - “la agenda se llena rápido…”
     - “revisar el link en unos días”
     - “si preferís lista de espera…”
-  - Formosa/Sáenz Peña:
-    - “las fechas las carga el Dr. con anticipación…”
-    - “¿querés que te avisemos…?”
   - Confirmación lista de espera:
     - Si dice sí → derivación (lista de espera)
     - Si dice no → cierre + link (si existe)

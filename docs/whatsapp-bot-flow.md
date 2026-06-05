@@ -27,12 +27,10 @@ El bot toma el texto entrante (`msg.text.body`) y:
   - Pasa a minúsculas
   - Remueve acentos/diacríticos
 
-Luego intenta identificar una sede de estas 4:
+Luego intenta identificar una sede de estas 2:
 
 - **Corrientes** → `CALENDLY_CORRIENTES`
 - **Resistencia** → `CALENDLY_RESISTENCIA`
-- **Sáenz Peña** → `CALENDLY_SAENZ_PENA`
-- **Formosa** → `CALENDLY_FORMOSA`
 
 ### Coincidencias por número
 
@@ -40,8 +38,8 @@ Si el usuario responde exactamente con:
 
 - `1` → Corrientes
 - `2` → Resistencia
-- `3` → Sáenz Peña
-- `4` → Formosa
+
+Si responde `3` o `4` (menú legacy), el bot redirige a las dos sedes activas.
 
 ### Coincidencias por texto (contiene o igual)
 
@@ -50,11 +48,9 @@ Si el texto normalizado **es igual** o **contiene** alguno de estos términos:
 - **Corrientes**
   - `corrientes`, `clinica del pilar`, `pilar`
 - **Resistencia**
-  - `resistencia`, `immi`, `instituto modelo de medicina infantil`, `instituto modelo medicina infantil`, `modelo de medicina infantil`
-- **Sáenz Peña**
-  - `sáenz peña`, `saenz pena`, `saenz`, `santa maria`, `santa maría`
-- **Formosa**
-  - `formosa`, `gastroenterologia`, `gastroenterología`
+  - `resistencia`, `resis`, `immi`, `chaco`, `instituto modelo de medicina infantil`, `instituto modelo medicina infantil`, `modelo de medicina infantil`
+
+Menciones de Formosa, Sáenz Peña u otras ciudades sin atención reciben mensaje de que solo hay consultorio en Corrientes y Resistencia.
 
 ## Salidas (mensajes enviados)
 
@@ -64,7 +60,7 @@ Los mensajes se envían por WhatsApp Cloud API como texto con `preview_url: true
 
 **A1 — Con `OPENAI_API_KEY` configurada**
 
-Se llama a la API de OpenAI (modelo por defecto `gpt-4o-mini`, configurable con `OPENAI_MODEL`). El texto **no es fijo**: ante un saludo suele ser muy breve (p. ej. tono “¿cómo estás? ¿en qué puedo ayudarte?”) **sin** listar las cuatro sedes de entrada; la lista 1–4 aparece cuando el usuario pide turno, sede o algo equivalente. No incluye URLs de agenda (el sistema envía el link solo cuando hay match de sede).
+Se llama a la API de OpenAI (modelo por defecto `gpt-4o-mini`, configurable con `OPENAI_MODEL`). El texto **no es fijo**: ante un saludo suele ser muy breve (p. ej. tono “¿cómo estás? ¿en qué puedo ayudarte?”) **sin** listar las dos sedes de entrada; la lista 1–2 aparece cuando el usuario pide turno, sede o algo equivalente. No incluye URLs de agenda (el sistema envía el link solo cuando hay match de sede).
 
 **A2 — Sin `OPENAI_API_KEY`, o si OpenAI falla**
 
@@ -77,8 +73,6 @@ Elegí una opción (podés responder con el número o el nombre de la ciudad):
 
 1 — Corrientes (Clínica del Pilar)
 2 — Resistencia (Instituto Modelo de Medicina Infantil)
-3 — Sáenz Peña (Clínica Santa María)
-4 — Formosa (Inst. de Gastroenterología)
 
 Cuando elijas, te envío el link para reservar turno.
 ```
@@ -91,8 +85,6 @@ Ejemplos:
 
 - Corrientes: `CALENDLY_CORRIENTES=https://...`
 - Resistencia: `CALENDLY_RESISTENCIA=https://...`
-- Sáenz Peña: `CALENDLY_SAENZ_PENA=https://...`
-- Formosa: `CALENDLY_FORMOSA=https://...`
 
 Mensaje literal enviado (con reemplazos):
 
@@ -108,8 +100,6 @@ Donde:
 - `{DISPLAY_NAME}` es exactamente uno de:
   - `Corrientes`
   - `Resistencia`
-  - `Sáenz Peña`
-  - `Formosa`
 - `{AGENDA_URL}` es el valor de la variable `CALENDLY_*` correspondiente.
 
 ### Caso C — Se detecta sede pero la URL NO está configurada
