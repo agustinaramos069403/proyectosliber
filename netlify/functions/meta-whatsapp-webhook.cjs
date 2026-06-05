@@ -1828,6 +1828,7 @@ function buildAskHealthInsuranceNameMessage(rawText = '') {
 function messageLooksLikePrivatePriceQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksAboutStudiesOrTests(rawText)) return false;
+  if (messageAsksAboutStudyPrice(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   // "Tratamiento" is not a consultation price question; it depends on the case.
   if (normalized.includes('tratamiento') && !normalized.includes('consulta')) return false;
@@ -2659,6 +2660,16 @@ function messageAsksIfDoctorTreatsChildren(rawText) {
   );
 }
 
+function messageMentionsSpirometryStudy(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('espirometr') || normalized.includes('estirometr')) return true;
+  return (
+    normalizedTextContainsApproxWord(normalized, 'espirometria', 2) ||
+    normalizedTextContainsApproxWord(normalized, 'espirometria', 2)
+  );
+}
+
 function messageAsksAboutStudiesOrTests(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -2668,7 +2679,7 @@ function messageAsksAboutStudiesOrTests(rawText) {
     normalized.includes('prick') ||
     normalized.includes('test de alerg') ||
     normalized.includes('test alerg') ||
-    normalized.includes('espirometr') ||
+    messageMentionsSpirometryStudy(rawText) ||
     normalized.includes('laboratorio') ||
     normalized.includes('sangre') ||
     normalized.includes('imagen') ||
@@ -3035,8 +3046,8 @@ function buildConditionTreatmentReply(priorState, rawText) {
 }
 
 function getStudyTypeFromText(rawText) {
+  if (messageMentionsSpirometryStudy(rawText)) return 'espirometría';
   const normalized = normalizeForMatch(rawText);
-  if (normalized.includes('espirometr')) return 'espirometría';
   if (normalized.includes('test de alerg') || normalized.includes('prick')) return 'test de alergia';
   if (normalized.includes('test del parche') || normalized.includes('patch') || normalized.includes('parche')) {
     return 'test del parche';
@@ -3047,7 +3058,7 @@ function getStudyTypeFromText(rawText) {
 function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  const mentionsSpirometry = normalized.includes('espirometr');
+  const mentionsSpirometry = messageMentionsSpirometryStudy(rawText);
   const mentionsWithoutConsultation =
     normalized.includes('sin consulta') ||
     normalized.includes('solo espirometr') ||
@@ -3062,7 +3073,10 @@ function messageAsksAboutConsultationPlusStudy(rawText) {
   const normalized = normalizeForMatch(rawText);
   const mentionsConsultation = normalized.includes('consulta');
   const mentionsPlus = normalized.includes('+') || normalized.includes('mas') || normalized.includes('más');
-  const mentionsStudy = normalized.includes('espirometr') || normalized.includes('test de alerg') || normalized.includes('prick');
+  const mentionsStudy =
+    messageMentionsSpirometryStudy(rawText) ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('prick');
   return mentionsConsultation && mentionsStudy && mentionsPlus;
 }
 
@@ -3079,7 +3093,7 @@ function messageAsksAboutStudyPrice(rawText) {
   if (!asksPrice) return false;
   return (
     normalized.includes('estudio') ||
-    normalized.includes('espirometr') ||
+    messageMentionsSpirometryStudy(rawText) ||
     normalized.includes('test de alerg') ||
     normalized.includes('prick')
   );
@@ -5418,7 +5432,11 @@ exports.handler = async (event) => {
           }
 
           // Primary studies gate: doctor-performed studies (messageAsksAboutStudiesOrTests) plus patient FAQ.
-          if (messageAsksAboutStudiesOrTests(bodyText) || messageMatchesStudiesPatientOnlyFaq(bodyText)) {
+          if (
+            messageAsksAboutStudyPrice(bodyText) ||
+            messageAsksAboutStudiesOrTests(bodyText) ||
+            messageMatchesStudiesPatientOnlyFaq(bodyText)
+          ) {
             if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
               const preservedSessionState =
                 priorState && typeof priorState === 'object'

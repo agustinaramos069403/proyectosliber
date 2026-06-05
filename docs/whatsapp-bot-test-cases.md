@@ -87,7 +87,9 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Regla:
   - Se usa 1 precio por sede (no se diferencia primera/control).
 - Evitar confusión con estudios:
-  - “cuánto cuesta espirometría/prick/parche” no debe activar el precio de consulta; deriva a consulta para confirmar.
+  - “cuánto cuesta espirometría/prick/parche” no debe activar el precio de consulta; pedir obra social y sede para el estudio
+  - Typos de espirometría: “estirometria”, “espirometria” → mismo flujo de precio de estudio (no $40.000 de consulta)
+  - “precio de la consulta” sí debe responder precio particular de consulta (distinto del estudio)
 
 ## Estudios / prácticas
 - Estudios detectados:
