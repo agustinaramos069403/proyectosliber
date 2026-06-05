@@ -65,6 +65,8 @@
   - “pasame el link”, “mandame el link”, “enviame el enlace”, “pásame link para agendar”
   - Con sede ya conocida → enviar link directo (NO “¿Te lo mando?”)
   - Tras “Muy caro” u objeción → si pide link, enviarlo en un solo paso
+- Turno con día/hora sin sede:
+  - “quiero turno el lunes a las 16hs” → pedir sede → al responder “Resistencia” → IA explica que por acá no se agenda + link directo (NO “¿Te lo mando?”)
 - Confirmación de link (humanizada, sin “respondé sí o no”; OpenAI interpreta la intención):
   - “sí”, “dale”, “ok”, “por favor”, “listo”
   - Después de ofrecer el link: “por favor quiero agendar” → enviar link directo (no repetir la pregunta)
