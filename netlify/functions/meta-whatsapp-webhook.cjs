@@ -2093,6 +2093,9 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
   if (messageClearlyRejectsLinkSend(userMessage)) {
     return { action: 'DO_NOT_SEND', source: 'rules-reject' };
   }
+  if (messageLooksLikePrivatePriceQuestion(userMessage)) {
+    return { action: 'ASK_CLARIFY', source: 'rules-private-price' };
+  }
 
   const routerDecision = await decideNextActionForLinkConfirmationWithOpenAi(userMessage, options);
   if (routerDecision) {
@@ -2115,52 +2118,56 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
 }
 
 async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
-  if (messageLooksLikeBookingIntent(userMessage) || messageExplicitlyRequestsBookingLink(userMessage)) {
-    return true;
-  }
   const apiKey = getOpenAiApiKey();
-  if (!apiKey) return false;
+  if (apiKey) {
+    const modelName = getOpenAiModelName();
+    const systemPrompt = [
+      'Sos un clasificador de intención para WhatsApp de un consultorio médico en español rioplatense.',
+      'Tarea: decidir si el paciente quiere AGENDAR / RESERVAR / SACAR TURNO o recibir el link de agenda.',
+      'Respondé solo: YES o NO.',
+      'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "me gustaría sacar turno", "por favor quiero agendar", typos como "urno" o "agendame".',
+      'NO ejemplos: pregunta de PRECIO ("precio consulta particular", "cuánto sale la consulta", "valor particular"), obra social, dirección, preparación de estudios o qué traer, sin pedir turno.',
+      'IMPORTANTE: "consulta" en una pregunta de precio NO es pedido de turno.',
+    ].join('\n');
 
-  const modelName = getOpenAiModelName();
-  const systemPrompt = [
-    'Sos un clasificador de intención para WhatsApp de un consultorio médico en español rioplatense.',
-    'Tarea: decidir si el paciente quiere AGENDAR / RESERVAR / SACAR TURNO o recibir el link de agenda.',
-    'Respondé solo: YES o NO.',
-    'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "me gustaría sacar turno", "por favor quiero agendar", typos como "urno" o "agendame".',
-    'NO ejemplos: solo pregunta precio, obra social, dirección o estudios sin pedir turno.',
-  ].join('\n');
-
-  const userContent = buildOpenAiClassifierUserContent(userMessage, {
-    conversationContext: options.conversationContext,
-    profileDisplayName: options.profileDisplayName,
-  });
-
-  try {
-    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: modelName,
-        temperature: 0,
-        max_tokens: 3,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-      }),
+    const userContent = buildOpenAiClassifierUserContent(userMessage, {
+      conversationContext:
+        options.conversationContext ||
+        (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+      profileDisplayName: options.profileDisplayName,
     });
-    if (!response.ok) return false;
-    const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content;
-    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
-    return normalized.startsWith('YES');
-  } catch (error) {
-    console.error('OpenAI booking intent classifier failed', error);
-    return false;
+
+    try {
+      const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: modelName,
+          temperature: 0,
+          max_tokens: 3,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content;
+        const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+        if (normalized.startsWith('YES')) return true;
+        if (normalized.startsWith('NO')) return false;
+      }
+    } catch (error) {
+      console.error('OpenAI booking intent classifier failed', error);
+    }
   }
+
+  if (messageLooksLikePrivatePriceQuestion(userMessage)) return false;
+  return messageLooksLikeBookingIntent(userMessage) || messageExplicitlyRequestsBookingLink(userMessage);
 }
 
 function mapOpenAiSedeTokenToEntry(token) {
@@ -2250,7 +2257,7 @@ function messageLooksLikeMultiIntentCandidate(rawText) {
   return signals >= 2;
 }
 
-async function decidePrimaryIntentWithOpenAi(userMessage) {
+async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
   const modelName = getOpenAiModelName();
@@ -2261,14 +2268,22 @@ async function decidePrimaryIntentWithOpenAi(userMessage) {
     `Return ONLY one token from: ${MULTI_INTENT_ROUTER_TOKENS.join(', ')}.`,
     'Guidelines:',
     '- If asking about accepted insurance / plus: HEALTH_INSURANCE.',
-    '- If asking about consultation price / particular / control / seguimiento: PRIVATE_PRICE.',
-    '- If asking to book / reserve / get the link: BOOKING.',
-    '- If asking about studies/tests: STUDIES.',
+    '- If asking about CONSULTATION price / particular / control / seguimiento (e.g. "precio consulta particular", "cuánto sale la consulta"): PRIVATE_PRICE. This is NOT booking.',
+    '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
+    '- If asking about studies/tests, study price (espirometría, prick), study preparation, or what studies to bring: STUDIES.',
+    '- If the conversation context was about a study price and the user now asks consultation price: PRIVATE_PRICE.',
     '- If asking if the doctor treats a condition: CONDITION.',
     '- If asking address / how to arrive: ADDRESS.',
     '- If asking what to bring / referral / authorization / payments / invoice: DOCUMENTS.',
     '- If unclear, return OTHER.',
   ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    profileDisplayName: options.profileDisplayName,
+  });
 
   try {
     const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
@@ -2283,7 +2298,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage) {
         max_tokens: 8,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: String(userMessage || '') },
+          { role: 'user', content: userContent },
         ],
       }),
     });
@@ -2303,6 +2318,68 @@ async function decidePrimaryIntentWithOpenAi(userMessage) {
     console.error('OpenAI multi-intent router request failed', error);
     return null;
   }
+}
+
+async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
+  if (!getOpenAiApiKey()) return false;
+  if (!messageLooksLikeOpenAiIntentRoutingCandidate(bodyText, priorState)) return false;
+
+  const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  if (!primaryIntent || primaryIntent === 'OTHER') return false;
+
+  if (primaryIntent === 'PRIVATE_PRICE') {
+    return sendPrivatePriceQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+
+  if (primaryIntent === 'STUDIES') {
+    const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
+      forcePriceFlow: messageLooksLikeAnyPriceQuestion(bodyText),
+      profileDisplayName,
+    });
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
+    const detectedStudyType = getStudyTypeFromText(bodyText);
+    const studiesStatePatch = {
+      ...(wrapped.nextStatePatch || {}),
+      ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+      ...(messageLooksLikeAnyPriceQuestion(bodyText) || detectedStudyType
+        ? { lastStudyPriceContextAtMs: Date.now() }
+        : {}),
+    };
+    await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+
+  if (primaryIntent === 'BOOKING' && stateHasRecentStudyPriceContext(priorState)) {
+    const lastSede =
+      (await resolveSedeFromTextWithOpenAi(bodyText)) || resolveLastSedeEntryFromState(priorState);
+    if (lastSede) {
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(
+        buildLinkMessage(lastSede),
+        profileDisplayName,
+        priorState
+      );
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(
+          priorState,
+          priorState || {},
+          {
+            ...(wrapped.nextStatePatch || {}),
+            ...(buildLinkSentStatePatch(lastSede) || {}),
+            ...(buildLastSedeStatePatch(lastSede) || {}),
+          }
+        )
+      );
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function decideIntentsWithOpenAi(userMessage) {
@@ -2564,6 +2641,93 @@ async function buildPrivatePriceReply(entry) {
   return `En ${entry.displayName} la consulta sale $${formatted}.`;
 }
 
+function buildIntentRoutingOpenAiContext(priorState) {
+  const contextLines = [];
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  if (sedeFromState) {
+    contextLines.push(`Sede en contexto: ${sedeFromState.displayName}.`);
+  }
+  if (priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string') {
+    const studyType = priorState.lastStudyType.trim();
+    if (studyType.length > 0) {
+      contextLines.push(`Último estudio mencionado en la conversación: ${studyType}.`);
+    }
+  }
+  if (stateHasRecentStudyPriceContext(priorState)) {
+    contextLines.push('Hace poco hablaron del precio de un estudio (espirometría, prick, etc.).');
+  }
+  const healthInsuranceFromState =
+    priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
+      ? priorState.healthInsuranceName.trim()
+      : priorState &&
+          typeof priorState === 'object' &&
+          typeof priorState.lastHealthInsuranceName === 'string'
+        ? priorState.lastHealthInsuranceName.trim()
+        : '';
+  if (healthInsuranceFromState) {
+    contextLines.push(`Obra social o prepaga en contexto: ${healthInsuranceFromState}.`);
+  }
+  if (priorState && typeof priorState === 'object' && typeof priorState.state === 'string') {
+    contextLines.push(`Estado conversacional: ${priorState.state}.`);
+  }
+  return contextLines.join('\n');
+}
+
+function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  if (messageLooksLikeGreetingOnly(rawText)) return false;
+  const hasStudyContext = stateHasRecentStudyPriceContext(priorState);
+  const hasPriceSignal =
+    messageLooksLikeAnyPriceQuestion(rawText) || messageLooksLikePrivatePriceQuestion(rawText);
+  const hasBookingSignal =
+    messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText);
+  const hasStudySignal = messageMatchesStudiesTopic(rawText);
+  if (hasStudyContext && hasPriceSignal) return true;
+  if (hasPriceSignal && hasBookingSignal) return true;
+  if (hasPriceSignal) return true;
+  if (hasStudyContext && (hasBookingSignal || hasStudySignal)) return true;
+  if (messageLooksLikeMultiIntentCandidate(rawText)) return true;
+  if (hasStudySignal && messageAsksAboutStudyPreparation(rawText, priorState)) return true;
+  return false;
+}
+
+async function sendPrivatePriceQuestionReply(from, bodyText, priorState, profileDisplayName) {
+  const lastSede =
+    findSedeFromText(bodyText) ||
+    resolveSedeEntryFromState(priorState) ||
+    resolveLastSedeEntryFromState(priorState);
+  if (lastSede) {
+    const reply = await buildPrivatePriceReply(lastSede);
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(
+      appendBookingLinkOfferIfAllowed(priorState, reply),
+      profileDisplayName,
+      priorState
+    );
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(
+        priorState,
+        buildAwaitingLinkConfirmationState(lastSede, 'after_private_price'),
+        { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+      )
+    );
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      priorState,
+      { state: 'awaiting_private_price_city' },
+      wrapped.nextStatePatch
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -2637,6 +2801,7 @@ function buildSedeScheduleReply(entry) {
 
 function messageLooksLikeBookingIntent(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   // Common intent words
   if (/\b(turno|turnos|agendar|agenda|reservar|reserva|cita)\b/.test(normalized)) return true;
@@ -4982,6 +5147,9 @@ exports.handler = async (event) => {
               continue;
             }
           }
+          if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           const hasRecentStudyPriceContext =
             priorState &&
             typeof priorState === 'object' &&
@@ -4992,8 +5160,8 @@ exports.handler = async (event) => {
           const hasFreshStudyMentionInCurrentMessage = Boolean(getStudyTypeFromText(bodyText));
           if (
             hasRecentStudyPriceContext &&
-            (messageLooksLikeBookingIntent(bodyText) ||
-              (await tryResolveBookingIntentWithOpenAi(bodyText, { profileDisplayName })))
+            !messageLooksLikePrivatePriceQuestion(bodyText) &&
+            (await tryResolveBookingIntentWithOpenAi(bodyText, { profileDisplayName, priorState }))
           ) {
             const lastSede =
               (await resolveSedeFromTextWithOpenAi(bodyText)) || resolveLastSedeEntryFromState(priorState);
@@ -5056,7 +5224,11 @@ exports.handler = async (event) => {
               continue;
             }
           }
-          if (hasRecentStudyPriceContext && messageLooksLikeAnyPriceQuestion(bodyText)) {
+          if (
+            hasRecentStudyPriceContext &&
+            messageLooksLikeAnyPriceQuestion(bodyText) &&
+            !messageLooksLikePrivatePriceQuestion(bodyText)
+          ) {
             const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
               forcePriceFlow: true,
             });
@@ -5984,6 +6156,45 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+              const lastSede =
+                findSedeFromText(bodyText) ||
+                resolveSedeEntryFromState(priorState) ||
+                resolveLastSedeEntryFromState(priorState);
+              if (lastSede) {
+                const reply = await buildPrivatePriceReply(lastSede);
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                  appendBookingLinkOfferIfAllowed(priorState, reply),
+                  profileDisplayName,
+                  priorState
+                );
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    buildAwaitingLinkConfirmationState(lastSede, 'after_private_price'),
+                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+                continue;
+              }
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAskSedeMessage(),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(
+                  priorState,
+                  { state: 'awaiting_private_price_city' },
+                  wrapped.nextStatePatch
+                )
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             const sedeChange = await resolveSedeFromTextWithOpenAi(bodyText);
             if (sedeChange) {
               const pendingHealthInsuranceName =
@@ -6041,6 +6252,8 @@ exports.handler = async (event) => {
             // OpenAI first: interpret confirmations like "por favor quiero agendar" in natural language.
             const linkOfferDecision = await resolveBookingLinkOfferResponseWithOpenAi(bodyText, {
               profileDisplayName,
+              priorState,
+              conversationContext: buildIntentRoutingOpenAiContext(priorState),
             });
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             const shouldBypassPendingLinkConfirmation =
@@ -6052,7 +6265,11 @@ exports.handler = async (event) => {
                 messageAsksAboutConditionTreatment(bodyText) ||
                 messageLooksLikeChronicSymptomFrustration(bodyText));
             if (shouldBypassPendingLinkConfirmation) {
-              if (stateHasRecentStudyPriceContext(priorState) && messageLooksLikeAnyPriceQuestion(bodyText)) {
+              if (
+                stateHasRecentStudyPriceContext(priorState) &&
+                messageLooksLikeAnyPriceQuestion(bodyText) &&
+                !messageLooksLikePrivatePriceQuestion(bodyText)
+              ) {
                 const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
                   forcePriceFlow: true,
                 });
@@ -6535,7 +6752,10 @@ exports.handler = async (event) => {
               continue;
             }
             // Booking intent without sede: always ask sede (never ask for date/time).
-            const wantsToBook = await tryResolveBookingIntentWithOpenAi(bodyText, { profileDisplayName });
+            const wantsToBook = await tryResolveBookingIntentWithOpenAi(bodyText, {
+              profileDisplayName,
+              priorState,
+            });
             if (wantsToBook) {
               const lastSede =
                 (await resolveSedeFromTextWithOpenAi(bodyText)) || resolveLastSedeEntryFromState(priorState);

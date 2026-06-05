@@ -90,6 +90,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “cuánto cuesta espirometría/prick/parche” no debe activar el precio de consulta; pedir obra social y sede para el estudio
   - Typos de espirometría: “estirometria”, “espirometria” → mismo flujo de precio de estudio (no $40.000 de consulta)
   - “precio de la consulta” sí debe responder precio particular de consulta (distinto del estudio)
+  - Después de hablar de precio de estudio: “precio consulta particular?” → precio de consulta desde Google Sheets (NO mandar link de agenda por la palabra “consulta”)
+  - Router OpenAI primero (con contexto de sede/estudio previo) para desambiguar precio consulta vs agendar vs estudio
 
 ## Estudios / prácticas
 - Estudios detectados:
