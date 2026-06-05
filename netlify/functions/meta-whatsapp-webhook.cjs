@@ -1555,8 +1555,98 @@ function appendBookingLinkOfferIfAllowed(priorState, messageText) {
 }
 
 function buildMicroCommitmentMessageWithState(priorState, forceOffer = false) {
-  if (!forceOffer && !shouldOfferBookingLink(priorState)) return buildAnythingElseHelpMessage(priorState);
+  if (!forceOffer && !shouldOfferBookingLink(priorState)) {
+    return '¿En qué más te puedo ayudar?';
+  }
   return buildMicroCommitmentMessage();
+}
+
+function assistantReplyAsksForSedeCity(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  const normalized = normalizeForMatch(replyText);
+  return (
+    normalized.includes('desde que ciudad') ||
+    normalized.includes('desde qué ciudad') ||
+    normalized.includes('que ciudad consultas') ||
+    normalized.includes('qué ciudad consultás') ||
+    normalized.includes('para que sede') ||
+    normalized.includes('para qué sede') ||
+    normalized.includes('corrientes o resistencia') ||
+    normalized.includes('1 corrientes') ||
+    normalized.includes('que sede')
+  );
+}
+
+function buildAwaitingSedeSelectionStatePatch() {
+  return {
+    state: 'awaiting_sede_selection',
+    awaitingSedeSelectionAtMs: Date.now(),
+    lastBotAskedSedeCityAtMs: Date.now(),
+  };
+}
+
+async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
+  if (priorState && priorState.state === 'awaiting_private_price_city') {
+    return buildPrivatePriceReply(sede);
+  }
+  if (stateHasRecentStudyPriceContext(priorState)) {
+    const studiesReply = await buildStudiesInformationReply(
+      mergeConversationStatePreservingGreeting(priorState, {}, buildLastSedeStatePatch(sede) || {}),
+      bodyText,
+      { forcePriceFlow: messageLooksLikeAnyPriceQuestion(bodyText) }
+    );
+    if (studiesReply && typeof studiesReply === 'string' && studiesReply.trim().length > 0) {
+      return studiesReply;
+    }
+  }
+  return `Sí, el Dr. atiende en ${sede.displayName}. ¿En qué te puedo ayudar?`;
+}
+
+async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName) {
+  const isAwaitingSedeSelection =
+    stateLooksLikeAwaitingSedeSelection(priorState) &&
+    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  const recentlyAskedSedeCity =
+    priorState &&
+    typeof priorState === 'object' &&
+    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
+    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  if (!isAwaitingSedeSelection && !recentlyAskedSedeCity) return false;
+
+  const sede = await resolveSedeFromTextWithOpenAi(bodyText);
+  if (!sede) {
+    if (isAwaitingSedeSelection || recentlyAskedSedeCity) {
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(
+        `No entendí la ciudad. ${ACTIVE_SEDE_OPTIONS_MESSAGE}`,
+        profileDisplayName,
+        priorState
+      );
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(
+          priorState,
+          buildAwaitingSedeSelectionStatePatch(),
+          wrapped.nextStatePatch
+        )
+      );
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
+    }
+    return false;
+  }
+
+  const reply = await buildReplyAfterSedeSelection(sede, priorState, bodyText);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      priorState,
+      buildAwaitingLinkConfirmationState(sede, 'after_sede_selection'),
+      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sede) || {}) }
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
 }
 
 function buildGreetingSentence(profileDisplayName) {
@@ -5147,6 +5237,9 @@ exports.handler = async (event) => {
               continue;
             }
           }
+          if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -6644,10 +6737,8 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             } else {
-              // Default: if the user only selected a sede (e.g. replied "3"), ask micro-commitment
-              // before sending the link.
-              const micro = buildMicroCommitmentMessageWithState(priorState);
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
+              const reply = await buildReplyAfterSedeSelection(sede, priorState, bodyText);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
               await setConversationState(
                 from,
                 mergeConversationStatePreservingGreeting(
@@ -6658,6 +6749,7 @@ exports.handler = async (event) => {
               );
               await sendWhatsAppText(from, wrapped.messageText);
             }
+            continue;
           } else {
             // If the user asks for the link but didn't specify the sede, ask sede first.
             if (messageExplicitlyRequestsBookingLink(bodyText)) {
@@ -7440,10 +7532,13 @@ exports.handler = async (event) => {
             });
             if (openAiReply) {
               const processed = processAssistantReplyForPatient(openAiReply);
-              // If we sent any assistant reply, we consider the chat greeted to avoid repeating greeting wrappers.
+              const statePatch = { greeted: true, lastBotReplyAtMs: Date.now() };
+              if (assistantReplyAsksForSedeCity(processed)) {
+                Object.assign(statePatch, buildAwaitingSedeSelectionStatePatch());
+              }
               await setConversationState(
                 from,
-                mergeConversationStatePreservingGreeting(priorState, priorState || {}, { greeted: true })
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, statePatch)
               );
               await sendWhatsAppText(from, processed);
             } else {

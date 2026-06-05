@@ -9,6 +9,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Typos fuertes de sede:
   - Corrientes: “corriente”, “ctes”, “capital corrientes”
   - Resistencia: “resis”, “resi”, “resitencia”, “rcia”, “chaco”
+  - Tras “¿Desde qué ciudad consultás?”: “de resis” → “Sí, el Dr. atiende en Resistencia. ¿En qué te puedo ayudar?” (NO link ni “Cualquier duda que te surja, escribime”)
+  - Si la IA pide ciudad, guardar `awaiting_sede_selection` para interpretar la respuesta
 - Sedes fuera de cobertura (Formosa, Sáenz Peña, etc.):
   - Respuesta: solo atiende en Corrientes y Resistencia; pedir cuál de esas dos
   - Opciones legacy “3” o “4”: redirigir a 1 Corrientes o 2 Resistencia
