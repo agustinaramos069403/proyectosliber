@@ -104,6 +104,23 @@ const INACTIVE_SEDE_NORMALIZED_SUBSTRINGS = [
   'pcia roca',
 ];
 
+const OUT_OF_COVERAGE_CITY_NORMALIZED_SUBSTRINGS = [
+  'buenos aires',
+  'bs as',
+  'bsas',
+  'capital federal',
+  'caba',
+  'la plata',
+  'cordoba',
+  'rosario',
+  'mendoza',
+  'tucuman',
+  'salta',
+  'neuquen',
+  'mar del plata',
+  'bahia blanca',
+];
+
 /** Normalized substrings; must match after normalizeForMatch (no accents). */
 const CRITICAL_EMERGENCY_NORMALIZED_SUBSTRINGS = [
   'no puedo respirar',
@@ -754,6 +771,68 @@ function messageMentionsInactiveSede(rawText) {
     if (normalized.includes(phrase)) return true;
   }
   return /\bsaenz\b/.test(normalized);
+}
+
+function messageMentionsOutOfCoverageCity(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const mentionsActiveSede = Boolean(findSedeFromText(rawText));
+  let mentionsOutOfCoverageCity = false;
+  for (const phrase of OUT_OF_COVERAGE_CITY_NORMALIZED_SUBSTRINGS) {
+    if (normalized.includes(phrase)) {
+      mentionsOutOfCoverageCity = true;
+      break;
+    }
+  }
+  if (!mentionsOutOfCoverageCity && /\bbs\s*as\b/.test(normalized)) {
+    mentionsOutOfCoverageCity = true;
+  }
+  if (!mentionsOutOfCoverageCity) return false;
+  if (!mentionsActiveSede) return true;
+  return mentionsOutOfCoverageCity;
+}
+
+function resolveOutOfCoverageCityLabel(rawText) {
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (
+    normalized.includes('buenos aires') ||
+    /\bbs\s*as\b/.test(normalized) ||
+    normalized.includes('bsas')
+  ) {
+    return 'Buenos Aires';
+  }
+  if (normalized.includes('capital federal') || normalized.includes('caba')) return 'CABA';
+  if (normalized.includes('la plata')) return 'La Plata';
+  if (normalized.includes('cordoba')) return 'Córdoba';
+  if (normalized.includes('rosario')) return 'Rosario';
+  if (normalized.includes('mendoza')) return 'Mendoza';
+  return 'esa ciudad';
+}
+
+function buildOutOfCoverageCityReply(rawText) {
+  const cityLabel = resolveOutOfCoverageCityLabel(rawText);
+  return `No, el Dr. no atiende en ${cityLabel}. Atiende solo en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}. ¿Desde cuál de esas te consultás?`;
+}
+
+async function sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName) {
+  const reply = buildOutOfCoverageCityReply(bodyText);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      priorState,
+      buildAwaitingSedeSelectionStatePatch(),
+      wrapped.nextStatePatch
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
 }
 
 function messageUsesLegacySedeOption(rawText) {
@@ -1470,17 +1549,8 @@ function processAssistantReplyForPatient(rawModelText) {
   if (suggestsContactingThirdParty) {
     return `Entendido. ¿Desde qué ciudad consultás: ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}?`;
   }
-  const mentionsNonSedeCity =
-    normalized.includes('buenos aires') ||
-    normalized.includes('capital federal') ||
-    normalized.includes('caba') ||
-    normalized.includes('la plata') ||
-    normalized.includes('cordoba') ||
-    normalized.includes('córdoba') ||
-    normalized.includes('rosario') ||
-    normalized.includes('mendoza');
-  if (mentionsNonSedeCity) {
-    return `Entendido. El Dr. atiende solo en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}. ¿Desde qué ciudad consultás?`;
+  if (messageMentionsOutOfCoverageCity(trimmed)) {
+    return buildOutOfCoverageCityReply(trimmed);
   }
   const asksForSpecificDateOrTime =
     normalized.includes('fecha') ||
@@ -5237,6 +5307,10 @@ exports.handler = async (event) => {
               continue;
             }
           }
+          if (messageMentionsOutOfCoverageCity(bodyText)) {
+            await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
+            continue;
+          }
           if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -6249,6 +6323,10 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            if (messageMentionsOutOfCoverageCity(bodyText)) {
+              await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
+              continue;
+            }
             if (messageLooksLikePrivatePriceQuestion(bodyText)) {
               const lastSede =
                 findSedeFromText(bodyText) ||

@@ -13,6 +13,9 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - Si la IA pide ciudad, guardar `awaiting_sede_selection` para interpretar la respuesta
 - Sedes fuera de cobertura (Formosa, Sáenz Peña, etc.):
   - Respuesta: solo atiende en Corrientes y Resistencia; pedir cuál de esas dos
+- Ciudades fuera de cobertura (Buenos Aires / CABA / etc.):
+  - “atienden en bs as?” → “No, el Dr. no atiende en Buenos Aires. Atiende solo en Corrientes o Resistencia…” (NO ofrecer link de agenda)
+  - Typos/abreviaturas: “bs as”, “bsas”, “buenos aires”, “caba”
   - Opciones legacy “3” o “4”: redirigir a 1 Corrientes o 2 Resistencia
 - Respuestas numéricas ambiguas:
   - “1” solo cuenta como sede si el bot estaba pidiendo sede (ventana de selección) o en estados relevantes.
