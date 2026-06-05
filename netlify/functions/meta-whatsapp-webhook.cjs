@@ -2604,6 +2604,7 @@ async function classifyAffirmativeIntentWithOpenAi(userMessage, options = {}) {
     '- YES ejemplos: "sí", "si quiero", "dale", "ok", "pasame el link", "por favor quiero agendar", "quiero agendar", "me gustaría", "bueno dale", "de una", "listo", "avancemos", "por favor", "porfa", "gracias", "joya", "perfecto".',
     '- NO: rechaza, pospone o pregunta otra cosa sin confirmar el link.',
     '- NO ejemplos: "no", "no por ahora", "después", "más tarde", "¿cuánto sale?", "¿qué es eso?".',
+    '- Si el asistente acaba de ofrecer el link y el paciente dice solo "sí"/"dale"/"ok", devolvé YES.',
     '- Si no está claro, devolvé NO.',
   ].join('\n');
 
@@ -2665,6 +2666,7 @@ async function decideNextActionForLinkConfirmationWithOpenAi(userMessage, option
     '- ASK_CLARIFY: pregunta otra cosa, cambia de tema o no queda claro si quiere el link.',
     '- ASK_CLARIFY ejemplos: "¿cuánto sale?", "¿qué es eso?", "¿para cuándo?", "no entiendo", "¿aceptan OSDE?".',
     '- Priorizá entender la intención real del paciente, no palabras exactas.',
+    '- Si el último mensaje del asistente ofreció pasar el link ("¿Te lo mando?", "¿Te paso el link?") y el paciente responde "sí", "dale", "ok" o similar → SEND_LINK.',
   ].join('\n');
 
   const userContent = buildOpenAiClassifierUserContent(userMessage, {
@@ -2708,20 +2710,59 @@ async function decideNextActionForLinkConfirmationWithOpenAi(userMessage, option
   }
 }
 
+function resolveLastAssistantMessageForLinkOffer(priorState) {
+  if (priorState && typeof priorState.lastBotReplyText === 'string') {
+    const lastBotReplyText = priorState.lastBotReplyText.trim();
+    if (lastBotReplyText.length > 0) return lastBotReplyText;
+  }
+  return buildMicroCommitmentMessage();
+}
+
+async function sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entry) {
+  if (!entry) return false;
+  const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
+    buildLinkMessage(entry),
+    profileDisplayName,
+    priorState
+  );
+  const afterLinkState = mergeConversationStatePreservingGreeting(priorState, {}, {
+    ...(linkWrapped.nextStatePatch || {}),
+    ...(buildLinkSentStatePatch(entry) || {}),
+    ...buildClearedPendingBookingIntentPatch(),
+    ...buildLastBotReplyStatePatch(linkWrapped.messageText),
+  });
+  await setConversationState(from, afterLinkState);
+  await sendWhatsAppText(from, linkWrapped.messageText);
+  return true;
+}
+
 async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = {}) {
   if (messageClearlyRejectsLinkSend(userMessage)) {
     return { action: 'DO_NOT_SEND', source: 'rules-reject' };
   }
-  if (messageLooksLikePrivatePriceQuestion(userMessage)) {
+  if (messageLooksLikePrivatePriceQuestion(userMessage, options.priorState)) {
     return { action: 'ASK_CLARIFY', source: 'rules-private-price' };
   }
+  if (messageConfirmsLinkSend(userMessage)) {
+    return { action: 'SEND_LINK', source: 'rules-affirmative' };
+  }
 
-  const routerDecision = await decideNextActionForLinkConfirmationWithOpenAi(userMessage, options);
+  const linkOfferOptions = {
+    ...options,
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (options.priorState ? resolveLastAssistantMessageForLinkOffer(options.priorState) : buildMicroCommitmentMessage()),
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : BOOKING_LINK_OFFER_ASSISTANT_CONTEXT),
+  };
+
+  const routerDecision = await decideNextActionForLinkConfirmationWithOpenAi(userMessage, linkOfferOptions);
   if (routerDecision) {
     return { action: routerDecision, source: 'openai-router' };
   }
 
-  const affirmativeDecision = await classifyAffirmativeIntentWithOpenAi(userMessage, options);
+  const affirmativeDecision = await classifyAffirmativeIntentWithOpenAi(userMessage, linkOfferOptions);
   if (affirmativeDecision === true) {
     return { action: 'SEND_LINK', source: 'openai-affirmative' };
   }
@@ -2729,11 +2770,98 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
     return { action: 'DO_NOT_SEND', source: 'openai-affirmative' };
   }
 
-  if (messageConfirmsLinkSend(userMessage) || messageLooksLikeBookingIntent(userMessage)) {
+  if (messageLooksLikeBookingIntent(userMessage)) {
     return { action: 'SEND_LINK', source: 'rules-fallback' };
   }
 
   return { action: 'ASK_CLARIFY', source: 'default' };
+}
+
+async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName) {
+  if (!stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+  if (messageMentionsOutOfCoverageCity(bodyText)) {
+    await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
+    return true;
+  }
+  if (messageLooksLikePrivatePriceQuestion(bodyText, priorState)) {
+    return false;
+  }
+  const sedeChange = await resolveSedeFromTextWithOpenAi(bodyText);
+  if (sedeChange && !messageConfirmsLinkSend(bodyText) && !messageClearlyRejectsLinkSend(bodyText)) {
+    return false;
+  }
+
+  const linkOfferDecision = await resolveBookingLinkOfferResponseWithOpenAi(bodyText, {
+    profileDisplayName,
+    priorState,
+    conversationContext: buildIntentRoutingOpenAiContext(priorState),
+    lastAssistantMessage: resolveLastAssistantMessageForLinkOffer(priorState),
+  });
+
+  if (linkOfferDecision.action === 'SEND_LINK') {
+    const entryFromState = resolveSedeEntryFromState(priorState);
+    if (entryFromState) {
+      await sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entryFromState);
+      return true;
+    }
+  }
+
+  if (linkOfferDecision.action === 'DO_NOT_SEND') {
+    const entryFromState = resolveSedeEntryFromState(priorState);
+    const preservedSessionState =
+      priorState && typeof priorState === 'object'
+        ? {
+            greeted: Boolean(priorState.greeted),
+            lastSeenAtMs: priorState.lastSeenAtMs,
+            lastSedeEnvKey: priorState.lastSedeEnvKey,
+            lastSedeDisplayName: priorState.lastSedeDisplayName,
+            lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+            lastSedeAtMs: priorState.lastSedeAtMs,
+            bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+          }
+        : {};
+    if (entryFromState) {
+      const url = getAgendaUrl(entryFromState);
+      const message1 = 'Sin problema, sin apuro.';
+      const message2 = url
+        ? `Cuando quieras el link te queda acá:\n${url}\nCualquier duda escribime 😊`
+        : 'Cuando quieras, te paso el link para reservar. Cualquier duda escribime 😊';
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(priorState, {}, {
+          ...(buildLinkSentStatePatch(entryFromState) || {}),
+          ...preservedSessionState,
+        })
+      );
+      const wrapped1 = buildAutoReplyWithGreetingIfNeeded(message1, profileDisplayName, priorState);
+      await sendWhatsAppText(from, wrapped1.messageText);
+      await sendWhatsAppText(from, message2, { skipDelay: true });
+      return true;
+    }
+  }
+
+  const shouldBypassPendingLinkConfirmation =
+    linkOfferDecision.action === 'ASK_CLARIFY' &&
+    (messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
+      messageLooksLikeAnyPriceQuestion(bodyText) ||
+      messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
+      messageMatchesStudiesTopic(bodyText) ||
+      messageAsksAboutConditionTreatment(bodyText) ||
+      messageLooksLikeChronicSymptomFrustration(bodyText) ||
+      messageLooksLikeScheduleAvailabilityQuestion(bodyText));
+  if (shouldBypassPendingLinkConfirmation) {
+    return false;
+  }
+
+  if (linkOfferDecision.action === 'ASK_CLARIFY' && messageConfirmsLinkSend(bodyText)) {
+    const entryFromState = resolveSedeEntryFromState(priorState);
+    if (entryFromState) {
+      await sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entryFromState);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function tryResolveConsultationPriceIntentWithOpenAi(userMessage, options = {}) {
@@ -3569,6 +3697,7 @@ async function sendStudyPriceInformationReply(from, bodyText, priorState, profil
 
 async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
   if (!getOpenAiApiKey()) return false;
+  if (stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
   if (!messageLooksLikeOpenAiIntentRoutingCandidate(bodyText, priorState)) return false;
 
   const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText, {
@@ -3624,6 +3753,13 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'BOOKING') {
+    if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
+      const entryFromState = resolveSedeEntryFromState(priorState);
+      if (entryFromState) {
+        await sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entryFromState);
+        return true;
+      }
+    }
     if (await shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName)) {
       return tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName);
     }
@@ -3986,6 +4122,11 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
   if (messageLooksLikeGreetingOnly(rawText)) return false;
+  if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+    if (messageConfirmsLinkSend(rawText) || messageClearlyRejectsLinkSend(rawText)) return false;
+    const wordCount = normalizeForMatch(rawText).split(' ').filter(Boolean).length;
+    if (wordCount <= 4) return false;
+  }
   const isAwaitingSedeSelection =
     stateLooksLikeAwaitingSedeSelection(priorState) &&
     Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
@@ -6561,6 +6702,9 @@ exports.handler = async (event) => {
           if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -7648,6 +7792,7 @@ exports.handler = async (event) => {
               profileDisplayName,
               priorState,
               conversationContext: buildIntentRoutingOpenAiContext(priorState),
+              lastAssistantMessage: resolveLastAssistantMessageForLinkOffer(priorState),
             });
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             const shouldBypassPendingLinkConfirmation =
@@ -7697,18 +7842,7 @@ exports.handler = async (event) => {
             } else if (linkOfferDecision.action === 'SEND_LINK') {
               const entryFromState = resolveSedeEntryFromState(priorState);
               if (entryFromState) {
-                const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
-                  buildLinkMessage(entryFromState),
-                  profileDisplayName,
-                  priorState
-                );
-                const afterLinkState = mergeConversationStatePreservingGreeting(
-                  priorState,
-                  {},
-                  { ...(linkWrapped.nextStatePatch || {}), ...(buildLinkSentStatePatch(entryFromState) || {}) }
-                );
-                await setConversationState(from, afterLinkState);
-                await sendWhatsAppText(from, linkWrapped.messageText);
+                await sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entryFromState);
                 continue;
               }
             } else if (linkOfferDecision.action === 'DO_NOT_SEND') {
@@ -7754,18 +7888,22 @@ exports.handler = async (event) => {
               }
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
-            } else {
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildMicroCommitmentMessage(),
-                profileDisplayName,
-                priorState
-              );
-              if (wrapped.nextStatePatch) {
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(priorState, priorState || {}, wrapped.nextStatePatch)
-                );
+            } else if (messageConfirmsLinkSend(bodyText)) {
+              const entryFromState = resolveSedeEntryFromState(priorState);
+              if (entryFromState) {
+                await sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entryFromState);
+                continue;
               }
+            } else {
+              const repeatOffer = resolveLastAssistantMessageForLinkOffer(priorState);
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(repeatOffer, profileDisplayName, priorState);
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                  ...(wrapped.nextStatePatch || {}),
+                  ...buildLastBotReplyStatePatch(wrapped.messageText),
+                })
+              );
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
