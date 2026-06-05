@@ -2744,7 +2744,10 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
     messageLooksLikeVagueAnswer(bodyText) ||
     messageLooksLikeSedeSelectionConfusion(bodyText);
 
-  if (userMessageRequiresFreshSedeForBooking(bodyText) && !messageLooksLikeBareSedeOptionAnswer(bodyText)) {
+  if (
+    userMessageRequiresFreshSedeForBooking(bodyText, priorState) &&
+    !messageLooksLikeBareSedeOptionAnswer(bodyText)
+  ) {
     return false;
   }
 
@@ -4762,7 +4765,7 @@ async function tryExtractPatientContextWithOpenAi(rawText, priorState) {
 }
 
 async function resolvePatientContextFromMessage(rawText, priorState) {
-  const requiresFreshSede = userMessageRequiresFreshSedeForBooking(rawText);
+  const requiresFreshSede = userMessageRequiresFreshSedeForBooking(rawText, priorState);
   let sedeEntry = findSedeFromText(rawText) || null;
   if (!sedeEntry && !requiresFreshSede) {
     sedeEntry = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState) || null;
@@ -4827,6 +4830,28 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
     return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
   }
   if (hasBookingLinkInStateForSede(priorState, lastSede)) {
+    if (messageLooksLikeAssistedBookingRequest(bodyText)) {
+      return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
+    }
+    if (
+      messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState) ||
+      messageConfirmsLinkSend(bodyText) ||
+      messageLooksLikeBookingIntent(bodyText)
+    ) {
+      const reply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede);
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+          ...(wrapped.nextStatePatch || {}),
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          ...(buildLinkSentStatePatch(lastSede) || {}),
+          ...buildLastBotReplyStatePatch(wrapped.messageText),
+        })
+      );
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
+    }
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
   if (stateHasRecentStudyPriceContext(priorState)) {
@@ -5659,11 +5684,14 @@ function messageShouldSkipOpenAiCentralRouting(rawText, priorState) {
     return true;
   }
   if (
-    userMessageRequiresFreshSedeForBooking(rawText) &&
+    userMessageRequiresFreshSedeForBooking(rawText, priorState) &&
     (messageLooksLikeBookingIntent(rawText) ||
       messageExplicitlyRequestsBookingLink(rawText) ||
       (Boolean(extractWeekdayNameFromText(rawText)) && messageIncludesSpecificAppointmentTime(rawText)))
   ) {
+    return true;
+  }
+  if (messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState)) {
     return true;
   }
   if (messageLooksLikeShortConversationalFollowUp(rawText, priorState)) return false;
@@ -6245,9 +6273,10 @@ function resolveSedeEntryFromState(state) {
   return null;
 }
 
-function userMessageRequiresFreshSedeForBooking(bodyText) {
+function userMessageRequiresFreshSedeForBooking(bodyText, priorState = null) {
   if (!bodyText || typeof bodyText !== 'string') return false;
   if (findSedeFromText(bodyText)) return false;
+  if (priorState && messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState)) return false;
   return (
     messageLooksLikeBookingIntent(bodyText) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
@@ -6266,7 +6295,7 @@ function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
   const activeAwaitingLinkSede = resolveSedeEntryFromState(priorState);
   if (activeAwaitingLinkSede) return activeAwaitingLinkSede;
 
-  if (userMessageRequiresFreshSedeForBooking(bodyText)) return null;
+  if (userMessageRequiresFreshSedeForBooking(bodyText, priorState)) return null;
 
   if (stateHasPendingBookingIntent(priorState)) {
     const pendingAtMs = Number(priorState.pendingBookingIntentAtMs);
@@ -6727,10 +6756,13 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
       return true;
     }
   }
+  if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (
     messageLooksLikeBookingIntent(bodyText) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
-    userMessageRequiresFreshSedeForBooking(bodyText)
+    userMessageRequiresFreshSedeForBooking(bodyText, priorState)
   ) {
     if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
       return true;
@@ -8055,6 +8087,68 @@ function buildLinkMessage(entry) {
     'El link de agenda online todavía no está configurado.',
     'Escribinos el horario preferido y te confirmamos por este chat.',
   ].join('\n');
+}
+
+function buildAlreadySentBookingLinkAffirmationReply(priorState, entry) {
+  const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
+  if (linkUrl) {
+    return `¡Sí, exacto! Con ese link podés ver horarios y reservar tu turno en ${entry.displayName}:\n${linkUrl}`;
+  }
+  return buildLinkMessage(entry);
+}
+
+function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  if (!lastSede) return false;
+  const linkWasShared =
+    wasBookingLinkSentRecently(priorState) || hasBookingLinkInStateForSede(priorState, lastSede);
+  if (!linkWasShared) return false;
+
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const mentionsLinkOrBooking =
+    normalized.includes('link') ||
+    normalized.includes('agenda') ||
+    normalized.includes('agendar') ||
+    normalized.includes('reservar') ||
+    normalized.includes('reservo');
+  if (!mentionsLinkOrBooking && !messageConfirmsLinkSend(rawText)) return false;
+
+  return (
+    normalized.includes('entonces') ||
+    normalized.includes('con el link') ||
+    normalized.includes('al link') ||
+    normalized.includes('por el link') ||
+    normalized.includes('del link') ||
+    normalized.includes('uso el link') ||
+    normalized.includes('es por el link') ||
+    normalized.includes('es con el link') ||
+    normalized.includes('para reservar') ||
+    messageConfirmsLinkSend(rawText)
+  );
+}
+
+async function tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState)) return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  if (!lastSede) return false;
+  const reply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+      ...(wrapped.nextStatePatch || {}),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...(buildLinkSentStatePatch(lastSede) || {}),
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
 }
 
 function buildLinkSentStatePatch(entry) {
@@ -9434,6 +9528,9 @@ exports.handler = async (event) => {
           if (await tryHandleHealthInsuranceSedeFollowUpWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -10624,11 +10721,33 @@ exports.handler = async (event) => {
 
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
-            !messageLooksLikeBookingIntent(bodyText) &&
-            (messageExplicitlyRequestsBookingLink(bodyText) || wasBookingLinkSentRecently(priorState)) &&
-            messageConfirmsLinkSend(bodyText)
+            wasBookingLinkSentRecently(priorState) &&
+            (messageConfirmsLinkSend(bodyText) ||
+              messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState))
           ) {
             const lastSede = resolveLastSedeEntryFromState(priorState);
+            if (
+              lastSede &&
+              (messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState) ||
+                hasBookingLinkInStateForSede(priorState, lastSede))
+            ) {
+              const wrapped = buildAutoReplyWithGreetingIfNeeded(
+                buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede),
+                profileDisplayName,
+                priorState
+              );
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                  ...(wrapped.nextStatePatch || {}),
+                  ...(buildLastSedeStatePatch(lastSede) || {}),
+                  ...(buildLinkSentStatePatch(lastSede) || {}),
+                  ...buildLastBotReplyStatePatch(wrapped.messageText),
+                })
+              );
+              await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
             if (messageExplicitlyRequestsBookingLink(bodyText) && lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildLinkMessage(lastSede),
