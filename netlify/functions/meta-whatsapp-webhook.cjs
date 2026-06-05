@@ -3778,6 +3778,107 @@ async function tryHandlePatientDissatisfactionWithOpenAi(
   return true;
 }
 
+async function tryResolveExplicitBookingLinkRequestWithOpenAi(userMessage, options = {}) {
+  if (messageExplicitlyRequestsBookingLink(userMessage)) {
+    if (options.rulesOnly) return true;
+    return true;
+  }
+  if (messageLooksLikeAssistedBookingRequest(userMessage)) return false;
+  if (options.rulesOnly) return false;
+
+  const priorState = options.priorState;
+  const hasBookingConversationContext =
+    priorState &&
+    typeof priorState === 'object' &&
+    (stateHasRecentStudyPriceContext(priorState) ||
+      stateHasPendingBookingIntent(priorState) ||
+      stateHasRecentBookingConversationContext(priorState) ||
+      stateHasRecentScheduleDiscussionContext(priorState) ||
+      Number.isFinite(Number(priorState.lastPatientDissatisfactionAtMs)) ||
+      Boolean(resolveLastSedeEntryFromState(priorState)));
+
+  if (!hasBookingConversationContext) return false;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return false;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+    'Tarea: decidir si el paciente pide EXPLÍCITAMENTE que le envíen el link de agenda/turno AHORA.',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "pasame link para agendar", "mandame el link", "quiero el link", "link para reservar", "dale el link", "si pasame el link".',
+    'NO ejemplos: "agendame vos", "quiero agendar" sin pedir link, preguntas de precio, "qué días atiende", solo "si" sin contexto de link.',
+    'Si pide el link de forma directa aunque haya enojado antes por el precio, es YES.',
+  ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : ''),
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content;
+      const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+      if (normalized.startsWith('YES')) return true;
+      if (normalized.startsWith('NO')) return false;
+    }
+  } catch (error) {
+    console.error('OpenAI explicit booking link classifier failed', error);
+  }
+
+  return false;
+}
+
+async function shouldSendBookingLinkDirectly(bodyText, priorState, profileDisplayName, options = {}) {
+  if (messageExplicitlyRequestsBookingLink(bodyText)) return true;
+  if (options.rulesOnly) return false;
+  return tryResolveExplicitBookingLinkRequestWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+}
+
+async function tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (messageLooksLikeAssistedBookingRequest(bodyText)) return false;
+  const shouldSendLink = await shouldSendBookingLinkDirectly(bodyText, priorState, profileDisplayName, options);
+  if (!shouldSendLink) return false;
+
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+  const lastSede =
+    patientContext.sedeEntry ||
+    resolveLastSedeEntryFromState(priorState) ||
+    resolveSedeEntryFromState(priorState);
+  if (!lastSede) return false;
+
+  return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede);
+}
+
 function mapOpenAiSedeTokenToEntry(token) {
   if (typeof token !== 'string') return null;
   const normalized = token.trim().toUpperCase();
@@ -3949,7 +4050,10 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   if (messageLooksLikeAssistedBookingRequest(bodyText)) {
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
-  if (hasBookingLinkInStateForSede(priorState, lastSede) && !messageExplicitlyRequestsBookingLink(bodyText)) {
+  if (await shouldSendBookingLinkDirectly(bodyText, priorState, profileDisplayName)) {
+    return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede);
+  }
+  if (hasBookingLinkInStateForSede(priorState, lastSede)) {
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
   if (stateHasRecentStudyPriceContext(priorState)) {
@@ -4674,6 +4778,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If asking study/test price (espirometría, prick), obra social plus for a study, or a short follow-up after the assistant offered study value ("si", "dame el precio", "decime el valor"): STUDY_PRICE.',
     '- If asking address / how to arrive / where the clinic is ("dónde está la clínica", "dirección", "cómo llego"): ADDRESS. NOT booking.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
+    '- If explicitly asking for the link now ("pasame link", "link para agendar", "mandame el link"): BOOKING and send link directly, never micro-commitment.',
     '- If asking YOU/the assistant to book FOR them ("agendame vos", "podés agendarme", won\'t use link): OTHER, NOT BOOKING.',
     '- If price objection, anger or frustration ("muy caro", "estoy enojado", "qué bronca") after a price/plus reply: OTHER, NOT STUDY_PRICE or HEALTH_INSURANCE.',
     '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
@@ -4816,6 +4921,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
 
   if (primaryIntent === 'BOOKING') {
     if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
+    if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
     if (
@@ -5507,6 +5615,18 @@ function messageLooksLikeBookingIntent(rawText) {
 function messageExplicitlyRequestsBookingLink(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('pasame link') ||
+    normalized.includes('mandame link') ||
+    normalized.includes('enviame link') ||
+    normalized.includes('link para agendar') ||
+    normalized.includes('link para reserv') ||
+    normalized.includes('link de agenda') ||
+    normalized.includes('link de turno') ||
+    normalized.includes('link del turno')
+  ) {
+    return true;
+  }
   const mentionsLink =
     normalized.includes('link') ||
     normalized.includes('enlace') ||
@@ -5527,7 +5647,11 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('me mandas') ||
     normalized.includes('me mandás') ||
     normalized.includes('quiero el link') ||
-    normalized.includes('quiero link')
+    normalized.includes('quiero link') ||
+    normalized.includes('pasa el link') ||
+    normalized.includes('pasa link') ||
+    normalized.includes('dale el link') ||
+    normalized.includes('necesito el link')
   );
 }
 
@@ -7932,6 +8056,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {

@@ -62,7 +62,9 @@
   - “quiero reservar”, “quiero un turno”, “necesito turno”, “agendar”, “reservar”, “cita”
   - Typos: “urno”, “un urno”
 - Pedido explícito de link:
-  - “pasame el link”, “mandame el link”, “enviame el enlace”
+  - “pasame el link”, “mandame el link”, “enviame el enlace”, “pásame link para agendar”
+  - Con sede ya conocida → enviar link directo (NO “¿Te lo mando?”)
+  - Tras “Muy caro” u objeción → si pide link, enviarlo en un solo paso
 - Confirmación de link (humanizada, sin “respondé sí o no”; OpenAI interpreta la intención):
   - “sí”, “dale”, “ok”, “por favor”, “listo”
   - Después de ofrecer el link: “por favor quiero agendar” → enviar link directo (no repetir la pregunta)
