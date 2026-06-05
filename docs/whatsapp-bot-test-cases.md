@@ -1,6 +1,10 @@
 # WhatsApp bot — test cases (manual QA checklist)
 
-Este documento lista los casos/escenarios que fuimos probando y ajustando durante la iteración del bot.
+## IA central (OpenAI)
+- Requiere `OPENAI_API_KEY` en Netlify; con `OPENAI_AI_FIRST_ROUTING=true` (default) casi todo mensaje pasa por el router IA antes de reglas.
+- Router principal: `decidePrimaryIntentWithOpenAi` → ADDRESS, HEALTH_INSURANCE, CONSULTATION_PRICE, BOOKING, SCHEDULE, etc.
+- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, respuestas abrumadoras.
+- Excepciones sin router: emergencia, saludo puro, despedida, respuesta de sede en ventana de selección, confirmación de link (`awaiting_link_confirmation`).
 
 ## Sedes (selección, typos, claridad)
 - Pregunta de sede con menú:

@@ -3254,15 +3254,18 @@ async function tryResolveRequiresHealthInsuranceBeforeConsultationPriceWithOpenA
   }
 }
 
-async function shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName) {
+async function shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName, options = {}) {
   if (shouldAskHealthInsuranceBeforeConsultationPrice(priorState)) return true;
   if (stateHasPendingConsultationPriceIntent(priorState)) return true;
+  if (!options.rulesOnly && getOpenAiApiKey()) {
+    const openAiDecision = await tryResolveConsultationPriceIntentWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+    });
+    if (openAiDecision === true && !messageExplicitlyAsksPrivateConsultationPrice(bodyText)) return true;
+    if (openAiDecision === false) return false;
+  }
   if (messageAsksGenericConsultationPrice(bodyText)) return true;
-  const openAiDecision = await tryResolveConsultationPriceIntentWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-  });
-  if (openAiDecision === true && !messageExplicitlyAsksPrivateConsultationPrice(bodyText)) return true;
   return false;
 }
 
@@ -3379,8 +3382,8 @@ async function sendConsultationPriceQuestionReply(from, bodyText, priorState, pr
   return true;
 }
 
-async function tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName) {
-  if (!(await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName))) {
+async function tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (!(await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName, options))) {
     return false;
   }
   return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
@@ -3638,70 +3641,75 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
 }
 
 async function tryResolveAddressQuestionWithOpenAi(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (apiKey) {
+    const modelName = getOpenAiModelName();
+    const systemPrompt = [
+      'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+      'Tarea: decidir si el paciente pregunta la DIRECCIÓN/UBICACIÓN de la clínica/consultorio/sede o cómo llegar.',
+      'Respondé solo: YES o NO.',
+      'YES ejemplos: "dónde está la clínica", "dirección del consultorio", "cómo llego", "me pasás la ubi", "dónde queda", "dónde atienden".',
+      'NO ejemplos: pedir turno/link/agenda, precio, obra social, qué días atiende el Dr., horarios de consulta del médico.',
+      'NO: "consulta" como turno médico; "clínica" preguntando ubicación SÍ es YES.',
+    ].join('\n');
+    const userContent = buildOpenAiClassifierUserContent(userMessage, {
+      conversationContext:
+        options.conversationContext ||
+        (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+      lastAssistantMessage:
+        options.lastAssistantMessage ||
+        (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+          ? options.priorState.lastBotReplyText
+          : ''),
+      profileDisplayName: options.profileDisplayName,
+    });
+
+    try {
+      const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: modelName,
+          temperature: 0,
+          max_tokens: 3,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content;
+        const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+        if (normalized.startsWith('YES')) return true;
+        if (normalized.startsWith('NO')) return false;
+      }
+    } catch (error) {
+      console.error('OpenAI address question classifier failed', error);
+    }
+  }
+
   if (messageAsksAboutSedeAddressOrHowToArrive(userMessage)) return true;
   if (messageAsksForMapsLocation(userMessage) && !messageLooksLikeBookingIntent(userMessage)) return true;
-
-  const apiKey = getOpenAiApiKey();
-  if (!apiKey) return false;
-
-  const modelName = getOpenAiModelName();
-  const systemPrompt = [
-    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
-    'Tarea: decidir si el paciente pregunta la DIRECCIÓN/UBICACIÓN de la clínica/consultorio/sede o cómo llegar.',
-    'Respondé solo: YES o NO.',
-    'YES ejemplos: "dónde está la clínica", "dirección del consultorio", "cómo llego", "me pasás la ubi", "dónde queda", "dónde atienden".',
-    'NO ejemplos: pedir turno/link/agenda, precio, obra social, qué días atiende el Dr., horarios de consulta del médico.',
-    'NO: "consulta" como turno médico; "clínica" preguntando ubicación SÍ es YES.',
-  ].join('\n');
-  const userContent = buildOpenAiClassifierUserContent(userMessage, {
-    conversationContext:
-      options.conversationContext ||
-      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
-    lastAssistantMessage:
-      options.priorState && typeof options.priorState.lastBotReplyText === 'string'
-        ? options.priorState.lastBotReplyText
-        : '',
-    profileDisplayName: options.profileDisplayName,
-  });
-
-  try {
-    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: modelName,
-        temperature: 0,
-        max_tokens: 3,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-      }),
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content;
-    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
-    if (normalized.startsWith('YES')) return true;
-    if (normalized.startsWith('NO')) return false;
-    return null;
-  } catch (error) {
-    console.error('OpenAI address question classifier failed', error);
-    return null;
-  }
+  return false;
 }
 
-async function shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName) {
+async function shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName, options = {}) {
+  if (!options.rulesOnly && getOpenAiApiKey()) {
+    const openAiDecision = await tryResolveAddressQuestionWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+    });
+    if (openAiDecision === true) return true;
+    if (openAiDecision === false) return false;
+  }
   if (messageAsksAboutSedeAddressOrHowToArrive(bodyText)) return true;
   if (messageAsksForMapsLocation(bodyText) && !messageLooksLikeBookingIntent(bodyText)) return true;
-  const openAiDecision = await tryResolveAddressQuestionWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-  });
-  return openAiDecision === true;
+  return false;
 }
 
 async function sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName) {
@@ -3746,78 +3754,83 @@ async function sendAddressQuestionReply(from, bodyText, priorState, profileDispl
   return true;
 }
 
-async function tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName) {
-  if (!(await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName))) {
+async function tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (!(await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName, options))) {
     return false;
   }
   return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
 }
 
 async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (apiKey) {
+    const modelName = getOpenAiModelName();
+    const systemPrompt = [
+      'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense (Argentina).',
+      'Tarea: decidir si el paciente informa o pregunta por su obra social/prepaga (aceptación, plus, cobertura).',
+      'Respondé solo: YES o NO.',
+      'YES ejemplos: "tengo obra social PAMI/Pani", "soy de OSDE", "¿aceptan Swis?", "tengo prepaga", "mi obra social es ...".',
+      'NO ejemplos: pedir turno/link, precio de consulta, dirección, horarios del Dr., saludo sin mencionar cobertura.',
+      'Si dice "tengo obra social X" aunque X sea typo (Pani=PAMI), respondé YES.',
+    ].join('\n');
+    const userContent = buildOpenAiClassifierUserContent(userMessage, {
+      conversationContext:
+        options.conversationContext ||
+        (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+      lastAssistantMessage:
+        options.lastAssistantMessage ||
+        (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+          ? options.priorState.lastBotReplyText
+          : ''),
+      profileDisplayName: options.profileDisplayName,
+    });
+
+    try {
+      const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: modelName,
+          temperature: 0,
+          max_tokens: 3,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+        }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        const text = data?.choices?.[0]?.message?.content;
+        const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+        if (normalized.startsWith('YES')) return true;
+        if (normalized.startsWith('NO')) return false;
+      }
+    } catch (error) {
+      console.error('OpenAI health insurance plus intent classifier failed', error);
+    }
+  }
+
   if (messageLooksLikeHealthInsurancePlusQuestion(userMessage)) return true;
   if (messageStatesHealthInsuranceMembership(userMessage)) return true;
-
-  const apiKey = getOpenAiApiKey();
-  if (!apiKey) return false;
-
-  const modelName = getOpenAiModelName();
-  const systemPrompt = [
-    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense (Argentina).',
-    'Tarea: decidir si el paciente informa o pregunta por su obra social/prepaga (aceptación, plus, cobertura).',
-    'Respondé solo: YES o NO.',
-    'YES ejemplos: "tengo obra social PAMI/Pani", "soy de OSDE", "¿aceptan Swis?", "tengo prepaga", "mi obra social es ...".',
-    'NO ejemplos: pedir turno/link, precio de consulta, dirección, horarios del Dr., saludo sin mencionar cobertura.',
-    'Si dice "tengo obra social X" aunque X sea typo (Pani=PAMI), respondé YES.',
-  ].join('\n');
-  const userContent = buildOpenAiClassifierUserContent(userMessage, {
-    conversationContext:
-      options.conversationContext ||
-      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
-    lastAssistantMessage:
-      options.priorState && typeof options.priorState.lastBotReplyText === 'string'
-        ? options.priorState.lastBotReplyText
-        : '',
-    profileDisplayName: options.profileDisplayName,
-  });
-
-  try {
-    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: modelName,
-        temperature: 0,
-        max_tokens: 3,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent },
-        ],
-      }),
-    });
-    if (!response.ok) return null;
-    const data = await response.json();
-    const text = data?.choices?.[0]?.message?.content;
-    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
-    if (normalized.startsWith('YES')) return true;
-    if (normalized.startsWith('NO')) return false;
-    return null;
-  } catch (error) {
-    console.error('OpenAI health insurance plus intent classifier failed', error);
-    return null;
-  }
+  return false;
 }
 
-async function shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName) {
+async function shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName, options = {}) {
+  if (!options.rulesOnly && getOpenAiApiKey()) {
+    const openAiDecision = await tryResolveHealthInsurancePlusIntentWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+    });
+    if (openAiDecision === true) return true;
+    if (openAiDecision === false) return false;
+  }
   if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) return true;
   if (messageStatesHealthInsuranceMembership(bodyText)) return true;
-  const openAiDecision = await tryResolveHealthInsurancePlusIntentWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-  });
-  return openAiDecision === true;
+  return false;
 }
 
 async function sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName) {
@@ -3924,8 +3937,8 @@ async function sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, 
   return true;
 }
 
-async function tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName) {
-  if (!(await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName))) {
+async function tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (!(await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName, options))) {
     return false;
   }
   return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
@@ -4048,22 +4061,18 @@ async function tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, p
     return false;
   }
   const ruleMatch = messageLooksLikeScheduleAvailabilityQuestion(bodyText);
-  if (!getOpenAiApiKey()) {
-    if (!ruleMatch) return false;
-    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
+  if (getOpenAiApiKey()) {
+    const openAiDecision = await tryResolveScheduleQuestionWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+    });
+    if (openAiDecision === false) return false;
+    if (openAiDecision === true) {
+      return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
+    }
   }
-  const openAiDecision = await tryResolveScheduleQuestionWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-  });
-  if (openAiDecision === false) return false;
-  if (openAiDecision === true) {
-    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
-  }
-  if (ruleMatch) {
-    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
-  }
-  return false;
+  if (!ruleMatch) return false;
+  return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
 }
 
 async function tryResolvePreferredDayBookingWithOpenAi(userMessage, options = {}) {
@@ -4247,6 +4256,37 @@ const MULTI_INTENT_ROUTER_TOKENS = [
   'OTHER',
 ];
 
+function isOpenAiCentralRoutingEnabled() {
+  if (!getOpenAiApiKey()) return false;
+  const raw = process.env.OPENAI_AI_FIRST_ROUTING;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+      return false;
+    }
+  }
+  return true;
+}
+
+function messageShouldSkipOpenAiCentralRouting(rawText, priorState) {
+  if (!rawText || typeof rawText !== 'string') return true;
+  if (textMatchesMedicalEmergency(rawText)) return true;
+  if (messageLooksLikeFarewell(rawText)) return true;
+  if (messageLooksLikeGreetingOnly(rawText)) return true;
+  const isAwaitingSedeSelection =
+    stateLooksLikeAwaitingSedeSelection(priorState) &&
+    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  const recentlyAskedSedeCity =
+    priorState &&
+    typeof priorState === 'object' &&
+    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
+    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  if ((isAwaitingSedeSelection || recentlyAskedSedeCity) && messageLooksLikeSedeOnlyAnswer(rawText)) {
+    return true;
+  }
+  return false;
+}
+
 function messageLooksLikeMultiIntentCandidate(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const signals = [
@@ -4289,6 +4329,15 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If asking if the doctor treats a condition: CONDITION.',
     '- If asking what to bring / referral / authorization / payments / invoice: DOCUMENTS.',
     '- If unclear, return OTHER.',
+    '',
+    'CRITICAL disambiguation (always use last assistant message + context):',
+    '- "tengo obra social X" / "soy de OSDE/PAMI" → HEALTH_INSURANCE, never SCHEDULE or BOOKING.',
+    '- "dónde está la clínica" / dirección → ADDRESS, never BOOKING.',
+    '- "qué costo tiene la consulta" (sin particular) → CONSULTATION_PRICE, never PRIVATE_PRICE until obra social is collected.',
+    '- After "¿Te paso el link?" a short yes ("si", "dale") → BOOKING.',
+    '- City name alone after consultation price flow → CONSULTATION_PRICE continuation (ask obra social next).',
+    '- Obra social name alone after "¿qué obra social?" → CONSULTATION_PRICE or HEALTH_INSURANCE, never SCHEDULE.',
+    '- Pick ONE intent for the patient\'s immediate question; do not combine topics.',
   ].join('\n');
 
   const userContent = buildOpenAiClassifierUserContent(userMessage, {
@@ -4337,46 +4386,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
   }
 }
 
-async function sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName, options = {}) {
-  const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
-    forcePriceFlow: true,
-    profileDisplayName,
-    ...options,
-  });
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
-  const detectedStudyType = getStudyTypeFromText(bodyText);
-  const studiesStatePatch = {
-    ...(wrapped.nextStatePatch || {}),
-    ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
-    lastStudyPriceContextAtMs: Date.now(),
-    ...buildLastBotReplyStatePatch(wrapped.messageText),
-  };
-  await setConversationState(
-    from,
-    mergeConversationStatePreservingGreeting(priorState, priorState || {}, studiesStatePatch)
-  );
-  await sendWhatsAppText(from, wrapped.messageText);
-  return true;
-}
-
-async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
-  if (!getOpenAiApiKey()) return false;
-  if (stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
-  if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
-    return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
-  }
-  if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
-    return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
-  }
-  if (await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName)) {
-    return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
-  }
-  if (!messageLooksLikeOpenAiIntentRoutingCandidate(bodyText, priorState)) return false;
-
-  const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-  });
+async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName, primaryIntent) {
   if (!primaryIntent || primaryIntent === 'OTHER') return false;
 
   if (primaryIntent === 'CONSULTATION_PRICE') {
@@ -4430,7 +4440,10 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'SCHEDULE') {
-    if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
+    if (
+      !isOpenAiCentralRoutingEnabled() &&
+      (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName, { rulesOnly: true }))
+    ) {
       return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
     }
     return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
@@ -4447,7 +4460,10 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'BOOKING') {
-    if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+    if (
+      !isOpenAiCentralRoutingEnabled() &&
+      (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName, { rulesOnly: true }))
+    ) {
       return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
     }
     if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
@@ -4482,6 +4498,59 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   return false;
+}
+
+async function sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName, options = {}) {
+  const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
+    forcePriceFlow: true,
+    profileDisplayName,
+    ...options,
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
+  const detectedStudyType = getStudyTypeFromText(bodyText);
+  const studiesStatePatch = {
+    ...(wrapped.nextStatePatch || {}),
+    ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+    lastStudyPriceContextAtMs: Date.now(),
+    ...buildLastBotReplyStatePatch(wrapped.messageText),
+  };
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, studiesStatePatch)
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
+async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
+  if (!getOpenAiApiKey()) return false;
+  if (stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+
+  if (isOpenAiCentralRoutingEnabled()) {
+    if (messageShouldSkipOpenAiCentralRouting(bodyText, priorState)) return false;
+    const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+    });
+    return dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName, primaryIntent);
+  }
+
+  if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+    return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+  if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
+    return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+  if (await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName)) {
+    return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+  if (!messageLooksLikeOpenAiIntentRoutingCandidate(bodyText, priorState)) return false;
+
+  const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  return dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName, primaryIntent);
 }
 
 async function decideIntentsWithOpenAi(userMessage) {
@@ -7449,19 +7518,32 @@ exports.handler = async (event) => {
           if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
+          if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
+          const rulesOnlyFallback = isOpenAiCentralRoutingEnabled();
+          if (
+            await tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName, {
+              rulesOnly: rulesOnlyFallback,
+            })
+          ) {
+            continue;
+          }
+          if (
+            await tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName, {
+              rulesOnly: rulesOnlyFallback,
+            })
+          ) {
+            continue;
+          }
+          if (
+            await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
+              rulesOnly: rulesOnlyFallback,
+            })
+          ) {
             continue;
           }
           if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
