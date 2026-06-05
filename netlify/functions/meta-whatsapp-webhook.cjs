@@ -708,6 +708,35 @@ function stateHasRecentStudyPriceContext(state) {
   );
 }
 
+function shouldUsePriorStudyPricingContext(priorState, rawText) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (stateLooksLikeAwaitingStudyPriceHealthInsurance(priorState)) return true;
+  if (stateLooksLikeAwaitingStudyTypeForPrice(priorState)) return true;
+  if (stateHasRecentStudyPriceContext(priorState)) return true;
+  if (messageAsksAboutStudyPrice(rawText) && getStudyTypeFromText(rawText)) return false;
+  return true;
+}
+
+function priorStateIndicatesSpirometryStudy(priorState) {
+  if (!priorState || typeof priorState !== 'object' || typeof priorState.lastStudyType !== 'string') {
+    return false;
+  }
+  return normalizeForMatch(priorState.lastStudyType).includes('espirometr');
+}
+
+function priorStateIndicatesAllergyStudy(priorState) {
+  if (!priorState || typeof priorState !== 'object' || typeof priorState.lastStudyType !== 'string') {
+    return false;
+  }
+  const normalizedStudyType = normalizeForMatch(priorState.lastStudyType);
+  return (
+    normalizedStudyType.includes('prick') ||
+    normalizedStudyType.includes('alerg') ||
+    normalizedStudyType.includes('parche') ||
+    normalizedStudyType.includes('patch')
+  );
+}
+
 function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
   return (
     state &&
@@ -2850,9 +2879,25 @@ function messageAsksAboutStudyFasting(rawText) {
   return normalized.includes('ayunas') || normalized.includes('ayuno');
 }
 
-function messageAsksAboutStudyPreparation(rawText) {
+function messageAsksAboutStudyPreparation(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
-  return messageLooksLikeStudyPreparationQuestion(rawText);
+  if (messageLooksLikeStudyPreparationQuestion(rawText)) return true;
+  if (priorState && stateHasRecentStudyPriceContext(priorState)) {
+    const normalized = normalizeForMatch(rawText);
+    const vagueStudyFollowUp =
+      normalized.includes('algo especial') ||
+      normalized.includes('preparacion') ||
+      normalized.includes('preparación') ||
+      messageAsksAboutStudyFasting(rawText) ||
+      messageAsksAboutStudyMedicationPreparation(rawText) ||
+      ((normalized.includes('debo llevar') || normalized.includes('debo traer')) &&
+        !normalized.includes('estudios') &&
+        !normalized.includes('informe') &&
+        !normalized.includes('historia clinica') &&
+        !normalized.includes('orden'));
+    if (vagueStudyFollowUp) return true;
+  }
+  return false;
 }
 
 function messageLooksLikeStudyPreparationQuestion(rawText) {
@@ -2892,6 +2937,8 @@ function messageLooksLikeStudyPreparationQuestion(rawText) {
       normalized.includes('llevar') &&
       (normalized.includes('hacerme') || normalized.includes('realizarme')));
   if (!asksPreparation) return false;
+  if (normalized.includes('algo especial')) return true;
+  if (normalized.includes('preparacion') || normalized.includes('preparación')) return true;
   if (mentionsStudyContext || messageMentionsSpirometryStudy(rawText)) return true;
   if (
     messageAsksAboutStudyFasting(rawText) ||
@@ -2918,11 +2965,22 @@ function buildStudyPreparationOpenAiContext(priorState, rawText) {
   if (studyType) {
     contextLines.push(`Estudio mencionado o en contexto: ${studyType}.`);
   }
+  const healthInsuranceFromState =
+    priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
+      ? priorState.healthInsuranceName.trim()
+      : priorState &&
+          typeof priorState === 'object' &&
+          typeof priorState.lastHealthInsuranceName === 'string'
+        ? priorState.lastHealthInsuranceName.trim()
+        : '';
+  if (healthInsuranceFromState) {
+    contextLines.push(`Obra social o prepaga en contexto: ${healthInsuranceFromState}.`);
+  }
   return contextLines.join('\n');
 }
 
 function buildStudyPreparationReply(priorState, rawText) {
-  if (messageMentionsSpirometryStudy(rawText)) {
+  if (messageMentionsSpirometryStudy(rawText) || priorStateIndicatesSpirometryStudy(priorState)) {
     const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
     if (sedeFromState) {
       return `${SPIROMETRY_PREPARATION_MESSAGE} Te esperamos en ${sedeFromState.displayName}.`;
@@ -2930,7 +2988,11 @@ function buildStudyPreparationReply(priorState, rawText) {
     return SPIROMETRY_PREPARATION_MESSAGE;
   }
   const normalized = normalizeForMatch(rawText);
-  if (normalized.includes('prick') || normalized.includes('test de alerg')) {
+  if (
+    normalized.includes('prick') ||
+    normalized.includes('test de alerg') ||
+    priorStateIndicatesAllergyStudy(priorState)
+  ) {
     return appendSedeContextIfKnown(
       'Para test de alergia: suspender antialérgicos 48 hs antes y corticoides 1 semana antes. No hace falta ir en ayunas.',
       priorState
@@ -3242,6 +3304,8 @@ function messageAsksWhatStudiesToBring(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageLooksLikeStudyPreparationQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('algo especial')) return false;
+  if (normalized.includes('preparacion') || normalized.includes('preparación')) return false;
   if (
     normalized.includes('que estudios hace') ||
     normalized.includes('que estudios hacen') ||
@@ -3411,9 +3475,9 @@ function messageMentionsChildPatientContext(rawText) {
   );
 }
 
-function messageMatchesStudiesPatientOnlyFaq(rawText) {
+function messageMatchesStudiesPatientOnlyFaq(rawText, priorState) {
   return (
-    messageAsksAboutStudyPreparation(rawText) ||
+    messageAsksAboutStudyPreparation(rawText, priorState) ||
     messageAsksWhatStudiesToBring(rawText) ||
     messageSaysHasNoPriorStudies(rawText) ||
     messageAsksWhatStudiesWillBeRequested(rawText) ||
@@ -3481,7 +3545,7 @@ function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
 
 async function buildStudiesInformationReply(priorState, rawText = '', options = {}) {
   const normalized = normalizeForMatch(rawText);
-  if (messageAsksAboutStudyPreparation(rawText)) {
+  if (messageAsksAboutStudyPreparation(rawText, priorState)) {
     const openAiPreparationReply = await fetchOpenAiStudyPreparationReply(rawText, {
       profileDisplayName:
         options && typeof options.profileDisplayName === 'string' ? options.profileDisplayName : '',
@@ -3524,8 +3588,13 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       : null;
   const studyType = studyTypeFromMessage || studyTypeFromState || 'estudio';
   const forcePriceFlow = Boolean(options.forcePriceFlow);
-  const inferredHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
-  const lastSede = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  const usePriorStudyPricingContext = shouldUsePriorStudyPricingContext(priorState, rawText);
+  const inferredHealthInsuranceName = usePriorStudyPricingContext
+    ? resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText)
+    : normalizeHealthInsuranceNameForStudyPricing(tryExtractHealthInsuranceName(rawText));
+  const lastSede = usePriorStudyPricingContext
+    ? resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState)
+    : findSedeFromText(rawText) || null;
   const asksPrice =
     messageLooksLikePrivatePriceQuestion(rawText) ||
     messageAsksAboutStudyPrice(rawText) ||
@@ -5603,7 +5672,7 @@ exports.handler = async (event) => {
           if (
             messageAsksAboutStudyPrice(bodyText) ||
             messageAsksAboutStudiesOrTests(bodyText) ||
-            messageMatchesStudiesPatientOnlyFaq(bodyText)
+            messageMatchesStudiesPatientOnlyFaq(bodyText, priorState)
           ) {
             if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
               const preservedSessionState =
@@ -5637,10 +5706,14 @@ exports.handler = async (event) => {
               (priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string');
             const shouldAwaitStudyTypeForPrice =
               messageAsksAboutStudyPrice(bodyText) && !hasStudyTypeContext;
+            const usePriorStudyPricingContext = shouldUsePriorStudyPricingContext(priorState, bodyText);
+            const knownHealthInsuranceForStudyPrice = usePriorStudyPricingContext
+              ? resolveKnownHealthInsuranceNameForStudyPricing(priorState, bodyText)
+              : normalizeHealthInsuranceNameForStudyPricing(tryExtractHealthInsuranceName(bodyText));
             const shouldAwaitStudyPriceHealthInsurance =
               (messageAsksAboutStudyPrice(bodyText) || Boolean(detectedStudyType)) &&
               hasStudyTypeContext &&
-              !resolveKnownHealthInsuranceNameForStudyPricing(priorState, bodyText);
+              !knownHealthInsuranceForStudyPrice;
             const studiesStatePatch = {
               ...(wrapped.nextStatePatch || {}),
               ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
@@ -5684,10 +5757,12 @@ exports.handler = async (event) => {
             messageAsksAboutVirtualVisit(bodyText) ||
             messageAsksForMapsLocation(bodyText) ||
             messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
-            (messageAsksAboutStudyFasting(bodyText) && !messageAsksAboutStudyPreparation(bodyText)) ||
+            (messageAsksAboutStudyFasting(bodyText) &&
+              !messageAsksAboutStudyPreparation(bodyText, priorState)) ||
             (messageAsksAboutStudyMedicationPreparation(bodyText) &&
-              !messageAsksAboutStudyPreparation(bodyText)) ||
-            (messageAsksAboutStudyDuration(bodyText) && !messageAsksAboutStudyPreparation(bodyText)) ||
+              !messageAsksAboutStudyPreparation(bodyText, priorState)) ||
+            (messageAsksAboutStudyDuration(bodyText) &&
+              !messageAsksAboutStudyPreparation(bodyText, priorState)) ||
             messageAsksAboutMedicationAllergyStudy(bodyText)
           ) {
             let reply = null;

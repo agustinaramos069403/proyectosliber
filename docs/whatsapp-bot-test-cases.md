@@ -108,8 +108,10 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “¿cuánto cuesta el prick test?” → “se confirma en consulta”
 - Preparación de estudios:
   - “¿tengo que llevar algo especial para hacerme la espirometría?” → preparación (no ayunas, sin aerosoles ese día, DNI/credencial), NO confundir con “estudios previos a traer”
+  - Follow-up sin repetir el estudio (después de precio de espirometría): “genial debo llevar algo especial?” → preparación vía IA (usa `lastStudyType` en contexto), NO mensaje de estudios previos
   - Typos: “estirometria” en preguntas de preparación → misma respuesta de espirometría
   - Preparación de estudios: siempre intenta OpenAI primero (con sede/estudio en contexto); si falla, respuesta fija de respaldo
+  - Precio de estudio nuevo sin obra social en el mensaje: “hola precio de estirometria?” → pedir obra social y ciudad (no reutilizar IOSCOR/sede de sesiones viejas)
   - Ayunas: “¿tengo que ir en ayunas?” → no
   - Medicación: antihistamínicos 48 hs, corticoides 1 semana; espirometría sin aerosoles ese día
   - “¿cuánto tarda el estudio?” → depende del caso
