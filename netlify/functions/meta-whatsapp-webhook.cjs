@@ -750,6 +750,67 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   );
 }
 
+function messageLooksLikePatientDissatisfactionByRules(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  if (messageLooksLikeChronicSymptomFrustration(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const priceObjection =
+    normalized.includes('muy caro') ||
+    normalized.includes('re caro') ||
+    normalized.includes('carisimo') ||
+    normalized.includes('carísimo') ||
+    normalized.includes('demasiado caro') ||
+    normalized.includes('es caro') ||
+    normalized.includes('esta caro') ||
+    normalized.includes('está caro') ||
+    normalized.includes('un robo') ||
+    normalized.includes('no puedo pagar') ||
+    normalized.includes('no me alcanza') ||
+    normalized.includes('sale mucho') ||
+    normalized.includes('es mucho') ||
+    normalized.includes('mucho dinero');
+  const emotionalFrustration =
+    normalized.includes('estoy enojad') ||
+    normalized.includes('estoy molest') ||
+    normalized.includes('me enoja') ||
+    normalized.includes('me molesta mucho') ||
+    normalized.includes('que bronca') ||
+    normalized.includes('qué bronca') ||
+    normalized.includes('indignad') ||
+    normalized.includes('furios') ||
+    normalized.includes('estoy hart') ||
+    normalized.includes('pesimo') ||
+    normalized.includes('pésimo') ||
+    normalized.includes('malisimo') ||
+    normalized.includes('malísimo') ||
+    normalized.includes('un desastre') ||
+    normalized.includes('que barbaridad') ||
+    normalized.includes('qué barbaridad') ||
+    normalized.includes('no puede ser') ||
+    normalized.includes('increible') ||
+    normalized.includes('increíble');
+  return priceObjection || emotionalFrustration;
+}
+
+function priorStateLooksLikeRecentPriceOrPlusReply(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (stateHasRecentStudyPriceContext(priorState)) return true;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '';
+  if (!lastBotReplyText) return false;
+  return (
+    lastBotReplyText.includes('$') ||
+    lastBotReplyText.includes('plus') ||
+    lastBotReplyText.includes('consulta') ||
+    lastBotReplyText.includes('espirometr')
+  );
+}
+
 function stateLooksLikeAwaitingSymptomDuration(state) {
   return (
     state &&
@@ -1934,13 +1995,30 @@ function getSedeClinicHours(entry) {
   return SEDE_CLINIC_HOURS_BY_ENV_KEY[entry.envKey] || null;
 }
 
-function buildPreferredDayBookingReply(sede, weekdayName, priorState = null) {
+function messageIncludesSpecificAppointmentTime(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    /\b\d{1,2}\s*(hs|hrs|horas)\b/.test(normalized) ||
+    /\b\d{1,2}:\d{2}\b/.test(normalized) ||
+    /\ba las \d{1,2}\b/.test(normalized)
+  );
+}
+
+function buildPreferredDayBookingReply(sede, weekdayName, priorState = null, rawText = '') {
+  const includesSpecificTime = messageIncludesSpecificAppointmentTime(rawText);
   if (weekdayName) {
     if (hasBookingLinkInStateForSede(priorState, sede)) {
       const linkUrl = resolveBookingLinkUrlFromState(priorState, sede);
-      return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, revisá los horarios disponibles en el link que ya te pasé:\n${linkUrl}\nPor acá no agendamos.`;
+      const timeNote = includesSpecificTime
+        ? ' Por acá no confirmamos horarios puntuales; en el link ves qué hay disponible.'
+        : '';
+      return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, revisá la agenda en el link que ya te pasé:\n${linkUrl}${timeNote}\nPor acá no agendamos.`;
     }
-    return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, en el link ves los días y horarios disponibles del Dr. Por acá no agendamos. ¿Te lo mando?`;
+    const timeNote = includesSpecificTime
+      ? ' Por acá no confirmamos horarios puntuales; en el link ves qué hay disponible.'
+      : '';
+    return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, en el link ves los días y horarios disponibles del Dr.${timeNote} Por acá no agendamos. ¿Te lo mando?`;
   }
   return buildScheduleQuestionLinkMessage(sede, priorState);
 }
@@ -3547,6 +3625,159 @@ async function tryHandleAssistedBookingRequest(from, bodyText, priorState, profi
   return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
 }
 
+async function tryResolvePatientDissatisfactionWithOpenAi(userMessage, options = {}) {
+  const rulesMatch = messageLooksLikePatientDissatisfactionByRules(userMessage);
+  if (options.rulesOnly) return rulesMatch;
+  if (rulesMatch) return true;
+
+  const priorState = options.priorState;
+  const hasDissatisfactionContext =
+    priorState &&
+    typeof priorState === 'object' &&
+    priorStateLooksLikeRecentPriceOrPlusReply(priorState);
+
+  if (!hasDissatisfactionContext) return false;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return rulesMatch;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+    'Tarea: decidir si el paciente expresa DISCONFORMIDAD, ENOJO o FRUSTRACIÓN (especialmente por precio), no una pregunta nueva.',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "muy caro", "es un robo", "estoy enojado", "qué bronca", "no puedo pagar", "malísimo", sarcasmo tras un precio.',
+    'NO ejemplos: pregunta de precio nueva ("cuánto sale"), pedir turno, obra social, síntomas clínicos, saludo.',
+    'Si el asistente acaba de informar un monto y el paciente reacciona mal, es YES.',
+  ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : ''),
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content;
+      const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+      if (normalized.startsWith('YES')) return true;
+      if (normalized.startsWith('NO')) return false;
+    }
+  } catch (error) {
+    console.error('OpenAI patient dissatisfaction classifier failed', error);
+  }
+
+  return rulesMatch;
+}
+
+async function fetchOpenAiDissatisfactionReply(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+
+  const modelName = getOpenAiModelName();
+  const basePrompt = loadAgenteLiberSystemPrompt();
+  const systemPrompt = [
+    typeof basePrompt === 'string' && basePrompt.trim().length > 0
+      ? basePrompt.trim()
+      : FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT,
+    '',
+    'Situación: el paciente expresó enojo, frustración o que algo es muy caro.',
+    'Respondé con empatía breve (máximo 2 oraciones). NO repitas montos ni la respuesta anterior.',
+    'NO des diagnósticos. NO inventes precios. Podés validar su molestia y ofrecer ayudar con otra consulta concreta.',
+    'NO ofrezcas link de turno salvo que lo pida explícitamente.',
+  ].join('\n');
+
+  const priorState = options.priorState;
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    profileDisplayName: options.profileDisplayName,
+    conversationContext: priorState ? buildIntentRoutingOpenAiContext(priorState) : '',
+    lastAssistantMessage:
+      priorState && typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '',
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: OPENAI_CHAT_TEMPERATURE,
+        max_tokens: OPENAI_MAX_OUTPUT_TOKENS,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || text.trim().length === 0) return null;
+    return text.trim();
+  } catch (error) {
+    console.error('OpenAI dissatisfaction reply failed', error);
+    return null;
+  }
+}
+
+async function tryHandlePatientDissatisfactionWithOpenAi(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName,
+  options = {}
+) {
+  const isDissatisfaction = await tryResolvePatientDissatisfactionWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+    rulesOnly: options.rulesOnly,
+  });
+  if (!isDissatisfaction) return false;
+
+  const openAiReply = await fetchOpenAiDissatisfactionReply(bodyText, { priorState, profileDisplayName });
+  const fallbackReply =
+    'Entiendo, y sé que a veces los montos pesan. Contame qué te gustaría revisar y te ayudo sin repetirte lo mismo.';
+  const replyText = processAssistantReplyForPatient(openAiReply || fallbackReply);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+      ...(wrapped.nextStatePatch || {}),
+      lastPatientDissatisfactionAtMs: Date.now(),
+      ...buildLastBotReplyStatePatch(replyText),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 function mapOpenAiSedeTokenToEntry(token) {
   if (typeof token !== 'string') return null;
   const normalized = token.trim().toUpperCase();
@@ -4292,14 +4523,15 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
     return true;
   }
   const weekdayName = extractWeekdayNameFromText(bodyText);
-  const reply = buildPreferredDayBookingReply(lastSede, weekdayName, mergedState);
+  const reply = buildPreferredDayBookingReply(lastSede, weekdayName, mergedState, bodyText);
   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
+  const linkAlreadyShared = hasBookingLinkInStateForSede(mergedState, lastSede);
+  const preferredDayStateBase = linkAlreadyShared
+    ? buildClearedAwaitingLinkConfirmationStatePatch()
+    : buildAwaitingLinkConfirmationState(lastSede, 'after_preferred_day');
   await setConversationState(
     from,
-    mergeConversationStatePreservingGreeting(
-      mergedState,
-      buildAwaitingLinkConfirmationState(lastSede, 'after_preferred_day'),
-      {
+    mergeConversationStatePreservingGreeting(mergedState, preferredDayStateBase, {
         ...(wrapped.nextStatePatch || {}),
         ...(buildLastSedeStatePatch(lastSede) || {}),
         ...buildPendingBookingIntentStatePatch(),
@@ -4443,6 +4675,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If asking address / how to arrive / where the clinic is ("dónde está la clínica", "dirección", "cómo llego"): ADDRESS. NOT booking.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
     '- If asking YOU/the assistant to book FOR them ("agendame vos", "podés agendarme", won\'t use link): OTHER, NOT BOOKING.',
+    '- If price objection, anger or frustration ("muy caro", "estoy enojado", "qué bronca") after a price/plus reply: OTHER, NOT STUDY_PRICE or HEALTH_INSURANCE.',
     '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
     '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves"): PREFERRED_DAY. Not SCHEDULE.',
     '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
@@ -4626,6 +4859,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
 }
 
 async function sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (messageLooksLikePatientDissatisfactionByRules(bodyText)) {
+    return tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName);
+  }
   const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
     forcePriceFlow: true,
     profileDisplayName,
@@ -7693,6 +7929,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {

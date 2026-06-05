@@ -3,7 +3,7 @@
 ## IA central (OpenAI)
 - Requiere `OPENAI_API_KEY` en Netlify; con `OPENAI_AI_FIRST_ROUTING=true` (default) casi todo mensaje pasa por el router IA antes de reglas.
 - Router principal: `decidePrimaryIntentWithOpenAi` → ADDRESS, HEALTH_INSURANCE, CONSULTATION_PRICE, BOOKING, SCHEDULE, etc.
-- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, autoagendado asistido (“agendame vos”), respuestas abrumadoras.
+- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, autoagendado asistido (“agendame vos”), disconformidad/enojo (“muy caro”), respuestas abrumadoras.
 - Excepciones sin router: emergencia, saludo puro, despedida, respuesta de sede en ventana de selección, confirmación de link (`awaiting_link_confirmation`).
 
 ## Sedes (selección, typos, claridad)
@@ -85,6 +85,10 @@
 - Horarios libres después del link:
   - Tras enviar link → “decime qué horarios tenés libre”
   - NO repetir “¿Te paso el link?”; indicar que la disponibilidad está en el link ya enviado
+- Disconformidad / enojo (IA):
+  - Tras precio/plus (“Con IOSCOR, plus de $35.000…”) → “Muy caro”, “estoy enojado”, “qué bronca”
+  - NO repetir el mismo monto; IA genera respuesta empática breve (fallback sin OpenAI si no hay key)
+  - Turno con día y hora (“martes 17hs”): explicar que por acá no se confirman horarios puntuales + link
 
 ## Link — problemas técnicos / disponibilidad / lista de espera
 - Problema técnico con el link:
