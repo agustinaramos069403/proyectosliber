@@ -37,7 +37,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 ## Turnos / reservas / link
 - Flujo con contexto (IA + estado):
   - “quiero un turno” → sede → **NO** “¿en qué te puedo ayudar?”; ofrecer link o “¿te lo mando?”
-  - Tras horarios en Corrientes: “martes por favor” → confirmar martes en esa sede + ofrecer link (NO volver a pedir Corrientes/Resistencia)
+  - “qué días atiende?” → IA clasifica SCHEDULE → ofrecer link (NO horarios de clínica)
+  - Tras ofrecer link/horarios del Dr.: “martes por favor” → IA clasifica PREFERRED_DAY → ofrecer link para ver turno el martes (NO volver a pedir sede)
   - Responder “1” o “ctes” después de pedir sede para turno debe continuar agendamiento, no resetear conversación
 - Después de precio de estudio (espirometría/test) con sede y obra social ya informadas:
   - “perfecto, entonces para agendar turno como hago?” → explicar proceso o pasar link (NO mensaje de “no abre el link”)
@@ -168,9 +169,12 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 
 ## Dirección / horarios / ubicación (Maps)
 - “¿En qué dirección queda…?”, “¿Dónde queda…?”, “¿Cómo llego…?”
-- “¿En qué horarios trabajan/atienden?”
+  - Respuesta: dirección + **horarios de la clínica** (recepción) + cómo llegar si aplica
+- “¿Qué días atiende el Dr.?” / “¿En qué horarios atiende?” / “horario de consulta”
+  - Respuesta: **NO** listar horarios del Dr. ni horarios de clínica; ofrecer link para ver días/horarios disponibles en agenda (por acá no se agendan)
+  - Tras esa respuesta: “martes por favor” → deducir turno el martes + ofrecer link (NO volver a pedir sede, NO confirmar horario por chat)
 - “ubicación / pasame la ubi / maps / pin”
-  - Respuesta: dirección + horarios y luego link de Google Maps (por sede).
+  - Respuesta: dirección y luego link de Google Maps (por sede).
 
 ## Hablar con médico / secretaría / humano
 - “¿Puedo hablar con el médico?” (no por WhatsApp; ofrecer ayudar a reservar)

@@ -269,20 +269,14 @@ const STUDY_DURATION_MESSAGE = 'Depende del caso.';
 const MEDICATION_ALLERGY_STUDY_MESSAGE =
   'Para test de alergia a medicamentos, primero se realiza la consulta con el médico; según el medicamento se define el protocolo.';
 
-const SEDE_ADDRESS_DETAILS_BY_ENV_KEY = {
-  CALENDLY_CORRIENTES:
-    'Clínica del Pilar: San Martín 555. Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
-  CALENDLY_RESISTENCIA:
-    'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678. Martes 9:30 a 12:00.',
-};
-
 const SEDE_LOCATION_ONLY_BY_ENV_KEY = {
   CALENDLY_CORRIENTES: 'Clínica del Pilar: San Martín 555.',
   CALENDLY_RESISTENCIA: 'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678.',
 };
 
-const SEDE_SCHEDULE_ONLY_BY_ENV_KEY = {
-  CALENDLY_CORRIENTES: 'Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
+const SEDE_CLINIC_HOURS_BY_ENV_KEY = {
+  CALENDLY_CORRIENTES:
+    'Lunes, jueves y viernes 9:45 a 11:00 hs y 17:00 a 20:00 hs. Martes 17:00 a 20:00 hs.',
   CALENDLY_RESISTENCIA: 'Martes 9:30 a 12:00.',
 };
 
@@ -1769,6 +1763,7 @@ function stateHasRecentBookingConversationContext(priorState) {
     normalized.includes('link para reservar') ||
     normalized.includes('link para ver horarios') ||
     normalized.includes('sacar turno') ||
+    normalized.includes('el dr. atiende') ||
     normalized.includes('horarios de')
   );
 }
@@ -1807,13 +1802,16 @@ function messageLooksLikePreferredDayForBooking(rawText) {
   return hasPreferenceSignal || wordCount <= 4;
 }
 
+function getSedeClinicHours(entry) {
+  if (!entry || typeof entry !== 'object' || !entry.envKey) return null;
+  return SEDE_CLINIC_HOURS_BY_ENV_KEY[entry.envKey] || null;
+}
+
 function buildPreferredDayBookingReply(sede, weekdayName) {
-  const schedule = SEDE_SCHEDULE_ONLY_BY_ENV_KEY[sede.envKey] || '';
-  const scheduleNormalized = normalizeForMatch(schedule);
-  if (weekdayName && scheduleNormalized.includes(weekdayName)) {
-    return `Perfecto. En ${sede.displayName} hay atención los ${weekdayName}s (${schedule}). Si querés, te paso el link para reservar ese día. ¿Te lo mando?`;
+  if (weekdayName) {
+    return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, en el link ves los días y horarios disponibles del Dr. Por acá no agendamos. ¿Te lo mando?`;
   }
-  return `Perfecto. En ${sede.displayName} podés elegir día y horario desde el link de agenda. ¿Te lo mando?`;
+  return buildScheduleQuestionLinkMessage(sede);
 }
 
 function buildPreservedIntentSessionPatch(priorState) {
@@ -3154,16 +3152,148 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   return true;
 }
 
+async function tryResolveScheduleQuestionWithOpenAi(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+    'Tarea: decidir si el paciente pregunta en qué DÍAS u HORARIOS atiende el DR. (agenda del médico).',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "qué días atiende", "horarios del doctor", "cuándo consulta", "hay turno mañana" (disponibilidad general).',
+    'NO ejemplos: solo dirección/ubicación sin preguntar días del Dr., precio, obra social, elegir un día concreto ("martes por favor" = preferencia de turno, no esta pregunta).',
+    'NO: horarios de recepción de la clínica si solo preguntan dónde queda.',
+    'Si el contexto muestra que ya hablaron de turno y ahora preguntan días del Dr., respondé YES.',
+  ].join('\n');
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : '',
+    profileDisplayName: options.profileDisplayName,
+  });
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    if (normalized.startsWith('YES')) return true;
+    if (normalized.startsWith('NO')) return false;
+    return null;
+  } catch (error) {
+    console.error('OpenAI schedule question classifier failed', error);
+    return null;
+  }
+}
+
+async function sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName) {
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  if (!lastSede) {
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(
+        mergedState,
+        {
+          state: 'awaiting_schedule_sede',
+          awaitingScheduleSedeAtMs: Date.now(),
+        },
+        buildPendingBookingIntentStatePatch()
+      )
+    );
+    await sendAskSedeTwoStep(
+      from,
+      profileDisplayName,
+      { ...mergedState, ...buildPendingBookingIntentStatePatch() },
+      '¿Para qué sede querés ver los horarios del Dr.?'
+    );
+    return true;
+  }
+  const asksLocationToo =
+    messageAsksForMapsLocation(bodyText) || messageAsksAboutSedeAddressOrHowToArrive(bodyText);
+  const replyParts = [];
+  if (asksLocationToo) {
+    replyParts.push(buildSedeMapsLocationReply(mergedState, lastSede));
+    const clinicHours = buildSedeClinicHoursReply(lastSede);
+    if (clinicHours) replyParts.push(clinicHours);
+  }
+  replyParts.push(buildScheduleQuestionLinkMessage(lastSede));
+  const reply = replyParts.join('\n\n');
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      mergedState,
+      buildAwaitingLinkConfirmationState(lastSede, 'after_schedule_question'),
+      {
+        ...(wrapped.nextStatePatch || {}),
+        ...(buildLastSedeStatePatch(lastSede) || {}),
+        ...buildLastScheduleDiscussedStatePatch(),
+        ...buildPendingBookingIntentStatePatch(),
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      }
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
+async function tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName) {
+  const ruleMatch = messageLooksLikeScheduleAvailabilityQuestion(bodyText);
+  if (!getOpenAiApiKey()) {
+    if (!ruleMatch) return false;
+    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+  const openAiDecision = await tryResolveScheduleQuestionWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  if (openAiDecision === false) return false;
+  if (openAiDecision === true) {
+    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+  if (ruleMatch) {
+    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+  return false;
+}
+
 async function tryResolvePreferredDayBookingWithOpenAi(userMessage, options = {}) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
   const modelName = getOpenAiModelName();
   const systemPrompt = [
     'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
-    'Tarea: decidir si el paciente elige un DÍA para turno (ej. "martes por favor", "el jueves", "prefiero lunes").',
+    'Tarea: decidir si el paciente elige o prefiere un DÍA DE LA SEMANA para sacar turno con el Dr.',
     'Respondé solo: YES o NO.',
-    'YES: menciona día de la semana como preferencia de turno.',
-    'NO: pregunta horarios sin elegir día, precio, obra social, saludo, o sede sola.',
+    'YES ejemplos: "martes", "martes por favor", "el jueves", "prefiero lunes", "para el viernes", "ese día" tras hablar de agenda.',
+    'Usá el contexto: si el asistente ofreció link/horarios del Dr. y el paciente responde con un día, es YES.',
+    'NO ejemplos: pregunta general de horarios ("qué días atiende"), precio, obra social, solo sede ("corrientes"), saludo.',
+    'NO: si no hay contexto de turno/agenda y el mensaje no indica preferencia de día para reservar.',
   ].join('\n');
   const userContent = buildOpenAiClassifierUserContent(userMessage, {
     conversationContext:
@@ -3206,19 +3336,29 @@ async function tryResolvePreferredDayBookingWithOpenAi(userMessage, options = {}
 }
 
 async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName) {
-  if (!stateHasRecentScheduleDiscussionContext(priorState) && !stateHasRecentBookingConversationContext(priorState)) {
-    return false;
+  const hasConversationContext =
+    stateHasRecentScheduleDiscussionContext(priorState) ||
+    stateHasRecentBookingConversationContext(priorState) ||
+    stateHasPendingBookingIntent(priorState) ||
+    stateLooksLikeAwaitingLinkConfirmation(priorState) ||
+    Boolean(resolveLastSedeEntryFromState(priorState));
+  if (!hasConversationContext) return false;
+  if (getOpenAiApiKey()) {
+    const openAiDecision = await tryResolvePreferredDayBookingWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+    });
+    if (openAiDecision === true) return true;
+    if (openAiDecision === false) return false;
   }
-  if (messageLooksLikePreferredDayForBooking(bodyText)) return true;
-  const openAiDecision = await tryResolvePreferredDayBookingWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-  });
-  return openAiDecision === true;
+  const weekdayName = extractWeekdayNameFromText(bodyText);
+  if (!weekdayName) return false;
+  return messageLooksLikePreferredDayForBooking(bodyText);
 }
 
-async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName) {
-  if (!(await shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName))) {
+async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName, options = {}) {
+  const forceFromRouter = Boolean(options && options.forceFromRouter);
+  if (!forceFromRouter && !(await shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName))) {
     return false;
   }
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
@@ -3307,6 +3447,8 @@ const MULTI_INTENT_ROUTER_TOKENS = [
   'PRIVATE_PRICE',
   'STUDY_PRICE',
   'BOOKING',
+  'SCHEDULE',
+  'PREFERRED_DAY',
   'STUDIES',
   'CONDITION',
   'ADDRESS',
@@ -3346,6 +3488,8 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If context shows pending consultation price and user answers with city or repeats cost question: PRIVATE_PRICE.',
     '- If asking study/test price (espirometría, prick), obra social plus for a study, or a short follow-up after the assistant offered study value ("si", "dame el precio", "decime el valor"): STUDY_PRICE.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
+    '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
+    '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves"): PREFERRED_DAY. Not SCHEDULE.',
     '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
     '- If the assistant last asked "te cuente el valor o preferís agendar" about a study and the user affirms or asks price: STUDY_PRICE, not PRIVATE_PRICE.',
     '- If the user explicitly asks consultation/particular price even with study context: PRIVATE_PRICE.',
@@ -3359,6 +3503,10 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     conversationContext:
       options.conversationContext ||
       (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : '',
     profileDisplayName: options.profileDisplayName,
   });
 
@@ -3372,7 +3520,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
       body: JSON.stringify({
         model: modelName,
         temperature: 0,
-        max_tokens: 8,
+        max_tokens: 12,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
@@ -3465,7 +3613,20 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     return true;
   }
 
+  if (primaryIntent === 'SCHEDULE') {
+    return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+
+  if (primaryIntent === 'PREFERRED_DAY') {
+    return tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName, {
+      forceFromRouter: true,
+    });
+  }
+
   if (primaryIntent === 'BOOKING') {
+    if (await shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName)) {
+      return tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName);
+    }
     const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
     const mergedState = mergeConversationStatePreservingGreeting(
       priorState,
@@ -3790,7 +3951,7 @@ function buildIntentRoutingOpenAiContext(priorState) {
   }
   if (stateHasRecentScheduleDiscussionContext(priorState)) {
     contextLines.push(
-      'Hace poco se hablaron de días/horarios de atención; si el paciente dice un día (ej. martes), quiere reservar ese día en la sede ya informada, NO volver a pedir ciudad.'
+      'Hace poco se hablaron de horarios del Dr.; si el paciente dice un día (ej. martes), quiere turno ese día: ofrecer link de agenda, NO listar horarios ni agendar por chat, NO volver a pedir ciudad.'
     );
   }
   if (stateHasPendingBookingIntent(priorState)) {
@@ -3853,6 +4014,15 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
   if (hasStudyContext && (hasBookingSignal || hasStudySignal)) return true;
   if (messageLooksLikeMultiIntentCandidate(rawText)) return true;
   if (hasStudySignal && messageAsksAboutStudyPreparation(rawText, priorState)) return true;
+  if (messageLooksLikeScheduleAvailabilityQuestion(rawText)) return true;
+  if (
+    stateHasRecentScheduleDiscussionContext(priorState) ||
+    stateHasRecentBookingConversationContext(priorState) ||
+    stateHasPendingBookingIntent(priorState)
+  ) {
+    return true;
+  }
+  if (extractWeekdayNameFromText(rawText) && resolveLastSedeEntryFromState(priorState)) return true;
   return false;
 }
 
@@ -3977,8 +4147,13 @@ function messageAsksHowBookingWorks(rawText) {
 
 function buildSedeScheduleReply(entry) {
   if (!entry) return null;
-  const schedule = SEDE_SCHEDULE_ONLY_BY_ENV_KEY[entry.envKey] || null;
-  return schedule ? `Horarios de ${entry.displayName}: ${schedule}` : `Sede ${entry.displayName}.`;
+  return buildScheduleQuestionLinkMessage(entry);
+}
+
+function buildSedeClinicHoursReply(entry) {
+  if (!entry) return null;
+  const clinicHours = getSedeClinicHours(entry);
+  return clinicHours ? `Horarios de la clínica: ${clinicHours}` : null;
 }
 
 function messageLooksLikeBookingIntent(rawText) {
@@ -4214,10 +4389,13 @@ function buildSedeAddressReply(priorState, explicitSedeEntry) {
     return `Decime tu ciudad y te paso la dirección. ${buildAskSedeBridgeMessage()} ${buildAskSedeMessage()}`.trim();
   }
   const details = SEDE_LOCATION_ONLY_BY_ENV_KEY[selectedSede.envKey] || null;
+  const clinicHours = buildSedeClinicHoursReply(selectedSede);
+  const addressParts = [details || `Sede ${selectedSede.displayName}.`];
+  if (clinicHours) addressParts.push(clinicHours);
   if (selectedSede.envKey === 'CALENDLY_CORRIENTES') {
-    return [details || `Sede ${selectedSede.displayName}.`, CORRIENTES_HOW_TO_ARRIVE_MESSAGE].join(' ');
+    addressParts.push(CORRIENTES_HOW_TO_ARRIVE_MESSAGE);
   }
-  return details || `Sede ${selectedSede.displayName}.`;
+  return addressParts.join(' ');
 }
 
 function messageAsksAboutStudyFasting(rawText) {
@@ -5062,8 +5240,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
 function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
-    // Micro-compromiso first; the link is sent only after confirmation.
-    return `Si querés, te paso el link para ver días y horarios en ${entry.displayName}. ¿Te lo mando?`;
+    return `En ${entry.displayName} los días y horarios en que atiende el Dr. se ven en la agenda online; por acá no agendamos. ¿Te paso el link?`;
   }
   return buildLinkMessage(entry);
 }
@@ -6399,6 +6576,9 @@ exports.handler = async (event) => {
           if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (shouldRouteToStudyPrice(bodyText, priorState)) {
             await sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
             continue;
@@ -6863,15 +7043,20 @@ exports.handler = async (event) => {
           if (priorState && priorState.state === 'awaiting_schedule_sede') {
             const sedeFromMessage = findSedeFromText(bodyText);
             if (sedeFromMessage) {
-              await clearConversationState(from);
-              const reply = buildSedeScheduleReply(sedeFromMessage);
+              const reply = buildScheduleQuestionLinkMessage(sedeFromMessage);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
               await setConversationState(
                 from,
                 mergeConversationStatePreservingGreeting(
                   priorState,
-                  priorState || {},
-                  { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sedeFromMessage) || {}) }
+                  buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_schedule_question'),
+                  {
+                    ...(wrapped.nextStatePatch || {}),
+                    ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
+                    ...buildLastScheduleDiscussedStatePatch(),
+                    ...buildPendingBookingIntentStatePatch(),
+                    ...buildLastBotReplyStatePatch(wrapped.messageText),
+                  }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
@@ -6879,67 +7064,6 @@ exports.handler = async (event) => {
             }
           }
 
-          if (messageLooksLikeScheduleAvailabilityQuestion(bodyText)) {
-            const sedeFromMessage = findSedeFromText(bodyText);
-            const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(priorState);
-            if (lastSede) {
-              const schedule = buildSedeScheduleReply(lastSede);
-              const asksLocationToo =
-                messageAsksForMapsLocation(bodyText) || messageAsksAboutSedeAddressOrHowToArrive(bodyText);
-              if (asksLocationToo) {
-                const location = buildSedeMapsLocationReply(priorState, lastSede);
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                  `${location}\n\n${schedule}`,
-                  profileDisplayName,
-                  priorState
-                );
-                const baseSession = preserveSessionStateWithoutTransientRouting(priorState);
-                await setConversationState(from, {
-                  ...baseSession,
-                  ...(buildLastSedeStatePatch(lastSede) || {}),
-                  ...(wrapped.nextStatePatch || {}),
-                  lastSeenAtMs: Date.now(),
-                  lastBotReplyAtMs: Date.now(),
-                });
-                await sendWhatsAppText(from, wrapped.messageText);
-                continue;
-              }
-              const canOfferLink = shouldOfferBookingLink(priorState);
-              const reply = canOfferLink
-                ? `${schedule} Si querés, también puedo pasarte el link para reservar.`
-                : schedule;
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-              const baseSession = preserveSessionStateWithoutTransientRouting(priorState);
-              await setConversationState(from, {
-                ...baseSession,
-                ...(canOfferLink ? buildAwaitingLinkConfirmationState(lastSede, 'after_schedule_question') : {}),
-                ...(buildLastSedeStatePatch(lastSede) || {}),
-                ...(wrapped.nextStatePatch || {}),
-                ...buildLastScheduleDiscussedStatePatch(),
-                ...buildPendingBookingIntentStatePatch(),
-                ...buildLastBotReplyStatePatch(wrapped.messageText),
-                lastSeenAtMs: Date.now(),
-                lastBotReplyAtMs: Date.now(),
-              });
-              await sendWhatsAppText(from, wrapped.messageText);
-              continue;
-            }
-            await setConversationState(
-              from,
-              mergeConversationStatePreservingGreeting(
-                priorState,
-                priorState || {},
-                buildPendingBookingIntentStatePatch()
-              )
-            );
-            await sendAskSedeTwoStep(
-              from,
-              profileDisplayName,
-              { ...(priorState || {}), ...buildPendingBookingIntentStatePatch() },
-              '¿Para qué sede querés los horarios?'
-            );
-            continue;
-          }
 
           if (messageLooksLikeMultiIntentCandidate(bodyText)) {
             const intents = (await decideIntentsWithOpenAi(bodyText)) || [];
@@ -7909,7 +8033,13 @@ exports.handler = async (event) => {
                 mergeConversationStatePreservingGreeting(
                   priorState,
                   priorState || {},
-                  { ...(wrapped.nextStatePatch || {}), ...(lastSedePatch || {}) }
+                  {
+                    ...(wrapped.nextStatePatch || {}),
+                    ...(lastSedePatch || {}),
+                    ...buildLastScheduleDiscussedStatePatch(),
+                    ...buildPendingBookingIntentStatePatch(),
+                    ...buildLastBotReplyStatePatch(wrapped.messageText),
+                  }
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
