@@ -3911,6 +3911,12 @@ async function tryHandlePatientDissatisfactionWithOpenAi(
   profileDisplayName,
   options = {}
 ) {
+  if (
+    priorStateLooksLikeRecentBookingLinkContext(priorState) &&
+    messageLooksLikeBookingLinkTrouble(bodyText)
+  ) {
+    return false;
+  }
   const isDissatisfaction = await tryResolvePatientDissatisfactionWithOpenAi(bodyText, {
     priorState,
     profileDisplayName,
@@ -4034,6 +4040,230 @@ async function tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, p
   if (!lastSede) return false;
 
   return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede);
+}
+
+function priorStateLooksLikeRecentBookingLinkContext(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (wasBookingLinkSentRecently(priorState)) return true;
+  if (typeof priorState.lastBookingLinkUrl === 'string' && priorState.lastBookingLinkUrl.trim().length > 0) {
+    return true;
+  }
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (!lastBotReplyText) return false;
+  return (
+    lastBotReplyText.includes('calendar.app.google') ||
+    lastBotReplyText.includes('calendly.com') ||
+    lastBotReplyText.includes('link para elegir') ||
+    lastBotReplyText.includes('link para ver horarios')
+  );
+}
+
+function resolveBookingLinkUrlFromPriorState(priorState) {
+  if (priorState && typeof priorState.lastBookingLinkUrl === 'string') {
+    const urlFromState = priorState.lastBookingLinkUrl.trim();
+    if (urlFromState.length > 0) return urlFromState;
+  }
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  return lastSede ? getAgendaUrl(lastSede) : null;
+}
+
+async function tryResolveBookingLinkTroubleWithOpenAi(userMessage, options = {}) {
+  const priorState = options.priorState;
+  const hasLinkContext = priorStateLooksLikeRecentBookingLinkContext(priorState);
+  const rulesMatch = messageLooksLikeBookingLinkTrouble(userMessage);
+  if (!hasLinkContext) return false;
+  if (options.rulesOnly) return rulesMatch;
+  if (rulesMatch) return true;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return false;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+    'Contexto: el asistente ya envió el link de agenda para sacar turno.',
+    'Tarea: decidir si el paciente reporta PROBLEMA TÉCNICO o dificultad para usar el link (no abre, no funciona, no carga, error, no puede reservar en la web).',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "no me abre", "no funciona", "no anda", "no carga", "error en el link", "no pude agendar en el link", "no me deja entrar", "la página queda en blanco".',
+    'NO ejemplos: pedir otro link sin queja ("pasame el link"), preguntar precio, "no hay turnos" sin problema técnico, enojo por precio ("muy caro").',
+    'Si dice que no hay disponibilidad pero NO hay fallo técnico del link, respondé NO (eso es otro flujo).',
+  ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (priorState ? buildIntentRoutingOpenAiContext(priorState) : ''),
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (priorState && typeof priorState.lastBotReplyText === 'string'
+        ? priorState.lastBotReplyText
+        : ''),
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content;
+      const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+      if (normalized.startsWith('YES')) return true;
+      if (normalized.startsWith('NO')) return false;
+    }
+  } catch (error) {
+    console.error('OpenAI booking link trouble classifier failed', error);
+  }
+
+  return false;
+}
+
+async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+
+  const modelName = getOpenAiModelName();
+  const linkUrl = options.linkUrl || resolveBookingLinkUrlFromPriorState(options.priorState);
+  const isFollowUp = Boolean(options.isFollowUp);
+  const basePrompt = loadAgenteLiberSystemPrompt();
+  const systemPrompt = [
+    typeof basePrompt === 'string' && basePrompt.trim().length > 0
+      ? basePrompt.trim()
+      : FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT,
+    '',
+    isFollowUp
+      ? 'Situación: el paciente sigue con problemas para usar el link de agenda después de un primer consejo.'
+      : 'Situación: el paciente dice que el link de agenda no funciona, no abre o no puede reservar.',
+    'Reglas:',
+    '- Empatía breve (máximo 2 oraciones).',
+    isFollowUp
+      ? '- Ofrecé derivación a alguien del equipo que lo ayude (NO des diagnósticos ni montos).'
+      : '- Sugerí probar otro navegador o abrir desde computadora si está en el celular.',
+    '- NO repitas el micro-compromiso "¿Te lo mando?".',
+    '- NO inventes horarios ni confirmes turnos por chat.',
+    linkUrl && !isFollowUp
+      ? `- Podés repetir el link al final si ayuda: ${linkUrl}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const priorState = options.priorState;
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    profileDisplayName: options.profileDisplayName,
+    conversationContext: priorState ? buildIntentRoutingOpenAiContext(priorState) : '',
+    lastAssistantMessage:
+      priorState && typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '',
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: OPENAI_CHAT_TEMPERATURE,
+        max_tokens: OPENAI_MAX_OUTPUT_TOKENS,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    if (typeof text !== 'string' || text.trim().length === 0) return null;
+    return text.trim();
+  } catch (error) {
+    console.error('OpenAI booking link trouble reply failed', error);
+    return null;
+  }
+}
+
+async function tryHandleBookingLinkTroubleWithOpenAi(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName,
+  options = {}
+) {
+  const isLinkTrouble = await tryResolveBookingLinkTroubleWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+    rulesOnly: options.rulesOnly,
+  });
+  if (!isLinkTrouble) return false;
+
+  const nowMs = Date.now();
+  const isFollowUp =
+    stateLooksLikeAwaitingBookingLinkTroubleFollowup(priorState) &&
+    nowMs - Number(priorState.linkTroubleFirstAtMs) <= BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS;
+  const linkUrl = resolveBookingLinkUrlFromPriorState(priorState);
+
+  if (!isFollowUp) {
+    const openAiReply = await fetchOpenAiBookingLinkTroubleReply(bodyText, {
+      priorState,
+      profileDisplayName,
+      linkUrl,
+      isFollowUp: false,
+    });
+    const fallbackReply =
+      'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.';
+    let replyText = processAssistantReplyForPatient(openAiReply || fallbackReply);
+    if (linkUrl && !replyText.includes(linkUrl)) {
+      replyText = `${replyText}\n${linkUrl}`;
+    }
+    const nextState = mergeConversationStatePreservingGreeting(
+      priorState,
+      {
+        state: 'awaiting_booking_link_trouble_followup',
+        linkTroubleFirstAtMs: nowMs,
+      },
+      { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+    );
+    await setConversationState(from, nextState);
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+
+  const openAiFollowUpReply = await fetchOpenAiBookingLinkTroubleReply(bodyText, {
+    priorState,
+    profileDisplayName,
+    linkUrl,
+    isFollowUp: true,
+  });
+  const followUpText = processAssistantReplyForPatient(
+    openAiFollowUpReply || DERIVATIVE_HANDOFF_PATIENT_MESSAGE
+  );
+  const preservedSessionState = mergeConversationStatePreservingGreeting(
+    priorState,
+    buildClearedAwaitingLinkConfirmationStatePatch(),
+    { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+  );
+  await setConversationState(from, preservedSessionState);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(followUpText, profileDisplayName, preservedSessionState);
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
 }
 
 function mapOpenAiSedeTokenToEntry(token) {
@@ -4950,8 +5180,9 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If explicitly asking for the link now ("pasame link", "link para agendar", "mandame el link"): BOOKING and send link directly, never micro-commitment.',
     '- If asking YOU/the assistant to book FOR them ("agendame vos", "podés agendarme", won\'t use link): OTHER, NOT BOOKING.',
     '- If price objection, anger or frustration ("muy caro", "estoy enojado", "qué bronca") after a price/plus reply: OTHER, NOT STUDY_PRICE or HEALTH_INSURANCE.',
+    '- If link was sent and patient reports it does not work/open/load ("no funciona", "no anda", "no abre"): OTHER (link trouble), NOT BOOKING.',
     '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
-    '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves"): PREFERRED_DAY. Not SCHEDULE.',
+    '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves") or day+time ("lunes 16hs"): PREFERRED_DAY. Explain no chat booking; send link when sede known.',
     '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
     '- If the assistant last asked "te cuente el valor o preferís agendar" about a study and the user affirms or asks price: STUDY_PRICE, not PRIVATE_PRICE.',
     '- If the user explicitly asks consultation/particular price even with study context: PRIVATE_PRICE.',
@@ -5089,6 +5320,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'BOOKING') {
+    if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
     if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
@@ -6934,19 +7168,30 @@ function wasBookingLinkSentRecently(priorState) {
 
 function messageLooksLikeBookingLinkTrouble(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (messageLooksLikeBookingIntent(rawText) || messageAsksHowBookingWorks(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   const hasLinkTroubleSignal =
     normalized.includes('no me abre') ||
     normalized.includes('no abre') ||
     normalized.includes('no funciona') ||
+    normalized.includes('no me funciona') ||
     normalized.includes('no anda') ||
     normalized.includes('no puedo abrir') ||
     normalized.includes('no puedo entrar') ||
+    normalized.includes('no me deja') ||
     normalized.includes('no carga') ||
+    normalized.includes('no carga la pagina') ||
+    normalized.includes('no carga la página') ||
+    normalized.includes('pagina en blanco') ||
+    normalized.includes('página en blanco') ||
     normalized.includes('error en el link') ||
     normalized.includes('link caido') ||
-    normalized.includes('link caído');
+    normalized.includes('link caído') ||
+    normalized.includes('link roto') ||
+    normalized.includes('link muerto') ||
+    normalized.includes('link no sirve') ||
+    normalized.includes('problema con el link') ||
+    normalized.includes('problema con la pagina') ||
+    normalized.includes('problema con la página');
   if (hasLinkTroubleSignal) return true;
   const hasAvailabilityComplaint =
     normalized.includes('no hay turnos') ||
@@ -6955,6 +7200,7 @@ function messageLooksLikeBookingLinkTrouble(rawText) {
     normalized.includes('no hay disponibilidad') ||
     normalized.includes('no aparecen turnos') ||
     normalized.includes('no aparece disponibilidad');
+  if (hasAvailabilityComplaint && !hasLinkTroubleSignal) return false;
   if (hasAvailabilityComplaint) return true;
   const hasBookingFailure =
     normalized.includes('no pude agendar') ||
@@ -6963,8 +7209,17 @@ function messageLooksLikeBookingLinkTrouble(rawText) {
     normalized.includes('no me dejo reservar') ||
     normalized.includes('no me dejó reservar');
   if (!hasBookingFailure) return false;
+  if (hasLinkTroubleSignal) return true;
+  if (
+    normalized.includes('link') ||
+    normalized.includes('pagina') ||
+    normalized.includes('página') ||
+    normalized.includes('agenda online') ||
+    normalized.includes('en la web')
+  ) {
+    return true;
+  }
   return (
-    hasLinkTroubleSignal ||
     normalized.includes('que hago') ||
     normalized.includes('qué hago') ||
     normalized.includes('no se que hacer') ||
@@ -8235,6 +8490,9 @@ exports.handler = async (event) => {
           if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -8515,43 +8773,7 @@ exports.handler = async (event) => {
             continue;
           }
 
-          if (messageLooksLikeBookingLinkTrouble(bodyText)) {
-            const nowMs = Date.now();
-            const isFollowup =
-              stateLooksLikeAwaitingBookingLinkTroubleFollowup(priorState) &&
-              nowMs - Number(priorState.linkTroubleFirstAtMs) <= BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS;
-
-            if (!isFollowup) {
-              const nextState = mergeConversationStatePreservingGreeting(
-                priorState,
-                {
-                  state: 'awaiting_booking_link_trouble_followup',
-                  linkTroubleFirstAtMs: nowMs,
-                },
-                { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
-              );
-              await setConversationState(from, nextState);
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.',
-                profileDisplayName,
-                priorState
-              );
-              await sendWhatsAppText(from, wrapped.messageText);
-              continue;
-            }
-
-            const preservedSessionState = mergeConversationStatePreservingGreeting(
-              priorState,
-              {},
-              { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
-            );
-            await setConversationState(from, preservedSessionState);
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
-              profileDisplayName,
-              preservedSessionState
-            );
-            await sendWhatsAppText(from, wrapped.messageText);
+          if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName, { rulesOnly: true })) {
             continue;
           }
 

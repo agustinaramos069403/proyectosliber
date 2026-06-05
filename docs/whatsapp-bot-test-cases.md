@@ -3,7 +3,7 @@
 ## IA central (OpenAI)
 - Requiere `OPENAI_API_KEY` en Netlify; con `OPENAI_AI_FIRST_ROUTING=true` (default) casi todo mensaje pasa por el router IA antes de reglas.
 - Router principal: `decidePrimaryIntentWithOpenAi` → ADDRESS, HEALTH_INSURANCE, CONSULTATION_PRICE, BOOKING, SCHEDULE, etc.
-- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, autoagendado asistido (“agendame vos”), disconformidad/enojo (“muy caro”), respuestas abrumadoras.
+- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, autoagendado asistido (“agendame vos”), disconformidad/enojo (“muy caro”), problema con link (“no funciona”, “no anda”), respuestas abrumadoras.
 - Excepciones sin router: emergencia, saludo puro, despedida, respuesta de sede en ventana de selección, confirmación de link (`awaiting_link_confirmation`).
 
 ## Sedes (selección, typos, claridad)
@@ -95,10 +95,12 @@
   - Turno con día y hora (“martes 17hs”): explicar que por acá no se confirman horarios puntuales + link
 
 ## Link — problemas técnicos / disponibilidad / lista de espera
-- Problema técnico con el link:
-  - “no me abre”, “no funciona”, “no carga”, “error en el link”
-  - Flujo: tip simple (“Probá abrirlo desde otro navegador o desde la computadora…”), si insiste → derivación.
-- Sin turnos disponibles:
+- Problema técnico con el link (IA + contexto de link enviado):
+  - “no me abre”, “no funciona”, “no anda”, “no carga”, “error en el link”, “no me deja entrar”
+  - Tras enviar link → NO repetir “¿Te lo mando?” ni mandar otro flujo de booking
+  - 1er mensaje: IA empatía + tip (otro navegador / computadora) + repetir link si ayuda
+  - Si insiste → derivación al equipo (IA o handoff)
+- Sin turnos disponibles (NO confundir con fallo técnico):
   - “no hay turnos”, “sin turnos”, “no hay horarios disponibles”
   - Corrientes/Resistencia:
     - “la agenda se llena rápido…”
