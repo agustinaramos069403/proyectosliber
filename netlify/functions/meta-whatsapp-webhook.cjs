@@ -226,6 +226,9 @@ const STUDY_FASTING_MESSAGE = 'No, no hace falta ir en ayunas.';
 const STUDY_PREPARATION_MEDICATION_MESSAGE =
   'Para test de alergia: suspender antialérgicos 48 hs antes y corticoides 1 semana antes. Para espirometría: no aplicar aerosoles ese día.';
 
+const SPIROMETRY_PREPARATION_MESSAGE =
+  'Para la espirometría: no hace falta ir en ayunas y ese día no apliques aerosoles (inhaladores de rescate). Traé DNI y, si tenés obra social, credencial y orden si te la dieron.';
+
 const STUDY_DURATION_MESSAGE = 'Depende del caso.';
 
 const MEDICATION_ALLERGY_STUDY_MESSAGE =
@@ -2847,6 +2850,101 @@ function messageAsksAboutStudyFasting(rawText) {
   return normalized.includes('ayunas') || normalized.includes('ayuno');
 }
 
+function messageAsksAboutStudyPreparation(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return messageLooksLikeStudyPreparationQuestion(rawText);
+}
+
+function messageLooksLikeStudyPreparationQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsStudyContext =
+    messageMentionsSpirometryStudy(rawText) ||
+    normalized.includes('estudio') ||
+    normalized.includes('prick') ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('parche') ||
+    normalized.includes('patch');
+  const asksPreparation =
+    normalized.includes('preparacion') ||
+    normalized.includes('preparación') ||
+    normalized.includes('algo especial') ||
+    normalized.includes('que tengo que hacer antes') ||
+    normalized.includes('qué tengo que hacer antes') ||
+    normalized.includes('que debo hacer antes') ||
+    normalized.includes('qué debo hacer antes') ||
+    normalized.includes('antes del estudio') ||
+    normalized.includes('antes de hacerme') ||
+    normalized.includes('antes de hacer') ||
+    normalized.includes('antes de la espirometr') ||
+    normalized.includes('tengo que ir en ayunas') ||
+    messageAsksAboutStudyFasting(rawText) ||
+    messageAsksAboutStudyMedicationPreparation(rawText) ||
+    (normalized.includes('llevar') && normalized.includes('algo especial')) ||
+    (normalized.includes('traer') && normalized.includes('algo especial')) ||
+    (normalized.includes('llevar') &&
+      (normalized.includes('hacerme el estudio') ||
+        normalized.includes('hacer el estudio') ||
+        normalized.includes('hacerme la espirometr') ||
+        normalized.includes('realizarme el estudio') ||
+        normalized.includes('realizarme la espirometr'))) ||
+    (normalized.includes('necesito') &&
+      normalized.includes('llevar') &&
+      (normalized.includes('hacerme') || normalized.includes('realizarme')));
+  if (!asksPreparation) return false;
+  if (mentionsStudyContext || messageMentionsSpirometryStudy(rawText)) return true;
+  if (
+    messageAsksAboutStudyFasting(rawText) ||
+    messageAsksAboutStudyMedicationPreparation(rawText) ||
+    messageAsksAboutStudyDuration(rawText)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildStudyPreparationOpenAiContext(priorState, rawText) {
+  const contextLines = [];
+  const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+  if (sedeFromState) {
+    contextLines.push(`Sede confirmada en conversación: ${sedeFromState.displayName}.`);
+  }
+  const studyTypeFromMessage = getStudyTypeFromText(rawText);
+  const studyTypeFromState =
+    priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string'
+      ? priorState.lastStudyType.trim()
+      : '';
+  const studyType = studyTypeFromMessage || studyTypeFromState;
+  if (studyType) {
+    contextLines.push(`Estudio mencionado o en contexto: ${studyType}.`);
+  }
+  return contextLines.join('\n');
+}
+
+function buildStudyPreparationReply(priorState, rawText) {
+  if (messageMentionsSpirometryStudy(rawText)) {
+    const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+    if (sedeFromState) {
+      return `${SPIROMETRY_PREPARATION_MESSAGE} Te esperamos en ${sedeFromState.displayName}.`;
+    }
+    return SPIROMETRY_PREPARATION_MESSAGE;
+  }
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('prick') || normalized.includes('test de alerg')) {
+    return appendSedeContextIfKnown(
+      'Para test de alergia: suspender antialérgicos 48 hs antes y corticoides 1 semana antes. No hace falta ir en ayunas.',
+      priorState
+    );
+  }
+  if (messageAsksAboutStudyFasting(rawText)) {
+    return STUDY_FASTING_MESSAGE;
+  }
+  if (messageAsksAboutStudyMedicationPreparation(rawText)) {
+    return STUDY_PREPARATION_MEDICATION_MESSAGE;
+  }
+  return STUDY_PREPARATION_MEDICATION_MESSAGE;
+}
+
 function messageAsksAboutStudyMedicationPreparation(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -3142,6 +3240,7 @@ function messageAsksWhatStudiesDoctorDoes(rawText) {
 
 function messageAsksWhatStudiesToBring(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeStudyPreparationQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (
     normalized.includes('que estudios hace') ||
@@ -3314,6 +3413,7 @@ function messageMentionsChildPatientContext(rawText) {
 
 function messageMatchesStudiesPatientOnlyFaq(rawText) {
   return (
+    messageAsksAboutStudyPreparation(rawText) ||
     messageAsksWhatStudiesToBring(rawText) ||
     messageSaysHasNoPriorStudies(rawText) ||
     messageAsksWhatStudiesWillBeRequested(rawText) ||
@@ -3381,6 +3481,17 @@ function resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) {
 
 async function buildStudiesInformationReply(priorState, rawText = '', options = {}) {
   const normalized = normalizeForMatch(rawText);
+  if (messageAsksAboutStudyPreparation(rawText)) {
+    const openAiPreparationReply = await fetchOpenAiStudyPreparationReply(rawText, {
+      profileDisplayName:
+        options && typeof options.profileDisplayName === 'string' ? options.profileDisplayName : '',
+      priorState,
+    });
+    if (openAiPreparationReply) {
+      return processAssistantReplyForPatient(openAiPreparationReply);
+    }
+    return buildStudyPreparationReply(priorState, rawText);
+  }
   if (messageAsksAboutDigitalStudyResults(rawText)) {
     return STUDIES_DIGITAL_RESULTS_MESSAGE;
   }
@@ -3970,6 +4081,63 @@ function getOpenAiModelName() {
 function getOpenAiApiKey() {
   const raw = process.env.OPENAI_API_KEY;
   return typeof raw === 'string' ? raw.trim() : '';
+}
+
+/**
+ * Study preparation FAQ via OpenAI when the study type is ambiguous (typos, vague wording).
+ * Returns null if OpenAI is not configured or the request fails.
+ */
+async function fetchOpenAiStudyPreparationReply(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+  const modelName = getOpenAiModelName();
+  const priorState = options && typeof options.priorState === 'object' ? options.priorState : null;
+  const preparationContext = buildStudyPreparationOpenAiContext(priorState, userMessage);
+  const systemPrompt = [
+    'Sos la asistente del consultorio del Dr. Liber Acosta (alergista).',
+    'El paciente pregunta qué preparación necesita ANTES de un estudio (no qué documentos ni estudios previos traer).',
+    'Respondé en español argentino, texto plano, máximo 2 oraciones, sin markdown ni asteriscos.',
+    'Solo usá estos datos confirmados:',
+    '- Espirometría: no ayunas; no aerosoles/inhaladores de rescate ese día; DNI y credencial/orden si tiene obra social.',
+    '- Test de alergia (prick): no ayunas; suspender antialérgicos 48 hs y corticoides 1 semana antes.',
+    '- Test del parche: depende del protocolo; no inventes detalles.',
+    'Si hay sede en contexto, podés mencionarla al cerrar.',
+    'Si no queda claro el estudio, preguntá brevemente si es espirometría o test de alergia.',
+    'No des diagnósticos ni inventes otra preparación.',
+  ].join('\n');
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    profileDisplayName: options.profileDisplayName,
+    conversationContext: preparationContext,
+  });
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0.3,
+        max_tokens: 160,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI study preparation error', response.status, errorText.slice(0, 300));
+      return null;
+    }
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    return typeof text === 'string' && text.trim().length > 0 ? text.trim() : null;
+  } catch (error) {
+    console.error('OpenAI study preparation request failed', error);
+    return null;
+  }
 }
 
 /**
@@ -5457,6 +5625,7 @@ exports.handler = async (event) => {
               Date.now() - Number(priorState.awaitingStudyTypeForPriceAtMs) <= STUDY_TYPE_FOR_PRICE_WINDOW_MS;
             const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
               forcePriceFlow: isAwaitingStudyTypeForPrice && Boolean(detectedStudyType),
+              profileDisplayName,
             });
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
               studiesReply,
@@ -5515,9 +5684,10 @@ exports.handler = async (event) => {
             messageAsksAboutVirtualVisit(bodyText) ||
             messageAsksForMapsLocation(bodyText) ||
             messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
-            messageAsksAboutStudyFasting(bodyText) ||
-            messageAsksAboutStudyMedicationPreparation(bodyText) ||
-            messageAsksAboutStudyDuration(bodyText) ||
+            (messageAsksAboutStudyFasting(bodyText) && !messageAsksAboutStudyPreparation(bodyText)) ||
+            (messageAsksAboutStudyMedicationPreparation(bodyText) &&
+              !messageAsksAboutStudyPreparation(bodyText)) ||
+            (messageAsksAboutStudyDuration(bodyText) && !messageAsksAboutStudyPreparation(bodyText)) ||
             messageAsksAboutMedicationAllergyStudy(bodyText)
           ) {
             let reply = null;

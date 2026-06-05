@@ -107,6 +107,9 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Precio de estudios:
   - “¿cuánto cuesta el prick test?” → “se confirma en consulta”
 - Preparación de estudios:
+  - “¿tengo que llevar algo especial para hacerme la espirometría?” → preparación (no ayunas, sin aerosoles ese día, DNI/credencial), NO confundir con “estudios previos a traer”
+  - Typos: “estirometria” en preguntas de preparación → misma respuesta de espirometría
+  - Preparación de estudios: siempre intenta OpenAI primero (con sede/estudio en contexto); si falla, respuesta fija de respaldo
   - Ayunas: “¿tengo que ir en ayunas?” → no
   - Medicación: antihistamínicos 48 hs, corticoides 1 semana; espirometría sin aerosoles ese día
   - “¿cuánto tarda el estudio?” → depende del caso
