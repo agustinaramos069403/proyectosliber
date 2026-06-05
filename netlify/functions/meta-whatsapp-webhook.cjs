@@ -1942,9 +1942,9 @@ function buildConsolidatedAskSedePrompt(prefaceText = null) {
     return `${preface} ${buildSedeNumberedOptionsSuffix()}`.trim();
   }
   if (preface) {
-    return `${preface} ${buildAskSedeBridgeMessage()} ${ACTIVE_SEDE_OPTIONS_MESSAGE}`.trim();
+    return `${preface} ${buildAskSedeBridgeMessage()} ${buildSedeNumberedOptionsSuffix()}`.trim();
   }
-  return `${buildAskSedeBridgeMessage()} ${ACTIVE_SEDE_OPTIONS_MESSAGE}`.trim();
+  return `${buildAskSedeBridgeMessage()} ${buildSedeNumberedOptionsSuffix()}`.trim();
 }
 
 function buildAskSedeForHealthInsuranceMismatchMessage(lastSedeDisplayName, healthInsuranceName) {
@@ -2696,21 +2696,15 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
 }
 
 async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName) {
-  const isAwaitingSedeSelection =
-    stateLooksLikeAwaitingSedeSelection(priorState) &&
-    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
-  const recentlyAskedSedeCity =
-    priorState &&
-    typeof priorState === 'object' &&
-    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
-    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  const recentlyAskedSedeSelection = conversationRecentlyAskedSedeSelection(priorState);
   const isSedeOnlyAnswer =
-    messageLooksLikeSedeOnlyAnswer(bodyText) && !stateConflictsWithSedeOnlyAnswer(priorState);
-  if (!isAwaitingSedeSelection && !recentlyAskedSedeCity && !isSedeOnlyAnswer) return false;
+    (messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText)) &&
+    !stateConflictsWithSedeOnlyAnswer(priorState);
+  if (!recentlyAskedSedeSelection && !isSedeOnlyAnswer) return false;
 
   const sede = await resolveSedeFromTextWithOpenAi(bodyText);
   if (!sede) {
-    if (isAwaitingSedeSelection || recentlyAskedSedeCity) {
+    if (recentlyAskedSedeSelection) {
       const wrapped = buildAutoReplyWithGreetingIfNeeded(
         `No entendí la ciudad. ${ACTIVE_SEDE_OPTIONS_MESSAGE}`,
         profileDisplayName,
@@ -5596,18 +5590,13 @@ function messageShouldSkipOpenAiCentralRouting(rawText, priorState) {
   if (textMatchesMedicalEmergency(rawText)) return true;
   if (messageLooksLikeFarewell(rawText)) return true;
   if (messageLooksLikeGreetingOnly(rawText)) return true;
-  if (messageLooksLikeShortConversationalFollowUp(rawText, priorState)) return false;
-  const isAwaitingSedeSelection =
-    stateLooksLikeAwaitingSedeSelection(priorState) &&
-    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
-  const recentlyAskedSedeCity =
-    priorState &&
-    typeof priorState === 'object' &&
-    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
-    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
-  if ((isAwaitingSedeSelection || recentlyAskedSedeCity) && messageLooksLikeSedeOnlyAnswer(rawText)) {
+  if (
+    conversationRecentlyAskedSedeSelection(priorState) &&
+    (messageLooksLikeSedeOnlyAnswer(rawText) || messageLooksLikeBareSedeOptionAnswer(rawText))
+  ) {
     return true;
   }
+  if (messageLooksLikeShortConversationalFollowUp(rawText, priorState)) return false;
   return false;
 }
 
@@ -6320,10 +6309,18 @@ function stripAgendaLinksFromReplyText(replyText) {
 
 function sanitizePatientReplyWhenSedeUnknown(replyText, priorState, bodyText) {
   if (!replyText || typeof replyText !== 'string') return replyText;
-  const confirmedSede = resolveConfirmedSedeEntryForBookingFlow(bodyText || '', priorState);
   const asksSede = assistantReplyAsksForSedeCity(replyText);
   const hasAgendaLink = replyTextContainsAgendaLink(replyText);
-  const awaitingSedeSelection = stateLooksLikeAwaitingSedeSelection(priorState);
+  const awaitingSedeSelection = conversationRecentlyAskedSedeSelection(priorState);
+  const userAnsweredSedeSelection =
+    messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText);
+  if (userAnsweredSedeSelection && (asksSede || hasAgendaLink)) {
+    return stripAgendaLinksFromReplyText(replyText);
+  }
+  if (hasAgendaLink && asksSede) {
+    return stripAgendaLinksFromReplyText(replyText);
+  }
+  const confirmedSede = resolveConfirmedSedeEntryForBookingFlow(bodyText || '', priorState);
   if (confirmedSede && !asksSede && !awaitingSedeSelection) return replyText;
   if (!hasAgendaLink && !asksSede && !awaitingSedeSelection) return replyText;
   if (asksSede || awaitingSedeSelection || !confirmedSede) {
@@ -6447,15 +6444,10 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
     const wordCount = normalizeForMatch(rawText).split(' ').filter(Boolean).length;
     if (wordCount <= 4) return false;
   }
-  const isAwaitingSedeSelection =
-    stateLooksLikeAwaitingSedeSelection(priorState) &&
-    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
-  const recentlyAskedSedeCity =
-    priorState &&
-    typeof priorState === 'object' &&
-    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
-    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
-  if ((isAwaitingSedeSelection || recentlyAskedSedeCity) && messageLooksLikeSedeOnlyAnswer(rawText)) {
+  if (
+    conversationRecentlyAskedSedeSelection(priorState) &&
+    (messageLooksLikeSedeOnlyAnswer(rawText) || messageLooksLikeBareSedeOptionAnswer(rawText))
+  ) {
     return false;
   }
   const hasStudyContext = stateHasRecentStudyPriceContext(priorState);
@@ -6511,6 +6503,12 @@ function stateHasActiveConversationalThread(priorState) {
 
 function messageLooksLikeShortConversationalFollowUp(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (
+    conversationRecentlyAskedSedeSelection(priorState) &&
+    (messageLooksLikeSedeOnlyAnswer(rawText) || messageLooksLikeBareSedeOptionAnswer(rawText))
+  ) {
+    return false;
+  }
   if (!stateHasActiveConversationalThread(priorState)) return false;
   if (messageLooksLikeGreetingOnly(rawText)) return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
@@ -6654,6 +6652,11 @@ async function tryHandleConversationalContinuationWithOpenAi(
 
 async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileDisplayName) {
   if (!getOpenAiApiKey()) return false;
+  if (messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText)) {
+    if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
+  }
   if (await tryHandleConversationalContinuationWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -8238,6 +8241,39 @@ function stateLooksLikeAwaitingSedeSelection(state) {
     state.state === 'awaiting_sede_selection' &&
     Number.isFinite(Number(state.awaitingSedeSelectionAtMs))
   );
+}
+
+function messageLooksLikeBareSedeOptionAnswer(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return /^[12]$/.test(rawText.trim());
+}
+
+function conversationRecentlyAskedSedeSelection(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (
+    stateLooksLikeAwaitingSedeSelection(priorState) &&
+    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS
+  ) {
+    return true;
+  }
+  if (
+    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
+    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS
+  ) {
+    return true;
+  }
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (
+    lastBotReplyText.length > 0 &&
+    Number.isFinite(lastBotReplyAtMs) &&
+    Date.now() - lastBotReplyAtMs <= SEDE_SELECTION_WINDOW_MS &&
+    assistantReplyAsksForSedeCity(lastBotReplyText)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function preserveSessionStateWithoutTransientRouting(priorState) {
@@ -10545,12 +10581,10 @@ exports.handler = async (event) => {
 
           // Note: awaiting_link_confirmation is handled above (OpenAI-first + rules fallback).
 
-          const trimmedBodyText = typeof bodyText === 'string' ? bodyText.trim() : '';
-          const isBareSedeOption = /^[12]$/.test(trimmedBodyText);
+          const isBareSedeOption = messageLooksLikeBareSedeOptionAnswer(bodyText);
           const canTreatBareSedeOptionAsSede =
             !isBareSedeOption ||
-            (stateLooksLikeAwaitingSedeSelection(priorState) &&
-              Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS) ||
+            conversationRecentlyAskedSedeSelection(priorState) ||
             (priorState &&
               typeof priorState === 'object' &&
               (priorState.state === 'awaiting_booking_link_sede' ||
@@ -11592,6 +11626,9 @@ exports.handler = async (event) => {
               if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
                 continue;
               }
+            }
+            if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+              continue;
             }
             if (await tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileDisplayName)) {
               continue;
