@@ -187,6 +187,8 @@ const SEDE_SELECTION_WINDOW_MS = 30 * 60 * 1000;
 const SYMPTOM_DURATION_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_TYPE_FOR_PRICE_WINDOW_MS = 30 * 60 * 1000;
 const STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS = 30 * 60 * 1000;
+const STUDY_PRICE_FOLLOW_UP_WINDOW_MS = 30 * 60 * 1000;
+const LAST_BOT_REPLY_TEXT_MAX_LENGTH = 500;
 const VIRTUAL_VISIT_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const CONVERSATION_CLOSED_GRACE_WINDOW_MS = 10 * 60 * 1000;
 const NON_TEXT_WRITE_IT_DOWN_COOLDOWN_MS = 2 * 60 * 1000;
@@ -2096,31 +2098,124 @@ function buildAskHealthInsuranceNameMessage(rawText = '') {
   return '¿Qué obra social/prepaga tenés? Te digo si la aceptamos.';
 }
 
-function messageLooksLikePrivatePriceQuestion(rawText) {
+function messageExplicitlyAsksPrivateConsultationPrice(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksAboutStudiesOrTests(rawText)) return false;
   if (messageAsksAboutStudyPrice(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  if (/^y\s*particular\??$/.test(normalized) || /^particular\??$/.test(normalized)) return true;
+  return (
+    normalized.includes('consulta particular') ||
+    (normalized.includes('consulta') && normalized.includes('particular')) ||
+    normalized.includes('valor consulta') ||
+    normalized.includes('precio consulta') ||
+    normalized.includes('cuanto sale la consulta') ||
+    normalized.includes('cuanto cuesta la consulta') ||
+    normalized.includes('precio del turno') ||
+    normalized.includes('precio turno') ||
+    normalized.includes('control') ||
+    normalized.includes('seguimiento') ||
+    normalized.includes('reconsulta') ||
+    normalized.includes('re consulta')
+  );
+}
+
+function replyOffersStudyValueChoice(replyText) {
+  if (typeof replyText !== 'string') return false;
+  const normalized = normalizeForMatch(replyText);
+  return normalized.includes('te cuente el valor') || normalized.includes('preferis agendar');
+}
+
+function stateAwaitingStudyPriceFollowUp(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (priorState.state === 'awaiting_study_price_follow_up') {
+    const followUpAtMs = Number(priorState.awaitingStudyPriceFollowUpAtMs);
+    if (Number.isFinite(followUpAtMs) && Date.now() - followUpAtMs <= STUDY_PRICE_FOLLOW_UP_WINDOW_MS) {
+      return true;
+    }
+  }
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (replyOffersStudyValueChoice(lastBotReplyText)) {
+    const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+    if (Number.isFinite(lastBotReplyAtMs) && Date.now() - lastBotReplyAtMs <= STUDY_PRICE_FOLLOW_UP_WINDOW_MS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function messageLooksLikeStudyPriceFollowUp(rawText, priorState) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!stateHasRecentStudyPriceContext(priorState)) return false;
+  if (messageExplicitlyAsksPrivateConsultationPrice(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const affirmativePatterns = [
+    /^si$/,
+    /^si por favor$/,
+    /^si dale$/,
+    /^dale$/,
+    /^ok$/,
+    /^bueno$/,
+    /^genial$/,
+    /^perfecto$/,
+    /^de una$/,
+  ];
+  const hasAffirmative = affirmativePatterns.some((pattern) => pattern.test(normalized));
+  const hasPriceAsk = messageLooksLikeAnyPriceQuestion(rawText);
+  const awaitingFollowUp = stateAwaitingStudyPriceFollowUp(priorState);
+  if (awaitingFollowUp && (hasAffirmative || hasPriceAsk)) return true;
+  if (hasPriceAsk) {
+    const knownHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+    const lastSede = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
+    if (knownHealthInsuranceName && lastSede) return true;
+  }
+  return false;
+}
+
+function shouldRouteToStudyPrice(rawText, priorState) {
+  return (
+    messageLooksLikeStudyPriceFollowUp(rawText, priorState) ||
+    (stateHasRecentStudyPriceContext(priorState) &&
+      messageLooksLikeAnyPriceQuestion(rawText) &&
+      !messageExplicitlyAsksPrivateConsultationPrice(rawText))
+  );
+}
+
+function messageLooksLikePrivatePriceQuestion(rawText, priorState = null) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutStudiesOrTests(rawText)) return false;
+  if (messageAsksAboutStudyPrice(rawText)) return false;
+  if (priorState && shouldRouteToStudyPrice(rawText, priorState)) return false;
+  if (messageExplicitlyAsksPrivateConsultationPrice(rawText)) return true;
+  const normalized = normalizeForMatch(rawText);
   // "Tratamiento" is not a consultation price question; it depends on the case.
   if (normalized.includes('tratamiento') && !normalized.includes('consulta')) return false;
-  if (/^y\s*particular\??$/.test(normalized) || /^particular\??$/.test(normalized)) return true;
+  if (priorState && stateHasRecentStudyPriceContext(priorState)) return false;
   return (
     normalized.includes('precio') ||
     normalized.includes('cuanto sale') ||
     normalized.includes('cuanto cuesta') ||
     normalized.includes('cuanto esta') ||
     normalized.includes('cuanto está') ||
-    normalized.includes('cuanto es') ||
-    normalized.includes('precio del turno') ||
-    normalized.includes('precio turno') ||
-    normalized.includes('control') ||
-    normalized.includes('seguimiento') ||
-    normalized.includes('reconsulta') ||
-    normalized.includes('re consulta') ||
-    normalized.includes('consulta particular') ||
-    (normalized.includes('consulta') && normalized.includes('particular')) ||
-    normalized.includes('valor consulta')
+    normalized.includes('cuanto es')
   );
+}
+
+function buildLastBotReplyStatePatch(messageText) {
+  if (typeof messageText !== 'string' || messageText.trim().length === 0) return {};
+  const patch = {
+    lastBotReplyText: messageText.trim().slice(0, LAST_BOT_REPLY_TEXT_MAX_LENGTH),
+    lastBotReplyAtMs: Date.now(),
+  };
+  if (replyOffersStudyValueChoice(messageText)) {
+    patch.state = 'awaiting_study_price_follow_up';
+    patch.awaitingStudyPriceFollowUpAtMs = Date.now();
+  }
+  return patch;
 }
 
 function messageLooksLikeAnyPriceQuestion(rawText) {
@@ -2471,6 +2566,7 @@ async function resolveSedeFromTextWithOpenAi(rawText) {
 const MULTI_INTENT_ROUTER_TOKENS = [
   'HEALTH_INSURANCE',
   'PRIVATE_PRICE',
+  'STUDY_PRICE',
   'BOOKING',
   'STUDIES',
   'CONDITION',
@@ -2507,10 +2603,12 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     `Return ONLY one token from: ${MULTI_INTENT_ROUTER_TOKENS.join(', ')}.`,
     'Guidelines:',
     '- If asking about accepted insurance / plus: HEALTH_INSURANCE.',
-    '- If asking about CONSULTATION price / particular / control / seguimiento (e.g. "precio consulta particular", "cuánto sale la consulta"): PRIVATE_PRICE. This is NOT booking.',
+    '- If asking about CONSULTATION price only / particular / control / seguimiento (e.g. "precio consulta particular", "cuánto sale la consulta"): PRIVATE_PRICE. This is NOT booking.',
+    '- If asking study/test price (espirometría, prick), obra social plus for a study, or a short follow-up after the assistant offered study value ("si", "dame el precio", "decime el valor"): STUDY_PRICE.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
-    '- If asking about studies/tests, study price (espirometría, prick), study preparation, or what studies to bring: STUDIES.',
-    '- If the conversation context was about a study price and the user now asks consultation price: PRIVATE_PRICE.',
+    '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
+    '- If the assistant last asked "te cuente el valor o preferís agendar" about a study and the user affirms or asks price: STUDY_PRICE, not PRIVATE_PRICE.',
+    '- If the user explicitly asks consultation/particular price even with study context: PRIVATE_PRICE.',
     '- If asking if the doctor treats a condition: CONDITION.',
     '- If asking address / how to arrive: ADDRESS.',
     '- If asking what to bring / referral / authorization / payments / invoice: DOCUMENTS.',
@@ -2559,6 +2657,28 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
   }
 }
 
+async function sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName, options = {}) {
+  const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
+    forcePriceFlow: true,
+    profileDisplayName,
+    ...options,
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
+  const detectedStudyType = getStudyTypeFromText(bodyText);
+  const studiesStatePatch = {
+    ...(wrapped.nextStatePatch || {}),
+    ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+    lastStudyPriceContextAtMs: Date.now(),
+    ...buildLastBotReplyStatePatch(wrapped.messageText),
+  };
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, studiesStatePatch)
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
   if (!getOpenAiApiKey()) return false;
   if (!messageLooksLikeOpenAiIntentRoutingCandidate(bodyText, priorState)) return false;
@@ -2569,7 +2689,19 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   });
   if (!primaryIntent || primaryIntent === 'OTHER') return false;
 
+  if (
+    primaryIntent === 'STUDY_PRICE' ||
+    (primaryIntent === 'STUDIES' && shouldRouteToStudyPrice(bodyText, priorState))
+  ) {
+    if (!messageLooksLikeSedeOnlyAnswer(bodyText)) {
+      return sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
+    }
+  }
+
   if (primaryIntent === 'PRIVATE_PRICE') {
+    if (shouldRouteToStudyPrice(bodyText, priorState)) {
+      return sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
+    }
     return sendPrivatePriceQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
 
@@ -2586,6 +2718,7 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
       ...(messageLooksLikeAnyPriceQuestion(bodyText) || detectedStudyType
         ? { lastStudyPriceContextAtMs: Date.now() }
         : {}),
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
     };
     await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
     await sendWhatsAppText(from, wrapped.messageText);
@@ -2895,6 +3028,17 @@ function buildIntentRoutingOpenAiContext(priorState) {
   if (stateHasRecentStudyPriceContext(priorState)) {
     contextLines.push('Hace poco hablaron del precio de un estudio (espirometría, prick, etc.).');
   }
+  if (stateAwaitingStudyPriceFollowUp(priorState)) {
+    contextLines.push(
+      'El asistente ofreció contar el valor del estudio o agendar; el usuario probablemente quiere el precio del estudio.'
+    );
+  }
+  if (priorState && typeof priorState === 'object' && typeof priorState.lastBotReplyText === 'string') {
+    const lastBotReplyText = priorState.lastBotReplyText.trim();
+    if (lastBotReplyText.length > 0) {
+      contextLines.push(`Último mensaje del asistente:\n${lastBotReplyText.slice(0, LAST_BOT_REPLY_TEXT_MAX_LENGTH)}`);
+    }
+  }
   const healthInsuranceFromState =
     priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
       ? priorState.healthInsuranceName.trim()
@@ -2929,10 +3073,12 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
   }
   const hasStudyContext = stateHasRecentStudyPriceContext(priorState);
   const hasPriceSignal =
-    messageLooksLikeAnyPriceQuestion(rawText) || messageLooksLikePrivatePriceQuestion(rawText);
+    messageLooksLikeAnyPriceQuestion(rawText) ||
+    messageExplicitlyAsksPrivateConsultationPrice(rawText);
   const hasBookingSignal =
     messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText);
   const hasStudySignal = messageMatchesStudiesTopic(rawText);
+  if (messageLooksLikeStudyPriceFollowUp(rawText, priorState)) return true;
   if (hasStudyContext && hasPriceSignal) return true;
   if (hasPriceSignal && hasBookingSignal) return true;
   if (hasPriceSignal) return true;
@@ -4011,15 +4157,11 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     ? resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState)
     : findSedeFromText(rawText) || null;
   const asksPrice =
-    messageLooksLikePrivatePriceQuestion(rawText) ||
-    messageAsksAboutStudyPrice(rawText) ||
     forcePriceFlow ||
-    normalized.includes('cuanto sale') ||
-    normalized.includes('cuanto cuesta') ||
-    normalized.includes('cuanto esta') ||
-    normalized.includes('cuánto está') ||
-    normalized.includes('precio') ||
-    normalized.includes('valor');
+    messageAsksAboutStudyPrice(rawText) ||
+    messageLooksLikeStudyPriceFollowUp(rawText, priorState) ||
+    messageLooksLikeAnyPriceQuestion(rawText) ||
+    messageExplicitlyAsksPrivateConsultationPrice(rawText);
   const asksTotalAmount =
     normalized.includes('total') ||
     normalized.includes('valor final') ||
@@ -5410,6 +5552,10 @@ exports.handler = async (event) => {
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (shouldRouteToStudyPrice(bodyText, priorState)) {
+            await sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
+            continue;
+          }
           const hasRecentStudyPriceContext =
             priorState &&
             typeof priorState === 'object' &&
@@ -5420,7 +5566,7 @@ exports.handler = async (event) => {
           const hasFreshStudyMentionInCurrentMessage = Boolean(getStudyTypeFromText(bodyText));
           if (
             hasRecentStudyPriceContext &&
-            !messageLooksLikePrivatePriceQuestion(bodyText) &&
+            !messageLooksLikePrivatePriceQuestion(bodyText, priorState) &&
             (await tryResolveBookingIntentWithOpenAi(bodyText, { profileDisplayName, priorState }))
           ) {
             const lastSede =
@@ -5484,27 +5630,8 @@ exports.handler = async (event) => {
               continue;
             }
           }
-          if (
-            hasRecentStudyPriceContext &&
-            messageLooksLikeAnyPriceQuestion(bodyText) &&
-            !messageLooksLikePrivatePriceQuestion(bodyText)
-          ) {
-            const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
-              forcePriceFlow: true,
-            });
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
-            await setConversationState(
-              from,
-              mergeConversationStatePreservingGreeting(
-                priorState,
-                priorState || {},
-                {
-                  ...(wrapped.nextStatePatch || {}),
-                  lastStudyPriceContextAtMs: Date.now(),
-                }
-              )
-            );
-            await sendWhatsAppText(from, wrapped.messageText);
+          if (hasRecentStudyPriceContext && shouldRouteToStudyPrice(bodyText, priorState)) {
+            await sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
             continue;
           }
           if (stateLooksLikeAwaitingSymptomDuration(priorState)) {
@@ -5514,7 +5641,7 @@ exports.handler = async (event) => {
               messageLooksLikeBookingIntent(bodyText) ||
               messageExplicitlyRequestsBookingLink(bodyText) ||
               messageLooksLikeBookingLinkTrouble(bodyText) ||
-              messageLooksLikePrivatePriceQuestion(bodyText) ||
+              messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
               messageLooksLikeAnyPriceQuestion(bodyText) ||
               messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
               messageMatchesStudiesTopic(bodyText) ||
@@ -5803,7 +5930,7 @@ exports.handler = async (event) => {
             !messageIsGreeting(bodyText) &&
             !findSedeFromText(bodyText) &&
             !messageLooksLikeHealthInsurancePlusQuestion(bodyText) &&
-            !messageLooksLikePrivatePriceQuestion(bodyText) &&
+            !messageLooksLikePrivatePriceQuestion(bodyText, priorState) &&
             !messageLooksLikeScheduleAvailabilityQuestion(bodyText) &&
             !messageExplicitlyRequestsBookingLink(bodyText) &&
             !textMatchesMedicalEmergency(bodyText) &&
@@ -6171,6 +6298,7 @@ exports.handler = async (event) => {
                     awaitingStudyTypeForPriceAtMs: undefined,
                   }
                 : {}),
+              ...buildLastBotReplyStatePatch(wrapped.messageText),
             };
             if (Object.keys(studiesStatePatch).length > 0) {
               await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
@@ -6421,7 +6549,7 @@ exports.handler = async (event) => {
               await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
               continue;
             }
-            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+            if (messageLooksLikePrivatePriceQuestion(bodyText, priorState)) {
               const lastSede =
                 findSedeFromText(bodyText) ||
                 resolveSedeEntryFromState(priorState) ||
@@ -6523,7 +6651,7 @@ exports.handler = async (event) => {
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             const shouldBypassPendingLinkConfirmation =
               linkOfferDecision.action === 'ASK_CLARIFY' &&
-              (messageLooksLikePrivatePriceQuestion(bodyText) ||
+              (messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
                 messageLooksLikeAnyPriceQuestion(bodyText) ||
                 messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
                 messageMatchesStudiesTopic(bodyText) ||
@@ -6533,7 +6661,7 @@ exports.handler = async (event) => {
               if (
                 stateHasRecentStudyPriceContext(priorState) &&
                 messageLooksLikeAnyPriceQuestion(bodyText) &&
-                !messageLooksLikePrivatePriceQuestion(bodyText)
+                !messageLooksLikePrivatePriceQuestion(bodyText, priorState)
               ) {
                 const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
                   forcePriceFlow: true,
@@ -6851,7 +6979,7 @@ exports.handler = async (event) => {
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
-            } else if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+            } else if (messageLooksLikePrivatePriceQuestion(bodyText, priorState)) {
               const reply = await buildPrivatePriceReply(sede);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 appendBookingLinkOfferIfAllowed(priorState, reply),
@@ -6978,8 +7106,12 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
+            if (shouldRouteToStudyPrice(bodyText, priorState)) {
+              await sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
+              continue;
+            }
             // Pricing questions must win over "turno/agendar" keyword matches.
-            if (messageLooksLikePrivatePriceQuestion(bodyText)) {
+            if (messageLooksLikePrivatePriceQuestion(bodyText, priorState)) {
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
                 const reply = await buildPrivatePriceReply(lastSede);

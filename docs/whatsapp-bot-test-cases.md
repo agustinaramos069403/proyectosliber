@@ -120,6 +120,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - Typos: “estirometria” en preguntas de preparación → misma respuesta de espirometría
   - Preparación de estudios: siempre intenta OpenAI primero (con sede/estudio en contexto); si falla, respuesta fija de respaldo
   - Precio de estudio nuevo sin obra social en el mensaje: “hola precio de estirometria?” → pedir obra social y ciudad (no reutilizar IOSCOR/sede de sesiones viejas)
+  - Follow-up de precio de estudio (IA + reglas): tras “¿Querés que te cuente el valor o preferís agendar?” con espirometría + IOSCOR + Resistencia, “si dame el precio” → plus + $30.000 del estudio (NO $45.000 de consulta particular sola)
+  - Router OpenAI: token `STUDY_PRICE` vs `PRIVATE_PRICE`; contexto incluye último mensaje del bot (`lastBotReplyText`)
   - Ayunas: “¿tengo que ir en ayunas?” → no
   - Medicación: antihistamínicos 48 hs, corticoides 1 semana; espirometría sin aerosoles ese día
   - “¿cuánto tarda el estudio?” → depende del caso
