@@ -34,6 +34,11 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “Hola, quiero turno”
   - “Buenas, cuánto sale la consulta”
 
+## Dirección / ubicación
+- “dónde está la clínica”, “dirección del consultorio”, “cómo llego”, “me pasás la ubi” → dirección/maps (NO ofrecer link de turno)
+- Con sede ya informada (ej. Corrientes tras precio consulta): responder dirección de esa sede sin pedir ciudad de nuevo
+- IA clasifica ADDRESS vs BOOKING cuando la frase es ambigua
+
 ## Turnos / reservas / link
 - Flujo con contexto (IA + estado):
   - “quiero un turno” → sede → **NO** “¿en qué te puedo ayudar?”; ofrecer link o “¿te lo mando?”

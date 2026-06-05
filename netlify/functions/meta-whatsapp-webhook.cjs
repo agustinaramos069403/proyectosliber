@@ -4001,6 +4001,12 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If asking study/test price (espirometría, prick), obra social plus for a study, or a short follow-up after the assistant offered study value ("si", "dame el precio", "decime el valor"): STUDY_PRICE.',
     '- If asking address / how to arrive / where the clinic is ("dónde está la clínica", "dirección", "cómo llego"): ADDRESS. NOT booking.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
+    '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
+    '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves"): PREFERRED_DAY. Not SCHEDULE.',
+    '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
+    '- If the assistant last asked "te cuente el valor o preferís agendar" about a study and the user affirms or asks price: STUDY_PRICE, not PRIVATE_PRICE.',
+    '- If the user explicitly asks consultation/particular price even with study context: PRIVATE_PRICE.',
+    '- If asking if the doctor treats a condition: CONDITION.',
     '- If asking what to bring / referral / authorization / payments / invoice: DOCUMENTS.',
     '- If unclear, return OTHER.',
   ].join('\n');
@@ -7754,6 +7760,10 @@ exports.handler = async (event) => {
                 continue;
               }
             } else if (primaryIntent === 'BOOKING') {
+              if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+                await sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+                continue;
+              }
               const lastSede = resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
                 if (stateHasRecentStudyPriceContext(priorState)) {
