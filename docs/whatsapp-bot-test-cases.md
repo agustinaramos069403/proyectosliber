@@ -3,7 +3,7 @@
 ## IA central (OpenAI)
 - Requiere `OPENAI_API_KEY` en Netlify; con `OPENAI_AI_FIRST_ROUTING=true` (default) casi todo mensaje pasa por el router IA antes de reglas.
 - Router principal: `decidePrimaryIntentWithOpenAi` → ADDRESS, HEALTH_INSURANCE, CONSULTATION_PRICE, BOOKING, SCHEDULE, etc.
-- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, respuestas abrumadoras.
+- Clasificadores IA-first (OpenAI primero, reglas solo si falla o no hay key): dirección, obra social, precio consulta, horarios, confirmación link, autoagendado asistido (“agendame vos”), respuestas abrumadoras.
 - Excepciones sin router: emergencia, saludo puro, despedida, respuesta de sede en ventana de selección, confirmación de link (`awaiting_link_confirmation`).
 
 ## Sedes (selección, typos, claridad)
@@ -78,6 +78,10 @@
   - “no tengo mail/email”
   - “no sé usar / no sé entrar / no sé reservar”
   - Derivación a equipo/secretaría
+- Pedir que la asistente agende (después de enviar el link):
+  - Bot envió link Calendly → “¿Agéndame vos?” / “podés agendarme?”
+  - IA clasifica autoagendado asistido (NO BOOKING ni micro-compromiso “¿Te lo mando?”)
+  - Respuesta: explicar que por acá no se agenda + repetir el link ya enviado (o acompañar paso a paso)
 
 ## Link — problemas técnicos / disponibilidad / lista de espera
 - Problema técnico con el link:

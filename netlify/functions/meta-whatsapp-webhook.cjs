@@ -3404,7 +3404,8 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
       'Sos un clasificador de intención para WhatsApp de un consultorio médico en español rioplatense.',
       'Tarea: decidir si el paciente quiere AGENDAR / RESERVAR / SACAR TURNO o recibir el link de agenda.',
       'Respondé solo: YES o NO.',
-      'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "para mañana hay turno", "hay turno", "me gustaría sacar turno", typos como "urno" o "agendame".',
+      'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "para mañana hay turno", "hay turno", "me gustaría sacar turno", typos como "urno".',
+      'NO si pide que VOS/la asistente agende por él ("agendame vos", "podés agendarme", "me lo reservás vos"): eso NO es pedido de link propio.',
       'NO ejemplos: pregunta de PRECIO/COSTO de consulta ("qué costo tiene la consulta", "precio consulta particular", "cuánto sale la consulta"), obra social, dirección, preparación de estudios o qué traer, sin pedir turno.',
       'IMPORTANTE: "consulta" en una pregunta de precio NO es pedido de turno.',
       'Si el contexto ya tiene sede (Corrientes/Resistencia) y el paciente pregunta por turno o disponibilidad, respondé YES.',
@@ -3447,7 +3448,89 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
   }
 
   if (messageLooksLikePrivatePriceQuestion(userMessage)) return false;
+  if (messageLooksLikeAssistedBookingRequest(userMessage)) return false;
   return messageLooksLikeBookingIntent(userMessage) || messageExplicitlyRequestsBookingLink(userMessage);
+}
+
+async function tryResolveAssistedBookingRequestWithOpenAi(userMessage, options = {}) {
+  const rulesMatch = messageLooksLikeAssistedBookingRequest(userMessage);
+  if (options.rulesOnly) return rulesMatch;
+
+  const priorState = options.priorState;
+  const hasAssistedBookingContext =
+    priorState &&
+    typeof priorState === 'object' &&
+    (wasBookingLinkSentRecently(priorState) ||
+      stateLooksLikeAwaitingLinkConfirmation(priorState) ||
+      Number.isFinite(Number(priorState.lastBookingLinkOfferAtMs)));
+
+  if (!rulesMatch && !hasAssistedBookingContext) return false;
+  if (rulesMatch && !getOpenAiApiKey()) return true;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return rulesMatch;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+    'Tarea: decidir si el paciente pide que la asistente/equipo le AGENDE el turno (no quiere hacerlo solo con el link).',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "agendame vos", "podés agendarme?", "me lo reservás?", "no quiero usar el link", "no tengo mail para agendar", "no sé usar la agenda agendame".',
+    'NO ejemplos: "quiero agendar", "pasame el link", "si" después de "¿Te paso el link?", preguntas de precio/dirección/obra social.',
+    'Si ya se envió el link y pregunta si vos podés agendarle: YES.',
+  ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : ''),
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      const text = data?.choices?.[0]?.message?.content;
+      const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+      if (normalized.startsWith('YES')) return true;
+      if (normalized.startsWith('NO')) return false;
+    }
+  } catch (error) {
+    console.error('OpenAI assisted booking classifier failed', error);
+  }
+
+  return messageLooksLikeAssistedBookingRequest(userMessage);
+}
+
+async function tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName, options = {}) {
+  const isAssistedBooking = await tryResolveAssistedBookingRequestWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+    rulesOnly: options.rulesOnly,
+  });
+  if (!isAssistedBooking) return false;
+  return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
 }
 
 function mapOpenAiSedeTokenToEntry(token) {
@@ -3601,7 +3684,29 @@ async function resolvePatientContextFromMessage(rawText, priorState) {
   return { sedeEntry, healthInsuranceName, statePatch };
 }
 
+async function sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName) {
+  const needsHandoff = messageAsksToBookWithoutSelfServiceLink(bodyText);
+  const replyText = needsHandoff
+    ? DERIVATIVE_HANDOFF_PATIENT_MESSAGE
+    : buildSelfBookingRequiredReply(priorState);
+  const preservedSessionState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    needsHandoff ? { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS } : null
+  );
+  await setConversationState(from, preservedSessionState);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, preservedSessionState);
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDisplayName, lastSede) {
+  if (
+    messageLooksLikeAssistedBookingRequest(bodyText) ||
+    (wasBookingLinkSentRecently(priorState) && !messageExplicitlyRequestsBookingLink(bodyText))
+  ) {
+    return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
+  }
   if (stateHasRecentStudyPriceContext(priorState)) {
     const wrapped = buildAutoReplyWithGreetingIfNeeded(
       buildLinkMessage(lastSede),
@@ -4206,6 +4311,8 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
   if (await shouldHandleAsPrivatePriceQuestion(bodyText, priorState, profileDisplayName)) {
     return false;
   }
+  if (messageLooksLikeAssistedBookingRequest(bodyText)) return false;
+
   const isBookingCandidate =
     messageLooksLikeBookingIntent(bodyText) ||
     messageLooksLikeRealtimeAvailabilityQuestion(bodyText) ||
@@ -4321,6 +4428,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If asking study/test price (espirometría, prick), obra social plus for a study, or a short follow-up after the assistant offered study value ("si", "dame el precio", "decime el valor"): STUDY_PRICE.',
     '- If asking address / how to arrive / where the clinic is ("dónde está la clínica", "dirección", "cómo llego"): ADDRESS. NOT booking.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
+    '- If asking YOU/the assistant to book FOR them ("agendame vos", "podés agendarme", won\'t use link): OTHER, NOT BOOKING.',
     '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
     '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves"): PREFERRED_DAY. Not SCHEDULE.',
     '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
@@ -4460,6 +4568,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'BOOKING') {
+    if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
     if (
       !isOpenAiCentralRoutingEnabled() &&
       (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName, { rulesOnly: true }))
@@ -6273,7 +6384,7 @@ function messageLooksLikeBookingLinkTrouble(rawText) {
   );
 }
 
-function messageAsksToBookWithoutLink(rawText) {
+function messageAsksToBookWithoutSelfServiceLink(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   const mentionsBooking =
@@ -6288,14 +6399,6 @@ function messageAsksToBookWithoutLink(rawText) {
     normalized.includes('no quiero el link') ||
     normalized.includes('sin link') ||
     normalized.includes('por chat') ||
-    normalized.includes('agendame') ||
-    normalized.includes('agendame vos') ||
-    normalized.includes('agendamelo') ||
-    normalized.includes('agendámelo') ||
-    normalized.includes('me lo agendas') ||
-    normalized.includes('me lo agendás') ||
-    normalized.includes('reservame') ||
-    normalized.includes('reservame vos') ||
     normalized.includes('no tengo mail') ||
     normalized.includes('no tengo email') ||
     normalized.includes('no uso mail') ||
@@ -6327,9 +6430,32 @@ function messageAsksIfAssistantCanBookForUser(rawText) {
     normalized.includes('podés hacerlo vos') ||
     normalized.includes('lo haces vos') ||
     normalized.includes('lo hacés vos') ||
+    normalized.includes('agendame vos') ||
+    normalized.includes('agendame por mi') ||
+    normalized.includes('agendame por mí') ||
     normalized.includes('agendamelo vos') ||
-    normalized.includes('agendámelo vos')
+    normalized.includes('agendámelo vos') ||
+    normalized.includes('agendamelo') ||
+    normalized.includes('agendámelo') ||
+    normalized.includes('me lo agendas') ||
+    normalized.includes('me lo agendás') ||
+    normalized.includes('reservame vos') ||
+    normalized.includes('reserváme vos') ||
+    normalized.includes('podes agendarme') ||
+    normalized.includes('podés agendarme') ||
+    normalized.includes('podes reservarme') ||
+    normalized.includes('podés reservarme') ||
+    normalized.includes('me lo reservas') ||
+    normalized.includes('me lo reservás')
   );
+}
+
+function messageAsksToBookWithoutLink(rawText) {
+  return messageAsksIfAssistantCanBookForUser(rawText) || messageAsksToBookWithoutSelfServiceLink(rawText);
+}
+
+function messageLooksLikeAssistedBookingRequest(rawText) {
+  return messageAsksIfAssistantCanBookForUser(rawText) || messageAsksToBookWithoutSelfServiceLink(rawText);
 }
 
 function buildSelfBookingRequiredReply(priorState) {
@@ -7521,6 +7647,9 @@ exports.handler = async (event) => {
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -7719,30 +7848,7 @@ exports.handler = async (event) => {
             continue;
           }
 
-          if (messageAsksIfAssistantCanBookForUser(bodyText)) {
-            const preservedSessionState = mergeConversationStatePreservingGreeting(priorState, priorState || {}, null);
-            await setConversationState(from, preservedSessionState);
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              buildSelfBookingRequiredReply(priorState),
-              profileDisplayName,
-              preservedSessionState
-            );
-            await sendWhatsAppText(from, wrapped.messageText);
-            continue;
-          }
-          if (messageAsksToBookWithoutLink(bodyText)) {
-            const preservedSessionState = mergeConversationStatePreservingGreeting(
-              priorState,
-              {},
-              { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS }
-            );
-            await setConversationState(from, preservedSessionState);
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
-              profileDisplayName,
-              preservedSessionState
-            );
-            await sendWhatsAppText(from, wrapped.messageText);
+          if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName, { rulesOnly: true })) {
             continue;
           }
 
