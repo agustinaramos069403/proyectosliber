@@ -474,6 +474,54 @@ function buildAnythingElseHelpMessage(priorState) {
   return 'Cualquier duda que te surja, escribime.';
 }
 
+function messageLooksLikeSedeOnlyAnswer(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!findSedeFromText(rawText)) return false;
+  if (
+    messageLooksLikeAnyPriceQuestion(rawText) ||
+    messageMatchesStudiesTopic(rawText) ||
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageLooksLikeBookingIntent(rawText) ||
+    messageExplicitlyRequestsBookingLink(rawText)
+  ) {
+    return false;
+  }
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  return wordCount <= 4;
+}
+
+function stateConflictsWithSedeOnlyAnswer(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  return (
+    priorState.state === 'awaiting_study_price_health_insurance' ||
+    priorState.state === 'awaiting_health_insurance_name' ||
+    priorState.state === 'awaiting_study_type_for_price' ||
+    priorState.state === 'awaiting_health_insurance_plan'
+  );
+}
+
+function buildClearedStudyPricingContextPatch() {
+  return {
+    lastStudyType: null,
+    lastStudyPriceContextAtMs: null,
+    awaitingStudyTypeForPriceAtMs: null,
+    awaitingStudyPriceHealthInsuranceAtMs: null,
+  };
+}
+
+function nextStateExplicitlyClearsStudyPricingContext(nextState) {
+  if (!nextState || typeof nextState !== 'object') return false;
+  return (
+    (Object.prototype.hasOwnProperty.call(nextState, 'lastStudyType') && nextState.lastStudyType == null) ||
+    (Object.prototype.hasOwnProperty.call(nextState, 'lastStudyPriceContextAtMs') &&
+      nextState.lastStudyPriceContextAtMs == null)
+  );
+}
+
 function findSedeFromText(rawText) {
   if (!rawText || typeof rawText !== 'string') return null;
   const trimmed = rawText.trim();
@@ -1652,14 +1700,30 @@ function buildAwaitingSedeSelectionStatePatch() {
     state: 'awaiting_sede_selection',
     awaitingSedeSelectionAtMs: Date.now(),
     lastBotAskedSedeCityAtMs: Date.now(),
+    ...buildClearedStudyPricingContextPatch(),
   };
 }
 
+function buildSedeConfirmedHelpMessage(sede) {
+  return `Sí, el Dr. atiende en ${sede.displayName}. ¿En qué te puedo ayudar?`;
+}
+
 async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
+  if (messageLooksLikeSedeOnlyAnswer(bodyText)) {
+    if (priorState && priorState.state === 'awaiting_private_price_city') {
+      return buildPrivatePriceReply(sede);
+    }
+    return buildSedeConfirmedHelpMessage(sede);
+  }
   if (priorState && priorState.state === 'awaiting_private_price_city') {
     return buildPrivatePriceReply(sede);
   }
-  if (stateHasRecentStudyPriceContext(priorState)) {
+  const shouldContinuePendingStudyFlow =
+    stateHasRecentStudyPriceContext(priorState) &&
+    (messageLooksLikeAnyPriceQuestion(bodyText) ||
+      Boolean(getStudyTypeFromText(bodyText)) ||
+      messageMatchesStudiesTopic(bodyText));
+  if (shouldContinuePendingStudyFlow) {
     const studiesReply = await buildStudiesInformationReply(
       mergeConversationStatePreservingGreeting(priorState, {}, buildLastSedeStatePatch(sede) || {}),
       bodyText,
@@ -1669,7 +1733,7 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
       return studiesReply;
     }
   }
-  return `Sí, el Dr. atiende en ${sede.displayName}. ¿En qué te puedo ayudar?`;
+  return buildSedeConfirmedHelpMessage(sede);
 }
 
 async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName) {
@@ -1681,7 +1745,9 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
     typeof priorState === 'object' &&
     Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
     Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
-  if (!isAwaitingSedeSelection && !recentlyAskedSedeCity) return false;
+  const isSedeOnlyAnswer =
+    messageLooksLikeSedeOnlyAnswer(bodyText) && !stateConflictsWithSedeOnlyAnswer(priorState);
+  if (!isAwaitingSedeSelection && !recentlyAskedSedeCity && !isSedeOnlyAnswer) return false;
 
   const sede = await resolveSedeFromTextWithOpenAi(bodyText);
   if (!sede) {
@@ -1712,7 +1778,11 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
     mergeConversationStatePreservingGreeting(
       priorState,
       buildAwaitingLinkConfirmationState(sede, 'after_sede_selection'),
-      { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sede) || {}) }
+      {
+        ...(wrapped.nextStatePatch || {}),
+        ...(buildLastSedeStatePatch(sede) || {}),
+        ...buildClearedStudyPricingContextPatch(),
+      }
     )
   );
   await sendWhatsAppText(from, wrapped.messageText);
@@ -1837,7 +1907,9 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
   ) {
     merged.lastHealthInsuranceName = merged.healthInsuranceName.trim();
   }
+  const explicitlyClearsStudyPricingContext = nextStateExplicitlyClearsStudyPricingContext(nextState);
   if (
+    !explicitlyClearsStudyPricingContext &&
     priorStudyContext &&
     priorStudyContext.lastStudyType &&
     !Object.prototype.hasOwnProperty.call(merged, 'lastStudyType')
@@ -1845,11 +1917,18 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
     merged.lastStudyType = priorStudyContext.lastStudyType;
   }
   if (
+    !explicitlyClearsStudyPricingContext &&
     priorStudyContext &&
     Number.isFinite(priorStudyContext.lastStudyPriceContextAtMs) &&
     !Object.prototype.hasOwnProperty.call(merged, 'lastStudyPriceContextAtMs')
   ) {
     merged.lastStudyPriceContextAtMs = priorStudyContext.lastStudyPriceContextAtMs;
+  }
+  if (explicitlyClearsStudyPricingContext) {
+    delete merged.lastStudyType;
+    delete merged.lastStudyPriceContextAtMs;
+    delete merged.awaitingStudyTypeForPriceAtMs;
+    delete merged.awaitingStudyPriceHealthInsuranceAtMs;
   }
   if (
     Number.isFinite(priorBookingLinkOfferAtMs) &&
@@ -2494,7 +2573,7 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     return sendPrivatePriceQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
 
-  if (primaryIntent === 'STUDIES') {
+  if (primaryIntent === 'STUDIES' && !messageLooksLikeSedeOnlyAnswer(bodyText)) {
     const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
       forcePriceFlow: messageLooksLikeAnyPriceQuestion(bodyText),
       profileDisplayName,
@@ -2837,6 +2916,17 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
   if (messageLooksLikeGreetingOnly(rawText)) return false;
+  const isAwaitingSedeSelection =
+    stateLooksLikeAwaitingSedeSelection(priorState) &&
+    Date.now() - Number(priorState.awaitingSedeSelectionAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  const recentlyAskedSedeCity =
+    priorState &&
+    typeof priorState === 'object' &&
+    Number.isFinite(Number(priorState.lastBotAskedSedeCityAtMs)) &&
+    Date.now() - Number(priorState.lastBotAskedSedeCityAtMs) <= SEDE_SELECTION_WINDOW_MS;
+  if ((isAwaitingSedeSelection || recentlyAskedSedeCity) && messageLooksLikeSedeOnlyAnswer(rawText)) {
+    return false;
+  }
   const hasStudyContext = stateHasRecentStudyPriceContext(priorState);
   const hasPriceSignal =
     messageLooksLikeAnyPriceQuestion(rawText) || messageLooksLikePrivatePriceQuestion(rawText);
@@ -4026,6 +4116,9 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     return `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName}. ¿Querés que te cuente el valor o preferís agendar?`;
   }
 
+  if (messageLooksLikeSedeOnlyAnswer(rawText)) {
+    return null;
+  }
   const sedeFromState = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (sedeFromState) {
     return `${STUDIES_INFORMATION_MESSAGE} Para confirmarte cómo se realiza en tu situación y en ${sedeFromState.displayName}, lo ideal es sacar un turno para evaluación.`;
@@ -6009,9 +6102,10 @@ exports.handler = async (event) => {
 
           // Primary studies gate: doctor-performed studies (messageAsksAboutStudiesOrTests) plus patient FAQ.
           if (
-            messageAsksAboutStudyPrice(bodyText) ||
-            messageAsksAboutStudiesOrTests(bodyText) ||
-            messageMatchesStudiesPatientOnlyFaq(bodyText, priorState)
+            !messageLooksLikeSedeOnlyAnswer(bodyText) &&
+            (messageAsksAboutStudyPrice(bodyText) ||
+              messageAsksAboutStudiesOrTests(bodyText) ||
+              messageMatchesStudiesPatientOnlyFaq(bodyText, priorState))
           ) {
             if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
               const preservedSessionState =
