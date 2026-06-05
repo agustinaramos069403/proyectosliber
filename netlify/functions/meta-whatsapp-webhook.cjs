@@ -192,6 +192,8 @@ const PENDING_BOOKING_INTENT_WINDOW_MS = 30 * 60 * 1000;
 const PENDING_PRIVATE_PRICE_INTENT_WINDOW_MS = 30 * 60 * 1000;
 const PENDING_CONSULTATION_PRICE_INTENT_WINDOW_MS = 30 * 60 * 1000;
 const CONSULTATION_PRICE_HEALTH_INSURANCE_WINDOW_MS = 30 * 60 * 1000;
+const CONSULTATION_PRICE_ANSWERED_WINDOW_MS = 30 * 60 * 1000;
+const PATIENT_REPLY_MAX_RECOMMENDED_LENGTH = 180;
 const LAST_BOT_REPLY_TEXT_MAX_LENGTH = 500;
 const SCHEDULE_DISCUSSION_WINDOW_MS = 30 * 60 * 1000;
 const PREFERRED_DAY_BOOKING_WINDOW_MS = 30 * 60 * 1000;
@@ -1679,9 +1681,129 @@ function shouldOfferBookingLink(priorState) {
   return true;
 }
 
-function appendBookingLinkOfferIfAllowed(priorState, messageText) {
+function appendBookingLinkOfferIfAllowed(priorState, messageText, options = {}) {
+  if (options.suppressBookingLinkOffer || options.replyContext === 'consultation_price') {
+    return messageText;
+  }
   if (!shouldOfferBookingLink(priorState)) return messageText;
   return `${messageText} ${buildMicroCommitmentMessage()}`.trim();
+}
+
+const PATIENT_REPLY_OVERWHELMING_PATTERNS = [
+  /si quer[eé]s, te paso el link/i,
+  /horarios y sacar turno/i,
+  /si prefer[ií]s atenci[oó]n particular/i,
+  /pod[eé]s atenderte de manera particular/i,
+  /consulta de evaluaci[oó]n/i,
+];
+
+function replyLooksOverwhelmingByRules(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  let score = 0;
+  if (replyText.length > PATIENT_REPLY_MAX_RECOMMENDED_LENGTH) score += 1;
+  for (const pattern of PATIENT_REPLY_OVERWHELMING_PATTERNS) {
+    if (pattern.test(replyText)) score += 1;
+  }
+  const questionCount = (replyText.match(/\?/g) || []).length;
+  if (questionCount > 1) score += 1;
+  if (replyText.split(/\n\n+/).filter((part) => part.trim().length > 0).length > 2) score += 1;
+  return score >= 2;
+}
+
+function tryRulesFirstFocusPatientReply(originalReply, options = {}) {
+  if (!originalReply || typeof originalReply !== 'string') return originalReply;
+  let focused = originalReply.trim();
+  const shouldFocusForCost =
+    options.replyContext === 'consultation_price' || Boolean(options.suppressBookingLinkOffer);
+  if (!shouldFocusForCost && !replyLooksOverwhelmingByRules(focused)) {
+    return focused;
+  }
+  focused = focused.replace(/\s*Si quer[eé]s, te paso el link[^.?!]*[.?!]?\s*/gi, ' ');
+  focused = focused.replace(/\s*¿Te lo mando\?\s*/gi, ' ');
+  focused = focused.replace(/\n\nSi prefer[ií]s atenci[oó]n particular:[^\n]+/gi, '');
+  focused = focused.replace(
+    /\s*Si quer[eé]s, pod[eé]s atenderte de manera particular[^.?!]*[.?!]?\s*/gi,
+    ' '
+  );
+  focused = focused.replace(/\s+/g, ' ').trim();
+  return focused;
+}
+
+async function tryResolveFocusedPatientReplyWithOpenAi(originalReply, options = {}) {
+  const rulesFocused = tryRulesFirstFocusPatientReply(originalReply, options);
+  if (!replyLooksOverwhelmingByRules(rulesFocused)) {
+    return { reply: rulesFocused, source: 'rules' };
+  }
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) {
+    return { reply: rulesFocused, source: 'rules-fallback' };
+  }
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un editor de respuestas de WhatsApp para un consultorio médico en español rioplatense.',
+    'Tarea: si la respuesta propuesta es abruminante (mezcla precio + link de turno + particular + varias preguntas), devolvé una versión CORTA que responda SOLO lo que el paciente preguntó.',
+    'Si la respuesta ya es concisa y responde una sola cosa, devolvé exactamente: OK',
+    'Si hay que acortar, devolvé: REVISED: <texto>',
+    'Reglas: no inventes datos; no agregues link de agenda ni turno si preguntaron solo costo/plus/obra social; máximo 2 oraciones cortas; no hagas preguntas extra salvo que la respuesta original sea solo una pregunta necesaria.',
+  ].join('\n');
+  const userContent = `${buildOpenAiClassifierUserContent(options.userMessage || '', {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : ''),
+    profileDisplayName: options.profileDisplayName,
+  })}\n\nRespuesta propuesta del bot:\n${originalReply}`;
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 120,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return { reply: rulesFocused, source: 'openai-error' };
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim() : '';
+    if (!normalized || normalized.toUpperCase() === 'OK') {
+      return { reply: rulesFocused, source: 'openai-ok' };
+    }
+    const revisedMatch = normalized.match(/^REVISED:\s*(.+)$/is);
+    if (revisedMatch && revisedMatch[1].trim().length > 0) {
+      return { reply: revisedMatch[1].trim(), source: 'openai-revised' };
+    }
+    if (normalized.length > 0 && normalized.length <= PATIENT_REPLY_MAX_RECOMMENDED_LENGTH + 80) {
+      return { reply: normalized, source: 'openai-direct' };
+    }
+    return { reply: rulesFocused, source: 'openai-unparsed' };
+  } catch (error) {
+    console.error('OpenAI focused patient reply editor failed', error);
+    return { reply: rulesFocused, source: 'openai-exception' };
+  }
+}
+
+function buildConsultationPriceAnsweredStatePatch() {
+  return {
+    consultationPriceAnsweredAtMs: Date.now(),
+    state: undefined,
+    awaitingConsultationPriceHealthInsuranceAtMs: null,
+  };
 }
 
 function buildMicroCommitmentMessageWithState(priorState, forceOffer = false) {
@@ -1962,12 +2084,17 @@ function buildAskHealthInsuranceForConsultationPriceMessage() {
 }
 
 async function buildConsultationPriceReplyForSedeAndHealthInsurance(sede, healthInsuranceName, priorState) {
-  const plusReply = await buildHealthInsurancePlusReplyOrAskCity(sede, healthInsuranceName, priorState);
+  const replyOptions = { suppressBookingLinkOffer: true, replyContext: 'consultation_price' };
+  const plusReply = await buildHealthInsurancePlusReplyOrAskCity(
+    sede,
+    healthInsuranceName,
+    priorState,
+    replyOptions
+  );
   if (plusReply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
     return buildAskSedeForHealthInsuranceMismatchMessage(sede.displayName, healthInsuranceName);
   }
-  const privatePriceReply = await buildPrivatePriceReply(sede);
-  return `${plusReply}\n\nSi preferís atención particular: ${privatePriceReply}`;
+  return plusReply;
 }
 
 async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
@@ -2329,7 +2456,7 @@ function messageAsksAboutCardiologicoHealthInsuranceInCorrientes(rawText, priorS
   return Boolean(sede && sede.envKey === 'CALENDLY_CORRIENTES');
 }
 
-async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName, priorState) {
+async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsuranceName, priorState, options = {}) {
   debugBotLog('buildHealthInsurancePlusReplyOrAskCity', {
     cityDisplayName: cityEntry?.displayName,
     healthInsuranceName,
@@ -2351,7 +2478,8 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     if (isKnownNoPlus) {
       return appendBookingLinkOfferIfAllowed(
         priorState,
-        `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus.`
+        `En ${cityEntry.displayName} trabajamos con ${healthInsuranceName} sin plus.`,
+        options
       );
     }
     const existsElsewhere = await healthInsuranceExistsInAnyCity(healthInsuranceName);
@@ -2370,7 +2498,8 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
   if (!plusRule.isAccepted) {
     return appendBookingLinkOfferIfAllowed(
       priorState,
-      `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación.`
+      `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación.`,
+      options
     );
   }
 
@@ -2382,7 +2511,8 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     if (plusFormatted) {
       return appendBookingLinkOfferIfAllowed(
         priorState,
-        `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}.`
+        `En ${cityEntry.displayName} con ${osDisplayName} hay un plus de $${plusFormatted}.`,
+        options
       );
     }
     return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
@@ -2390,7 +2520,8 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
 
   return appendBookingLinkOfferIfAllowed(
     priorState,
-    `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus.`
+    `En ${cityEntry.displayName} trabajamos con ${osDisplayName} sin plus.`,
+    options
   );
 }
 
@@ -3066,25 +3197,33 @@ async function sendConsultationPriceQuestionReply(from, bodyText, priorState, pr
   const healthInsuranceName = patientContext.healthInsuranceName;
 
   if (lastSede && healthInsuranceName) {
-    const reply = await buildConsultationPriceReplyForSedeAndHealthInsurance(
+    const rawReply = await buildConsultationPriceReplyForSedeAndHealthInsurance(
       lastSede,
       healthInsuranceName,
       mergedState
     );
+    const focusedReply = await tryResolveFocusedPatientReplyWithOpenAi(rawReply, {
+      replyContext: 'consultation_price',
+      suppressBookingLinkOffer: true,
+      priorState: mergedState,
+      userMessage: bodyText,
+      profileDisplayName,
+      conversationContext: buildIntentRoutingOpenAiContext(mergedState),
+    });
+    const reply = focusedReply.reply;
     const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
     await setConversationState(
       from,
       mergeConversationStatePreservingGreeting(
         mergedState,
-        buildAwaitingLinkConfirmationState(lastSede, 'after_consultation_price', {
-          healthInsuranceName,
-        }),
+        {},
         {
           ...(wrapped.nextStatePatch || {}),
           ...(buildLastSedeStatePatch(lastSede) || {}),
           healthInsuranceName,
           lastHealthInsuranceName: healthInsuranceName,
           ...buildClearedPendingConsultationPriceIntentPatch(),
+          ...buildConsultationPriceAnsweredStatePatch(),
           ...buildLastBotReplyStatePatch(wrapped.messageText),
         }
       )
@@ -4213,7 +4352,17 @@ function buildIntentRoutingOpenAiContext(priorState) {
   }
   if (stateHasPendingConsultationPriceIntent(priorState)) {
     contextLines.push(
-      'El paciente preguntó el precio/costo de la consulta (sin decir particular) y falta obra social; si responde sede u obra social, continuar con plus/aceptación y valor particular como referencia, NO agendar directo.'
+      'El paciente preguntó el precio/costo de la consulta (sin decir particular) y falta obra social; si responde sede u obra social, continuar con plus/aceptación, NO agendar directo ni apilar particular + link en el mismo mensaje.'
+    );
+  }
+  if (
+    priorState &&
+    typeof priorState === 'object' &&
+    Number.isFinite(Number(priorState.consultationPriceAnsweredAtMs)) &&
+    Date.now() - Number(priorState.consultationPriceAnsweredAtMs) <= CONSULTATION_PRICE_ANSWERED_WINDOW_MS
+  ) {
+    contextLines.push(
+      'Ya se respondió el costo/plus de la consulta con obra social; esperar la próxima pregunta del paciente (turno, particular, etc.) sin ofrecer link proactivamente.'
     );
   }
   if (stateHasRecentScheduleDiscussionContext(priorState)) {

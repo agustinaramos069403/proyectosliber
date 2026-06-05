@@ -103,7 +103,8 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “precio de la consulta” / “preio de la consulta” / “qué costo tiene la consulta” (sin decir particular) → pedir ciudad y luego obra social; recién después plus/aceptación + valor particular de referencia
   - Tras pedir ciudad por costo consulta genérico: “ctes” / “Corrientes” → “¿qué obra social/prepaga tenés?” (NO $45.000 particular directo)
   - “consulta particular” / “y particular?” → precio particular desde Sheets tras ciudad (sin pedir obra social)
-  - Repetir “quiero saber qué costo tiene la consulta” con sede ya informada → pedir OS si falta, o plus + particular de referencia (NO link de agenda)
+  - Tras OS en flujo de costo consulta genérico: “OSDE” → solo plus/aceptación (ej. “En Corrientes trabajamos con OSDE sin plus.”). NO link de turno ni particular en el mismo mensaje; esperar próxima pregunta
+  - Si el paciente después pregunta turno o particular, responder solo eso en cada mensaje
   - Después de hablar de precio de estudio: “precio consulta particular?” → precio de consulta desde Google Sheets (NO mandar link de agenda por la palabra “consulta”)
   - Router OpenAI primero (con contexto de sede/estudio previo) para desambiguar precio consulta vs agendar vs estudio
 
