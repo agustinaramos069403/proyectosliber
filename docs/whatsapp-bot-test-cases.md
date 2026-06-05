@@ -34,6 +34,12 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “Hola, quiero turno”
   - “Buenas, cuánto sale la consulta”
 
+## Obra social / prepaga
+- “tengo obra social Pani/PAMI”, “soy de OSDE” → IA clasifica HEALTH_INSURANCE (NO horarios ni link de agenda)
+- Typos: “Pani” → PAMI
+- PAMI no aceptada: “En Corrientes no trabajamos con PAMI.” (sin link de turno en el mismo mensaje)
+- Con sede ya en contexto (usuario que vuelve): responder aceptación/plus sin pedir ciudad de nuevo
+
 ## Dirección / ubicación
 - “dónde está la clínica”, “dirección del consultorio”, “cómo llego”, “me pasás la ubi” → dirección/maps (NO ofrecer link de turno)
 - Con sede ya informada (ej. Corrientes tras precio consulta): responder dirección de esa sede sin pedir ciudad de nuevo

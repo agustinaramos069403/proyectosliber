@@ -194,6 +194,7 @@ const PENDING_CONSULTATION_PRICE_INTENT_WINDOW_MS = 30 * 60 * 1000;
 const CONSULTATION_PRICE_HEALTH_INSURANCE_WINDOW_MS = 30 * 60 * 1000;
 const CONSULTATION_PRICE_ANSWERED_WINDOW_MS = 30 * 60 * 1000;
 const PATIENT_REPLY_MAX_RECOMMENDED_LENGTH = 180;
+const KNOWN_NOT_ACCEPTED_HEALTH_INSURANCE_CANONICAL_NAMES = ['PAMI'];
 const LAST_BOT_REPLY_TEXT_MAX_LENGTH = 500;
 const SCHEDULE_DISCUSSION_WINDOW_MS = 30 * 60 * 1000;
 const PREFERRED_DAY_BOOKING_WINDOW_MS = 30 * 60 * 1000;
@@ -1682,7 +1683,11 @@ function shouldOfferBookingLink(priorState) {
 }
 
 function appendBookingLinkOfferIfAllowed(priorState, messageText, options = {}) {
-  if (options.suppressBookingLinkOffer || options.replyContext === 'consultation_price') {
+  if (
+    options.suppressBookingLinkOffer ||
+    options.replyContext === 'consultation_price' ||
+    options.replyContext === 'health_insurance_info'
+  ) {
     return messageText;
   }
   if (!shouldOfferBookingLink(priorState)) return messageText;
@@ -2398,8 +2403,75 @@ function messageLooksLikeHealthInsurancePlusQuestion(rawText) {
     normalized.includes('prevencion') ||
     normalized.includes('jerarquicos') ||
     normalized.includes('plus') ||
-    normalized.includes('coseguro')
+    normalized.includes('coseguro') ||
+    normalized.includes('pami') ||
+    normalized.includes('pani')
   );
+}
+
+function messageStatesHealthInsuranceMembership(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('tengo obra social') ||
+    normalized.includes('tengo prepaga') ||
+    normalized.includes('mi obra social') ||
+    normalized.includes('mi prepaga') ||
+    normalized.includes('soy de osde') ||
+    normalized.includes('soy de pami') ||
+    normalized.includes('soy de pani') ||
+    normalized.includes('soy osde') ||
+    normalized.includes('soy pami')
+  );
+}
+
+function normalizeHealthInsuranceCanonicalName(healthInsuranceName) {
+  if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return '';
+  const normalized = normalizeForMatch(healthInsuranceName).trim();
+  if (!normalized) return '';
+  if (normalized.includes('pami') || normalized === 'pani' || normalized === 'pam') return 'PAMI';
+  return healthInsuranceName.trim();
+}
+
+function isKnownNotAcceptedHealthInsurance(healthInsuranceName) {
+  const canonicalName = normalizeHealthInsuranceCanonicalName(healthInsuranceName);
+  return KNOWN_NOT_ACCEPTED_HEALTH_INSURANCE_CANONICAL_NAMES.includes(canonicalName);
+}
+
+function tryExtractHealthInsuranceNameFromPhrase(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('pami') || normalized.includes('pani') || /\bpam\b/.test(normalized)) {
+    return 'PAMI';
+  }
+  const phrasePatterns = [
+    /(?:tengo|tiene|tenes|tenés)\s+(?:la\s+)?(?:obra social|prepaga)\s+([a-z0-9][a-z0-9\s.-]{1,40})/,
+    /(?:obra social|prepaga)\s+(?:es\s+)?([a-z0-9][a-z0-9\s.-]{1,40})/,
+    /(?:soy de|tengo)\s+([a-z0-9][a-z0-9\s.-]{1,30})/,
+  ];
+  for (const phrasePattern of phrasePatterns) {
+    const match = normalized.match(phrasePattern);
+    if (!match || !match[1]) continue;
+    const candidate = match[1].trim();
+    const fromRules = tryExtractHealthInsuranceName(candidate);
+    if (fromRules) return fromRules;
+    if (candidate.includes('pami') || candidate.includes('pani')) return 'PAMI';
+  }
+  return null;
+}
+
+async function resolveHealthInsuranceNameFromMessage(bodyText, priorState) {
+  const fromRules = tryExtractHealthInsuranceName(bodyText) || tryExtractHealthInsuranceNameFromPhrase(bodyText);
+  if (fromRules) return normalizeHealthInsuranceCanonicalName(fromRules);
+  if (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)) {
+    const fromSheets = await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText);
+    if (fromSheets) return fromSheets;
+  }
+  if (messageLooksLikeHealthInsurancePlusQuestion(bodyText) || messageStatesHealthInsuranceMembership(bodyText)) {
+    const fromOpenAi = await tryResolveHealthInsuranceNameWithOpenAi(bodyText);
+    if (fromOpenAi) return fromOpenAi;
+  }
+  return null;
 }
 
 function tryExtractHealthInsuranceName(rawText) {
@@ -2428,6 +2500,7 @@ function tryExtractHealthInsuranceName(rawText) {
   if (normalized.includes('prevencion')) return 'PREVENCION SALUD SA';
   if (normalized.includes('jerarquic')) return 'JERARQUICOS SALUD';
   if (normalized.includes('funcacorr')) return 'FUNCACORR';
+  if (normalized.includes('pami') || normalized.includes('pani') || /\bpam\b/.test(normalized)) return 'PAMI';
   return null;
 }
 
@@ -2461,6 +2534,18 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     cityDisplayName: cityEntry?.displayName,
     healthInsuranceName,
   });
+  const canonicalHealthInsuranceName = normalizeHealthInsuranceCanonicalName(healthInsuranceName);
+  const displayHealthInsuranceName = canonicalHealthInsuranceName || healthInsuranceName;
+  const conciseReply = options.replyContext === 'health_insurance_info' || options.suppressBookingLinkOffer;
+
+  if (isKnownNotAcceptedHealthInsurance(displayHealthInsuranceName)) {
+    return appendBookingLinkOfferIfAllowed(
+      priorState,
+      `En ${cityEntry.displayName} no trabajamos con ${displayHealthInsuranceName}.`,
+      options
+    );
+  }
+
   const plusRule = await lookupPlusRule(cityEntry.displayName, healthInsuranceName);
   // Prices are not provided via WhatsApp; always route to evaluation/office confirmation.
 
@@ -2491,16 +2576,22 @@ async function buildHealthInsurancePlusReplyOrAskCity(cityEntry, healthInsurance
     if (existsElsewhere) {
       return 'ASK_CITY_FOR_HEALTH_INSURANCE';
     }
+    if (conciseReply) {
+      return appendBookingLinkOfferIfAllowed(
+        priorState,
+        `En ${cityEntry.displayName} no trabajamos con ${displayHealthInsuranceName}.`,
+        options
+      );
+    }
     return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
   }
 
-  const osDisplayName = healthInsuranceName;
+  const osDisplayName = displayHealthInsuranceName;
   if (!plusRule.isAccepted) {
-    return appendBookingLinkOfferIfAllowed(
-      priorState,
-      `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación.`,
-      options
-    );
+    const notAcceptedMessage = conciseReply
+      ? `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}.`
+      : `En ${cityEntry.displayName} no trabajamos con ${osDisplayName}. Si querés, podés atenderte de manera particular; para confirmarte valores y cómo proceder, lo ideal es una consulta de evaluación.`;
+    return appendBookingLinkOfferIfAllowed(priorState, notAcceptedMessage, options);
   }
 
   if (plusRule.hasPlus) {
@@ -2945,6 +3036,9 @@ async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, pro
     messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
     (messageAsksForMapsLocation(bodyText) && !messageLooksLikeBookingIntent(bodyText))
   ) {
+    return false;
+  }
+  if (messageLooksLikeHealthInsurancePlusQuestion(bodyText) || messageStatesHealthInsuranceMembership(bodyText)) {
     return false;
   }
   if (messageMentionsOutOfCoverageCity(bodyText)) {
@@ -3659,6 +3753,184 @@ async function tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, pr
   return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
 }
 
+async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, options = {}) {
+  if (messageLooksLikeHealthInsurancePlusQuestion(userMessage)) return true;
+  if (messageStatesHealthInsuranceMembership(userMessage)) return true;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return false;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense (Argentina).',
+    'Tarea: decidir si el paciente informa o pregunta por su obra social/prepaga (aceptación, plus, cobertura).',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "tengo obra social PAMI/Pani", "soy de OSDE", "¿aceptan Swis?", "tengo prepaga", "mi obra social es ...".',
+    'NO ejemplos: pedir turno/link, precio de consulta, dirección, horarios del Dr., saludo sin mencionar cobertura.',
+    'Si dice "tengo obra social X" aunque X sea typo (Pani=PAMI), respondé YES.',
+  ].join('\n');
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : '',
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    if (normalized.startsWith('YES')) return true;
+    if (normalized.startsWith('NO')) return false;
+    return null;
+  } catch (error) {
+    console.error('OpenAI health insurance plus intent classifier failed', error);
+    return null;
+  }
+}
+
+async function shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName) {
+  if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) return true;
+  if (messageStatesHealthInsuranceMembership(bodyText)) return true;
+  const openAiDecision = await tryResolveHealthInsurancePlusIntentWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  return openAiDecision === true;
+}
+
+async function sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName) {
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState);
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  const replyOptions = { suppressBookingLinkOffer: true, replyContext: 'health_insurance_info' };
+
+  if (healthInsuranceName && lastSede) {
+    const rawReply = await buildHealthInsurancePlusReplyOrAskCity(
+      lastSede,
+      healthInsuranceName,
+      mergedState,
+      replyOptions
+    );
+    if (rawReply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+      const askCityText = buildAskSedeForHealthInsuranceMismatchMessage(
+        lastSede.displayName,
+        healthInsuranceName
+      );
+      const askCityWrapped = buildAutoReplyWithGreetingIfNeeded(askCityText, profileDisplayName, mergedState);
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(
+          mergedState,
+          { state: 'awaiting_health_insurance_city', healthInsuranceName },
+          {
+            ...(askCityWrapped.nextStatePatch || {}),
+            ...(buildLastSedeStatePatch(lastSede) || {}),
+            lastHealthInsuranceName: healthInsuranceName,
+            ...buildLastBotReplyStatePatch(askCityWrapped.messageText),
+          }
+        )
+      );
+      await sendWhatsAppText(from, askCityWrapped.messageText);
+      return true;
+    }
+    const focusedReply = await tryResolveFocusedPatientReplyWithOpenAi(rawReply, {
+      replyContext: 'health_insurance_info',
+      suppressBookingLinkOffer: true,
+      priorState: mergedState,
+      userMessage: bodyText,
+      profileDisplayName,
+    });
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(focusedReply.reply, profileDisplayName, mergedState);
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(
+        mergedState,
+        {},
+        {
+          ...(wrapped.nextStatePatch || {}),
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastBotReplyStatePatch(wrapped.messageText),
+        }
+      )
+    );
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+
+  if (healthInsuranceName && !lastSede) {
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(buildAskSedeMessage(), profileDisplayName, mergedState);
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(
+        mergedState,
+        { state: 'awaiting_health_insurance_city', healthInsuranceName },
+        {
+          ...(wrapped.nextStatePatch || {}),
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastBotReplyStatePatch(wrapped.messageText),
+        }
+      )
+    );
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(
+    buildAskHealthInsuranceNameMessage(bodyText),
+    profileDisplayName,
+    mergedState
+  );
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      mergedState,
+      { state: 'awaiting_health_insurance_name' },
+      {
+        ...(wrapped.nextStatePatch || {}),
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      }
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
+async function tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName) {
+  if (!(await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName))) {
+    return false;
+  }
+  return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
+}
+
 async function tryResolveScheduleQuestionWithOpenAi(userMessage, options = {}) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
@@ -3770,6 +4042,11 @@ async function sendScheduleQuestionReply(from, bodyText, priorState, profileDisp
 }
 
 async function tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName) {
+  if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) return false;
+  if (messageStatesHealthInsuranceMembership(bodyText)) return false;
+  if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
+    return false;
+  }
   const ruleMatch = messageLooksLikeScheduleAvailabilityQuestion(bodyText);
   if (!getOpenAiApiKey()) {
     if (!ruleMatch) return false;
@@ -3911,6 +4188,9 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
   if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
     return false;
   }
+  if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
+    return false;
+  }
   if (await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName)) {
     return false;
   }
@@ -3994,7 +4274,7 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     'Task: Choose the single MOST important intent to answer first.',
     `Return ONLY one token from: ${MULTI_INTENT_ROUTER_TOKENS.join(', ')}.`,
     'Guidelines:',
-    '- If asking about accepted insurance / plus: HEALTH_INSURANCE.',
+    '- If asking about accepted insurance / plus / "tengo obra social X": HEALTH_INSURANCE. NOT schedule or booking.',
     '- If asking about CONSULTATION price/costo/valor WITHOUT saying particular (e.g. "qué costo tiene la consulta", "cuánto sale la consulta", "precio de la consulta"): CONSULTATION_PRICE. Must ask obra social before giving particular price. This is NOT booking.',
     '- If asking explicit PARTICULAR consultation price / control / seguimiento particular (e.g. "consulta particular", "precio consulta particular"): PRIVATE_PRICE.',
     '- If context shows pending generic consultation price and user answers with city only: CONSULTATION_PRICE (ask obra social next), NOT PRIVATE_PRICE.',
@@ -4085,6 +4365,9 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
     return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
+  if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
+    return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
   if (await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName)) {
     return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
@@ -4098,6 +4381,10 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
 
   if (primaryIntent === 'CONSULTATION_PRICE') {
     return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+
+  if (primaryIntent === 'HEALTH_INSURANCE') {
+    return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
 
   if (
@@ -4143,6 +4430,9 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'SCHEDULE') {
+    if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
+      return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
+    }
     return sendScheduleQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
 
@@ -4317,7 +4607,8 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
     '{"isHealthInsurance":true|false,"bestGuess":string|null}',
     '',
     'Rules:',
-    '- Accept typos and variants (e.g., "issune", "issunne", "ioscor", "sancor salud").',
+    '- Accept typos and variants (e.g., "issune", "issunne", "ioscor", "sancor salud", "pani" for PAMI).',
+    '- PAMI may not be in the canonical list; still return bestGuess "PAMI" when the user means PAMI.',
     '- If the message is about something else, return isHealthInsurance=false.',
   ].join('\n');
 
@@ -4358,7 +4649,11 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
     if (parsed.isHealthInsurance !== true) return null;
     const bestGuess = typeof parsed.bestGuess === 'string' ? parsed.bestGuess.trim() : '';
     if (!bestGuess) return null;
-    return mapHealthInsuranceGuessToKnownName(bestGuess, knownNames);
+    const mappedName = mapHealthInsuranceGuessToKnownName(bestGuess, knownNames);
+    if (mappedName) return mappedName;
+    const canonicalGuess = normalizeHealthInsuranceCanonicalName(bestGuess);
+    if (canonicalGuess) return canonicalGuess;
+    return null;
   } catch (error) {
     console.error('OpenAI health-insurance resolver request failed', error);
     return null;
@@ -4563,6 +4858,8 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
     messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText);
   const hasStudySignal = messageMatchesStudiesTopic(rawText);
   if (messageLooksLikeStudyPriceFollowUp(rawText, priorState)) return true;
+  if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return true;
+  if (messageStatesHealthInsuranceMembership(rawText)) return true;
   if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return true;
   if (messageAsksForMapsLocation(rawText) && !messageLooksLikeBookingIntent(rawText)) return true;
   if (shouldAskHealthInsuranceBeforeConsultationPrice(priorState)) return true;
@@ -7153,6 +7450,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
