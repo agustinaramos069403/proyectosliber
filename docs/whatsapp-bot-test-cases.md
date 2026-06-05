@@ -35,6 +35,10 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - “Buenas, cuánto sale la consulta”
 
 ## Turnos / reservas / link
+- Flujo con contexto (IA + estado):
+  - “quiero un turno” → sede → **NO** “¿en qué te puedo ayudar?”; ofrecer link o “¿te lo mando?”
+  - Tras horarios en Corrientes: “martes por favor” → confirmar martes en esa sede + ofrecer link (NO volver a pedir Corrientes/Resistencia)
+  - Responder “1” o “ctes” después de pedir sede para turno debe continuar agendamiento, no resetear conversación
 - Después de precio de estudio (espirometría/test) con sede y obra social ya informadas:
   - “perfecto, entonces para agendar turno como hago?” → explicar proceso o pasar link (NO mensaje de “no abre el link”)
   - “quiero agendar” → no volver a pedir sede si ya dijo Corrientes/Resistencia; ofrecer link
@@ -95,9 +99,10 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
 - Evitar confusión con estudios:
   - “cuánto cuesta espirometría/prick/parche” no debe activar el precio de consulta; pedir obra social y sede para el estudio
   - Typos de espirometría: “estirometria”, “espirometria” → mismo flujo de precio de estudio (no $40.000 de consulta)
-  - “precio de la consulta” / “qué costo tiene la consulta” sí debe responder precio particular de consulta (distinto del estudio)
-  - Tras pedir ciudad por costo consulta: “Corrientes” → precio desde Sheets en Corrientes (NO “¿En qué te puedo ayudar?”)
-  - Repetir “quiero saber qué costo tiene la consulta” con sede ya informada → precio (NO link de agenda)
+  - “precio de la consulta” / “preio de la consulta” / “qué costo tiene la consulta” (sin decir particular) → pedir ciudad y luego obra social; recién después plus/aceptación + valor particular de referencia
+  - Tras pedir ciudad por costo consulta genérico: “ctes” / “Corrientes” → “¿qué obra social/prepaga tenés?” (NO $45.000 particular directo)
+  - “consulta particular” / “y particular?” → precio particular desde Sheets tras ciudad (sin pedir obra social)
+  - Repetir “quiero saber qué costo tiene la consulta” con sede ya informada → pedir OS si falta, o plus + particular de referencia (NO link de agenda)
   - Después de hablar de precio de estudio: “precio consulta particular?” → precio de consulta desde Google Sheets (NO mandar link de agenda por la palabra “consulta”)
   - Router OpenAI primero (con contexto de sede/estudio previo) para desambiguar precio consulta vs agendar vs estudio
 
