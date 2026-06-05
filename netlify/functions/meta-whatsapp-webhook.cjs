@@ -2941,6 +2941,12 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
 
 async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName) {
   if (!stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+  if (
+    messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
+    (messageAsksForMapsLocation(bodyText) && !messageLooksLikeBookingIntent(bodyText))
+  ) {
+    return false;
+  }
   if (messageMentionsOutOfCoverageCity(bodyText)) {
     await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
     return true;
@@ -3010,7 +3016,9 @@ async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, pro
       messageMatchesStudiesTopic(bodyText) ||
       messageAsksAboutConditionTreatment(bodyText) ||
       messageLooksLikeChronicSymptomFrustration(bodyText) ||
-      messageLooksLikeScheduleAvailabilityQuestion(bodyText));
+      messageLooksLikeScheduleAvailabilityQuestion(bodyText) ||
+      messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
+      (messageAsksForMapsLocation(bodyText) && !messageLooksLikeBookingIntent(bodyText)));
   if (shouldBypassPendingLinkConfirmation) {
     return false;
   }
@@ -3535,6 +3543,122 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   return true;
 }
 
+async function tryResolveAddressQuestionWithOpenAi(userMessage, options = {}) {
+  if (messageAsksAboutSedeAddressOrHowToArrive(userMessage)) return true;
+  if (messageAsksForMapsLocation(userMessage) && !messageLooksLikeBookingIntent(userMessage)) return true;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return false;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
+    'Tarea: decidir si el paciente pregunta la DIRECCIÓN/UBICACIÓN de la clínica/consultorio/sede o cómo llegar.',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "dónde está la clínica", "dirección del consultorio", "cómo llego", "me pasás la ubi", "dónde queda", "dónde atienden".',
+    'NO ejemplos: pedir turno/link/agenda, precio, obra social, qué días atiende el Dr., horarios de consulta del médico.',
+    'NO: "consulta" como turno médico; "clínica" preguntando ubicación SÍ es YES.',
+  ].join('\n');
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : '',
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    if (normalized.startsWith('YES')) return true;
+    if (normalized.startsWith('NO')) return false;
+    return null;
+  } catch (error) {
+    console.error('OpenAI address question classifier failed', error);
+    return null;
+  }
+}
+
+async function shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName) {
+  if (messageAsksAboutSedeAddressOrHowToArrive(bodyText)) return true;
+  if (messageAsksForMapsLocation(bodyText) && !messageLooksLikeBookingIntent(bodyText)) return true;
+  const openAiDecision = await tryResolveAddressQuestionWithOpenAi(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  return openAiDecision === true;
+}
+
+async function sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName) {
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const sedeFromMessage = findSedeFromText(bodyText) || patientContext.sedeEntry;
+  const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(mergedState);
+  const reply = messageAsksForMapsLocation(bodyText)
+    ? buildSedeMapsLocationReply(mergedState, lastSede)
+    : buildSedeAddressReply(mergedState, lastSede);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
+  const preservedSessionState =
+    stateLooksLikeAwaitingLinkConfirmation(priorState) && priorState && typeof priorState === 'object'
+      ? {
+          greeted: Boolean(priorState.greeted),
+          lastSeenAtMs: priorState.lastSeenAtMs,
+          lastSedeEnvKey: priorState.lastSedeEnvKey,
+          lastSedeDisplayName: priorState.lastSedeDisplayName,
+          lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+          lastSedeAtMs: priorState.lastSedeAtMs,
+          lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+        }
+      : {};
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      mergedState,
+      {},
+      {
+        ...(wrapped.nextStatePatch || {}),
+        ...(lastSede ? buildLastSedeStatePatch(lastSede) : {}),
+        ...preservedSessionState,
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      }
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
+async function tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName) {
+  if (!(await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName))) {
+    return false;
+  }
+  return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+}
+
 async function tryResolveScheduleQuestionWithOpenAi(userMessage, options = {}) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
@@ -3784,6 +3908,9 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
 }
 
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
+  if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+    return false;
+  }
   if (await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName)) {
     return false;
   }
@@ -3872,14 +3999,8 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
     '- If asking explicit PARTICULAR consultation price / control / seguimiento particular (e.g. "consulta particular", "precio consulta particular"): PRIVATE_PRICE.',
     '- If context shows pending generic consultation price and user answers with city only: CONSULTATION_PRICE (ask obra social next), NOT PRIVATE_PRICE.',
     '- If asking study/test price (espirometría, prick), obra social plus for a study, or a short follow-up after the assistant offered study value ("si", "dame el precio", "decime el valor"): STUDY_PRICE.',
+    '- If asking address / how to arrive / where the clinic is ("dónde está la clínica", "dirección", "cómo llego"): ADDRESS. NOT booking.',
     '- If asking to book / reserve / get the link / sacar turno: BOOKING.',
-    '- If asking what days/hours the DOCTOR attends (not clinic reception hours): SCHEDULE. Offer agenda link, never list clinic hours as doctor hours.',
-    '- If context shows schedule/booking talk and user picks a weekday ("martes", "el jueves"): PREFERRED_DAY. Not SCHEDULE.',
-    '- If asking about study preparation, what studies to bring, or general study info without price: STUDIES.',
-    '- If the assistant last asked "te cuente el valor o preferís agendar" about a study and the user affirms or asks price: STUDY_PRICE, not PRIVATE_PRICE.',
-    '- If the user explicitly asks consultation/particular price even with study context: PRIVATE_PRICE.',
-    '- If asking if the doctor treats a condition: CONDITION.',
-    '- If asking address / how to arrive: ADDRESS.',
     '- If asking what to bring / referral / authorization / payments / invoice: DOCUMENTS.',
     '- If unclear, return OTHER.',
   ].join('\n');
@@ -3955,6 +4076,9 @@ async function sendStudyPriceInformationReply(from, bodyText, priorState, profil
 async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
   if (!getOpenAiApiKey()) return false;
   if (stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+  if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+    return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
   if (await shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName)) {
     return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
@@ -4022,7 +4146,14 @@ async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     });
   }
 
+  if (primaryIntent === 'ADDRESS') {
+    return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+  }
+
   if (primaryIntent === 'BOOKING') {
+    if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+      return sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+    }
     if (stateLooksLikeAwaitingLinkConfirmation(priorState) && messageConfirmsLinkSend(bodyText)) {
       const entryFromState = resolveSedeEntryFromState(priorState);
       if (entryFromState) {
@@ -4426,6 +4557,8 @@ function messageLooksLikeOpenAiIntentRoutingCandidate(rawText, priorState) {
     messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText);
   const hasStudySignal = messageMatchesStudiesTopic(rawText);
   if (messageLooksLikeStudyPriceFollowUp(rawText, priorState)) return true;
+  if (messageAsksAboutSedeAddressOrHowToArrive(rawText)) return true;
+  if (messageAsksForMapsLocation(rawText) && !messageLooksLikeBookingIntent(rawText)) return true;
   if (shouldAskHealthInsuranceBeforeConsultationPrice(priorState)) return true;
   if (stateHasPendingPrivatePriceIntent(priorState)) return true;
   if (stateHasPendingConsultationPriceIntent(priorState)) return true;
@@ -4768,18 +4901,35 @@ function messageAsksAboutVirtualVisit(rawText) {
 function messageAsksAboutSedeAddressOrHowToArrive(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  return (
+  const mentionsWhere =
+    normalized.includes('donde queda') ||
+    normalized.includes('donde esta') ||
+    normalized.includes('donde atienden') ||
+    normalized.includes('donde atiende') ||
+    normalized.includes('donde consulta') ||
+    normalized.includes('donde es') ||
+    normalized.includes('donde queda la') ||
+    normalized.includes('donde esta la');
+  const mentionsAddress =
     normalized.includes('direccion') ||
     normalized.includes('dirección') ||
-    normalized.includes('donde queda') ||
-    normalized.includes('dónde queda') ||
     normalized.includes('ubicacion') ||
     normalized.includes('ubicación') ||
     normalized.includes('como llego') ||
     normalized.includes('cómo llego') ||
     normalized.includes('como llegar') ||
-    normalized.includes('cómo llegar')
-  );
+    normalized.includes('cómo llegar');
+  const mentionsClinicPlace =
+    normalized.includes('clinica') ||
+    normalized.includes('consultorio') ||
+    normalized.includes('sede') ||
+    normalized.includes('centro medico') ||
+    normalized.includes('centro médico');
+  if (mentionsAddress) return true;
+  if (mentionsWhere) return true;
+  if (mentionsWhere && mentionsClinicPlace) return true;
+  if (normalized.includes('donde') && mentionsClinicPlace) return true;
+  return false;
 }
 
 function messageAsksForMapsLocation(rawText) {
@@ -6994,6 +7144,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
