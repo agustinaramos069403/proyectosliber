@@ -37,8 +37,10 @@ Este documento lista los casos/escenarios que fuimos probando y ajustando durant
   - Typos: “urno”, “un urno”
 - Pedido explícito de link:
   - “pasame el link”, “mandame el link”, “enviame el enlace”
-- Confirmación de link (humanizada, sin “respondé sí o no”):
+- Confirmación de link (humanizada, sin “respondé sí o no”; OpenAI interpreta la intención):
   - “sí”, “dale”, “ok”, “por favor”, “listo”
+  - Después de ofrecer el link: “por favor quiero agendar” → enviar link directo (no repetir la pregunta)
+  - Variaciones naturales: “bueno dale”, “me interesa”, “avancemos”, “joya pasame”
 - Rechazo de link:
   - “no”, “no por ahora”, “más tarde”, “no quiero”
   - Negación con “quiero” adentro: “no no quiero” (NO debe ganar)

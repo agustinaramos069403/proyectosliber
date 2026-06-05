@@ -81,7 +81,8 @@ const SEDE_ENTRIES = [
   },
 ];
 
-const ACTIVE_SEDE_OPTIONS_MESSAGE = 'Podés responder con 1 Corrientes o 2 Resistencia.';
+const ACTIVE_SEDE_OPTIONS_MESSAGE =
+  '¿Desde qué ciudad te quedaría mejor? Podés escribir 1 para Corrientes o 2 para Resistencia 😊';
 const ACTIVE_SEDE_CITIES_LIST_MESSAGE = 'Corrientes o Resistencia';
 const INACTIVE_SEDE_RESPONSE_MESSAGE =
   'Por ahora el Dr. atiende solo en Corrientes y Resistencia. ¿Desde cuál de esas ciudades te consultás?';
@@ -780,6 +781,21 @@ function buildOpenAiUserContent(userMessage, profileDisplayName) {
   }
   parts.push(`Mensaje del paciente:\n${userMessage}`);
   return parts.join('\n');
+}
+
+function buildOpenAiClassifierUserContent(userMessage, options = {}) {
+  const parts = [];
+  if (typeof options.lastAssistantMessage === 'string' && options.lastAssistantMessage.trim().length > 0) {
+    parts.push(`Último mensaje del asistente:\n${options.lastAssistantMessage.trim()}`);
+  }
+  if (typeof options.conversationContext === 'string' && options.conversationContext.trim().length > 0) {
+    parts.push(`Contexto de la conversación:\n${options.conversationContext.trim()}`);
+  }
+  if (typeof options.profileDisplayName === 'string' && options.profileDisplayName.trim().length > 0) {
+    parts.push(`Nombre de perfil de WhatsApp (opcional): ${options.profileDisplayName.trim()}`);
+  }
+  parts.push(`Mensaje del paciente:\n${String(userMessage || '')}`);
+  return parts.join('\n\n');
 }
 
 function getGoogleServiceAccountJson() {
@@ -1485,8 +1501,8 @@ function buildAskSedeForHealthInsuranceMismatchMessage(lastSedeDisplayName, heal
   return buildAskSedeMessage();
 }
 
-function buildMicroCommitmentMessage(entry) {
-  return '¿Querés que te pase el link para ver horarios disponibles y reservar?';
+function buildMicroCommitmentMessage() {
+  return 'Si querés, te paso el link para ver horarios y sacar turno. ¿Te lo mando?';
 }
 
 function shouldOfferBookingLink(priorState) {
@@ -1503,7 +1519,7 @@ function shouldOfferBookingLink(priorState) {
 
 function appendBookingLinkOfferIfAllowed(priorState, messageText) {
   if (!shouldOfferBookingLink(priorState)) return messageText;
-  return `${messageText} ¿Querés que te pase el link para ver horarios disponibles y reservar?`.trim();
+  return `${messageText} ${buildMicroCommitmentMessage()}`.trim();
 }
 
 function buildMicroCommitmentMessageWithState(priorState, forceOffer = false) {
@@ -1895,6 +1911,9 @@ function messageConfirmsLinkSend(rawText) {
   if (/^(si|dale|ok|oka|de una|listo|ya)\b/.test(normalized)) return true;
   if (/^(por favor|porfa|x favor)\b/.test(normalized)) return true;
   if (/^(gracias|genial|perfecto)\b/.test(normalized)) return true;
+  if (/\bquiero agendar\b/.test(normalized)) return true;
+  if (/\bquiero reservar\b/.test(normalized)) return true;
+  if (/\bquiero (un )?turno\b/.test(normalized)) return true;
   if (/\b(quiero|mandame|pasame|pasalo|mandalo|manda)\b/.test(normalized)) return true;
   if (normalized.includes('pasa el link') || normalized.includes('pasame el link')) return true;
   return false;
@@ -1916,20 +1935,31 @@ function messageClearlyRejectsLinkSend(rawText) {
   return false;
 }
 
-async function classifyAffirmativeIntentWithOpenAi(userMessage) {
+const BOOKING_LINK_OFFER_ASSISTANT_CONTEXT =
+  'El asistente acaba de ofrecer pasar el link de agenda (por ejemplo: "¿Te lo mando?" o "Si querés, te paso el link para ver horarios y sacar turno").';
+
+async function classifyAffirmativeIntentWithOpenAi(userMessage, options = {}) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
   const modelName = getOpenAiModelName();
 
   const systemPrompt = [
-    'You are a strict classifier for WhatsApp messages in Spanish.',
-    'Task: Decide if the user message is an AFFIRMATIVE confirmation to receive a booking link that was just offered.',
-    'Return only one token: YES or NO.',
-    'Rules:',
-    '- YES examples: "si", "si quiero", "dale", "ok", "pasame el link", "mandalo", "de una", "por favor", "porfa", "gracias".',
-    '- NO examples: "no", "no por ahora", "después", "mas tarde", questions not confirming.',
-    '- If unclear, return NO.',
+    'Sos un clasificador para mensajes de WhatsApp en español rioplatense (Argentina).',
+    'Tarea: decidir si el paciente CONFIRMA que quiere recibir el link de agenda que se le ofreció.',
+    'Respondé solo un token: YES o NO.',
+    'Reglas:',
+    '- YES: confirma aunque sea informal, con errores o mezclado con otra frase.',
+    '- YES ejemplos: "sí", "si quiero", "dale", "ok", "pasame el link", "por favor quiero agendar", "quiero agendar", "me gustaría", "bueno dale", "de una", "listo", "avancemos", "por favor", "porfa", "gracias", "joya", "perfecto".',
+    '- NO: rechaza, pospone o pregunta otra cosa sin confirmar el link.',
+    '- NO ejemplos: "no", "no por ahora", "después", "más tarde", "¿cuánto sale?", "¿qué es eso?".',
+    '- Si no está claro, devolvé NO.',
   ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    lastAssistantMessage: options.lastAssistantMessage || buildMicroCommitmentMessage(),
+    conversationContext: options.conversationContext || BOOKING_LINK_OFFER_ASSISTANT_CONTEXT,
+    profileDisplayName: options.profileDisplayName,
+  });
 
   try {
     const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
@@ -1944,7 +1974,7 @@ async function classifyAffirmativeIntentWithOpenAi(userMessage) {
         max_tokens: 3,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: String(userMessage || '') },
+          { role: 'user', content: userContent },
         ],
       }),
     });
@@ -1965,24 +1995,31 @@ async function classifyAffirmativeIntentWithOpenAi(userMessage) {
   }
 }
 
-async function decideNextActionForLinkConfirmationWithOpenAi(userMessage) {
+async function decideNextActionForLinkConfirmationWithOpenAi(userMessage, options = {}) {
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return null;
   const modelName = getOpenAiModelName();
 
   const systemPrompt = [
-    'You are a strict router for a WhatsApp booking flow in Spanish (Argentina).',
-    'Context: The assistant just asked: "¿Querés que te pase el link para ver horarios disponibles y reservar?"',
-    'Task: Decide the next action based on the user message.',
-    'Return ONLY one of these tokens: SEND_LINK, DO_NOT_SEND, ASK_CLARIFY.',
-    'Rules:',
-    '- If the user confirms intent (even politely or implicitly), return SEND_LINK.',
-    '- If the user rejects or postpones, return DO_NOT_SEND.',
-    '- If it is unclear (question unrelated, new topic), return ASK_CLARIFY.',
-    '- Examples for SEND_LINK: "sí", "si quiero", "por favor", "dale", "ok", "mandame", "pasame el link", "de una", "gracias".',
-    '- Examples for DO_NOT_SEND: "no", "no por ahora", "más tarde", "después", "ahora no".',
-    '- Examples for ASK_CLARIFY: "¿cuánto sale?", "¿qué es eso?", "¿para cuándo?", "no entiendo".',
-  ].join('\\n');
+    'Sos un router conversacional para un consultorio médico por WhatsApp en español rioplatense (Argentina).',
+    'Contexto: el asistente ofreció enviar el link de Calendly para reservar turno.',
+    'Tarea: según el mensaje del paciente, elegí la próxima acción.',
+    'Respondé SOLO uno de estos tokens: SEND_LINK, DO_NOT_SEND, ASK_CLARIFY.',
+    'Reglas:',
+    '- SEND_LINK: confirma recibir el link, aunque sea indirecto, educado o con typos.',
+    '- SEND_LINK ejemplos: "sí", "si quiero", "por favor quiero agendar", "quiero agendar", "dale", "ok", "mandame", "pasame el link", "bueno", "listo", "de una", "me interesa", "avancemos".',
+    '- DO_NOT_SEND: rechaza o pospone sin pedir el link ahora.',
+    '- DO_NOT_SEND ejemplos: "no", "no por ahora", "más tarde", "después", "ahora no", "sí cómo no" (sarcasmo).',
+    '- ASK_CLARIFY: pregunta otra cosa, cambia de tema o no queda claro si quiere el link.',
+    '- ASK_CLARIFY ejemplos: "¿cuánto sale?", "¿qué es eso?", "¿para cuándo?", "no entiendo", "¿aceptan OSDE?".',
+    '- Priorizá entender la intención real del paciente, no palabras exactas.',
+  ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    lastAssistantMessage: options.lastAssistantMessage || buildMicroCommitmentMessage(),
+    conversationContext: options.conversationContext || BOOKING_LINK_OFFER_ASSISTANT_CONTEXT,
+    profileDisplayName: options.profileDisplayName,
+  });
 
   try {
     const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
@@ -1994,10 +2031,10 @@ async function decideNextActionForLinkConfirmationWithOpenAi(userMessage) {
       body: JSON.stringify({
         model: modelName,
         temperature: 0,
-        max_tokens: 5,
+        max_tokens: 8,
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: String(userMessage || '') },
+          { role: 'user', content: userContent },
         ],
       }),
     });
@@ -2017,6 +2054,139 @@ async function decideNextActionForLinkConfirmationWithOpenAi(userMessage) {
     console.error('OpenAI router request failed', error);
     return null;
   }
+}
+
+async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = {}) {
+  if (messageClearlyRejectsLinkSend(userMessage)) {
+    return { action: 'DO_NOT_SEND', source: 'rules-reject' };
+  }
+
+  const routerDecision = await decideNextActionForLinkConfirmationWithOpenAi(userMessage, options);
+  if (routerDecision) {
+    return { action: routerDecision, source: 'openai-router' };
+  }
+
+  const affirmativeDecision = await classifyAffirmativeIntentWithOpenAi(userMessage, options);
+  if (affirmativeDecision === true) {
+    return { action: 'SEND_LINK', source: 'openai-affirmative' };
+  }
+  if (affirmativeDecision === false) {
+    return { action: 'DO_NOT_SEND', source: 'openai-affirmative' };
+  }
+
+  if (messageConfirmsLinkSend(userMessage) || messageLooksLikeBookingIntent(userMessage)) {
+    return { action: 'SEND_LINK', source: 'rules-fallback' };
+  }
+
+  return { action: 'ASK_CLARIFY', source: 'default' };
+}
+
+async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
+  if (messageLooksLikeBookingIntent(userMessage) || messageExplicitlyRequestsBookingLink(userMessage)) {
+    return true;
+  }
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return false;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador de intención para WhatsApp de un consultorio médico en español rioplatense.',
+    'Tarea: decidir si el paciente quiere AGENDAR / RESERVAR / SACAR TURNO o recibir el link de agenda.',
+    'Respondé solo: YES o NO.',
+    'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "me gustaría sacar turno", "por favor quiero agendar", typos como "urno" o "agendame".',
+    'NO ejemplos: solo pregunta precio, obra social, dirección o estudios sin pedir turno.',
+  ].join('\n');
+
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext: options.conversationContext,
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return false;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    return normalized.startsWith('YES');
+  } catch (error) {
+    console.error('OpenAI booking intent classifier failed', error);
+    return false;
+  }
+}
+
+function mapOpenAiSedeTokenToEntry(token) {
+  if (typeof token !== 'string') return null;
+  const normalized = token.trim().toUpperCase();
+  if (normalized === 'CORRIENTES' || normalized === '1') {
+    return SEDE_ENTRIES.find((entry) => entry.displayName === 'Corrientes') || null;
+  }
+  if (normalized === 'RESISTENCIA' || normalized === '2') {
+    return SEDE_ENTRIES.find((entry) => entry.displayName === 'Resistencia') || null;
+  }
+  return null;
+}
+
+async function tryResolveSedeFromTextWithOpenAi(rawText) {
+  const fromRules = findSedeFromText(rawText);
+  if (fromRules) return fromRules;
+
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un extractor de sede para un consultorio que atiende solo en Corrientes y Resistencia (Argentina).',
+    'Tarea: identificar a qué ciudad se refiere el paciente en un mensaje de WhatsApp en español.',
+    'Respondé SOLO uno de: CORRIENTES, RESISTENCIA, UNKNOWN.',
+    'Aceptá typos, abreviaturas (ctes, resis, rcia), números de menú (1=Corrientes, 2=Resistencia) y menciones indirectas.',
+    'Si no se puede saber, devolvé UNKNOWN.',
+  ].join('\n');
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 6,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: String(rawText || '') },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    return mapOpenAiSedeTokenToEntry(typeof text === 'string' ? text : '');
+  } catch (error) {
+    console.error('OpenAI sede resolver failed', error);
+    return null;
+  }
+}
+
+async function resolveSedeFromTextWithOpenAi(rawText) {
+  return findSedeFromText(rawText) || (await tryResolveSedeFromTextWithOpenAi(rawText));
 }
 
 const MULTI_INTENT_ROUTER_TOKENS = [
@@ -3348,7 +3518,7 @@ function buildScheduleQuestionLinkMessage(entry) {
   const url = getAgendaUrl(entry);
   if (url) {
     // Micro-compromiso first; the link is sent only after confirmation.
-    return `¿Querés que te pase el link para ver días y horarios disponibles en ${entry.displayName}?`;
+    return `Si querés, te paso el link para ver días y horarios en ${entry.displayName}. ¿Te lo mando?`;
   }
   return buildLinkMessage(entry);
 }
@@ -4569,8 +4739,13 @@ exports.handler = async (event) => {
             Number.isFinite(Number(priorState.lastStudyPriceContextAtMs)) &&
             Date.now() - Number(priorState.lastStudyPriceContextAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
           const hasFreshStudyMentionInCurrentMessage = Boolean(getStudyTypeFromText(bodyText));
-          if (hasRecentStudyPriceContext && messageLooksLikeBookingIntent(bodyText)) {
-            const lastSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+          if (
+            hasRecentStudyPriceContext &&
+            (messageLooksLikeBookingIntent(bodyText) ||
+              (await tryResolveBookingIntentWithOpenAi(bodyText, { profileDisplayName })))
+          ) {
+            const lastSede =
+              (await resolveSedeFromTextWithOpenAi(bodyText)) || resolveLastSedeEntryFromState(priorState);
             if (lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 buildLinkMessage(lastSede),
@@ -5546,7 +5721,7 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
-            const sedeChange = findSedeFromText(bodyText);
+            const sedeChange = await resolveSedeFromTextWithOpenAi(bodyText);
             if (sedeChange) {
               const pendingHealthInsuranceName =
                 priorState && typeof priorState === 'object' && typeof priorState.healthInsuranceName === 'string'
@@ -5600,17 +5775,19 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
             }
+            // OpenAI first: interpret confirmations like "por favor quiero agendar" in natural language.
+            const linkOfferDecision = await resolveBookingLinkOfferResponseWithOpenAi(bodyText, {
+              profileDisplayName,
+            });
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
-            // Clear the pending link-confirmation routing state but preserve the greeting session.
             const shouldBypassPendingLinkConfirmation =
-              messageLooksLikePrivatePriceQuestion(bodyText) ||
-              messageLooksLikeAnyPriceQuestion(bodyText) ||
-              messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
-              messageMatchesStudiesTopic(bodyText) ||
-              messageAsksAboutConditionTreatment(bodyText) ||
-              messageLooksLikeChronicSymptomFrustration(bodyText) ||
-              messageExplicitlyRequestsBookingLink(bodyText) ||
-              messageLooksLikeBookingIntent(bodyText);
+              linkOfferDecision.action === 'ASK_CLARIFY' &&
+              (messageLooksLikePrivatePriceQuestion(bodyText) ||
+                messageLooksLikeAnyPriceQuestion(bodyText) ||
+                messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
+                messageMatchesStudiesTopic(bodyText) ||
+                messageAsksAboutConditionTreatment(bodyText) ||
+                messageLooksLikeChronicSymptomFrustration(bodyText));
             if (shouldBypassPendingLinkConfirmation) {
               if (stateHasRecentStudyPriceContext(priorState) && messageLooksLikeAnyPriceQuestion(bodyText)) {
                 const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
@@ -5643,23 +5820,7 @@ exports.handler = async (event) => {
                     }
                   : {};
               await setConversationState(from, preservedSessionState);
-            } else {
-            // Confirmations like "sí quiero!" should send the link.
-            const isHardYes = messageConfirmsLinkSend(bodyText);
-            const isHardNo = messageClearlyRejectsLinkSend(bodyText);
-            let routerDecision = null;
-            if (!isHardYes && !isHardNo) {
-              routerDecision = await decideNextActionForLinkConfirmationWithOpenAi(bodyText);
-            }
-
-            const shouldSendLink =
-              !isHardNo && (isHardYes || routerDecision === 'SEND_LINK');
-            const shouldAskClarify =
-              !isHardYes && !isHardNo && routerDecision === 'ASK_CLARIFY';
-            const shouldNotSendLink =
-              isHardNo || routerDecision === 'DO_NOT_SEND';
-
-            if (shouldSendLink) {
+            } else if (linkOfferDecision.action === 'SEND_LINK') {
               const entryFromState = resolveSedeEntryFromState(priorState);
               if (entryFromState) {
                 const linkWrapped = buildAutoReplyWithGreetingIfNeeded(
@@ -5667,7 +5828,6 @@ exports.handler = async (event) => {
                   profileDisplayName,
                   priorState
                 );
-                // Keep greeted flag for subsequent messages.
                 const afterLinkState = mergeConversationStatePreservingGreeting(
                   priorState,
                   {},
@@ -5677,8 +5837,7 @@ exports.handler = async (event) => {
                 await sendWhatsAppText(from, linkWrapped.messageText);
                 continue;
               }
-            }
-            if (shouldNotSendLink) {
+            } else if (linkOfferDecision.action === 'DO_NOT_SEND') {
               const preservedSessionState =
                 priorState && typeof priorState === 'object'
                   ? {
@@ -5721,10 +5880,9 @@ exports.handler = async (event) => {
               }
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
-            }
-            if (shouldAskClarify) {
+            } else {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                'Perfecto. Si querés, te paso el link para reservar el turno. ¿Te lo envío?',
+                buildMicroCommitmentMessage(),
                 profileDisplayName,
                 priorState
               );
@@ -5736,7 +5894,6 @@ exports.handler = async (event) => {
               }
               await sendWhatsAppText(from, wrapped.messageText);
               continue;
-            }
             }
           }
 
@@ -5779,7 +5936,7 @@ exports.handler = async (event) => {
             continue;
           }
 
-          // Note: awaiting_link_confirmation is handled above (with hard rules + optional OpenAI YES/NO classifier).
+          // Note: awaiting_link_confirmation is handled above (OpenAI-first + rules fallback).
 
           const trimmedBodyText = typeof bodyText === 'string' ? bodyText.trim() : '';
           const isBareSedeOption = /^[12]$/.test(trimmedBodyText);
@@ -5794,7 +5951,7 @@ exports.handler = async (event) => {
                 priorState.state === 'awaiting_private_price_city' ||
                 priorState.state === 'awaiting_schedule_sede'));
 
-          const sede = canTreatBareSedeOptionAsSede ? findSedeFromText(bodyText) : null;
+          const sede = canTreatBareSedeOptionAsSede ? await resolveSedeFromTextWithOpenAi(bodyText) : null;
           if (sede) {
             const lastSedePatch = buildLastSedeStatePatch(sede);
             if (priorState && priorState.state === 'awaiting_booking_link_sede') {
@@ -6115,8 +6272,10 @@ exports.handler = async (event) => {
               continue;
             }
             // Booking intent without sede: always ask sede (never ask for date/time).
-            if (messageLooksLikeBookingIntent(bodyText)) {
-              const lastSede = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+            const wantsToBook = await tryResolveBookingIntentWithOpenAi(bodyText, { profileDisplayName });
+            if (wantsToBook) {
+              const lastSede =
+                (await resolveSedeFromTextWithOpenAi(bodyText)) || resolveLastSedeEntryFromState(priorState);
               if (lastSede) {
                 if (stateHasRecentStudyPriceContext(priorState)) {
                   const wrapped = buildAutoReplyWithGreetingIfNeeded(
