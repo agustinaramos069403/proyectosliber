@@ -81,7 +81,10 @@
 - Pedir que la asistente agende (después de enviar el link):
   - Bot envió link Calendly → “¿Agéndame vos?” / “podés agendarme?”
   - IA clasifica autoagendado asistido (NO BOOKING ni micro-compromiso “¿Te lo mando?”)
-  - Respuesta: explicar que por acá no se agenda + repetir el link ya enviado (o acompañar paso a paso)
+  - Respuesta: explicar que por acá no se agenda + repetir el link ya enviado (NO “Sin problema, sin apuro” de rechazo de link)
+- Horarios libres después del link:
+  - Tras enviar link → “decime qué horarios tenés libre”
+  - NO repetir “¿Te paso el link?”; indicar que la disponibilidad está en el link ya enviado
 
 ## Link — problemas técnicos / disponibilidad / lista de espera
 - Problema técnico con el link:

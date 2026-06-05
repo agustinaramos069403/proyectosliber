@@ -1934,11 +1934,15 @@ function getSedeClinicHours(entry) {
   return SEDE_CLINIC_HOURS_BY_ENV_KEY[entry.envKey] || null;
 }
 
-function buildPreferredDayBookingReply(sede, weekdayName) {
+function buildPreferredDayBookingReply(sede, weekdayName, priorState = null) {
   if (weekdayName) {
+    if (hasBookingLinkInStateForSede(priorState, sede)) {
+      const linkUrl = resolveBookingLinkUrlFromState(priorState, sede);
+      return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, revisá los horarios disponibles en el link que ya te pasé:\n${linkUrl}\nPor acá no agendamos.`;
+    }
     return `Perfecto. Para ver si hay turno el ${weekdayName} en ${sede.displayName}, en el link ves los días y horarios disponibles del Dr. Por acá no agendamos. ¿Te lo mando?`;
   }
-  return buildScheduleQuestionLinkMessage(sede);
+  return buildScheduleQuestionLinkMessage(sede, priorState);
 }
 
 function buildPreservedIntentSessionPatch(priorState) {
@@ -2916,6 +2920,7 @@ async function decideNextActionForLinkConfirmationWithOpenAi(userMessage, option
     '- SEND_LINK ejemplos: "sí", "si quiero", "por favor quiero agendar", "quiero agendar", "dale", "ok", "mandame", "pasame el link", "bueno", "listo", "de una", "me interesa", "avancemos".',
     '- DO_NOT_SEND: rechaza o pospone sin pedir el link ahora.',
     '- DO_NOT_SEND ejemplos: "no", "no por ahora", "más tarde", "después", "ahora no", "sí cómo no" (sarcasmo).',
+    '- NO uses DO_NOT_SEND si pide que vos le agendes ("agendame vos", "podés agendarme"): eso es ASK_CLARIFY.',
     '- ASK_CLARIFY: pregunta otra cosa, cambia de tema o no queda claro si quiere el link.',
     '- ASK_CLARIFY ejemplos: "¿cuánto sale?", "¿qué es eso?", "¿para cuándo?", "no entiendo", "¿aceptan OSDE?".',
     '- Priorizá entender la intención real del paciente, no palabras exactas.',
@@ -2981,6 +2986,7 @@ async function sendBookingLinkForSedeEntry(from, priorState, profileDisplayName,
   const afterLinkState = mergeConversationStatePreservingGreeting(priorState, {}, {
     ...(linkWrapped.nextStatePatch || {}),
     ...(buildLinkSentStatePatch(entry) || {}),
+    ...buildClearedAwaitingLinkConfirmationStatePatch(),
     ...buildClearedPendingBookingIntentPatch(),
     ...buildLastBotReplyStatePatch(linkWrapped.messageText),
   });
@@ -2990,6 +2996,9 @@ async function sendBookingLinkForSedeEntry(from, priorState, profileDisplayName,
 }
 
 async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = {}) {
+  if (messageLooksLikeAssistedBookingRequest(userMessage)) {
+    return { action: 'ASSISTED_BOOKING', source: 'rules-assisted' };
+  }
   if (messageClearlyRejectsLinkSend(userMessage)) {
     return { action: 'DO_NOT_SEND', source: 'rules-reject' };
   }
@@ -3059,6 +3068,10 @@ async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, pro
     conversationContext: buildIntentRoutingOpenAiContext(priorState),
     lastAssistantMessage: resolveLastAssistantMessageForLinkOffer(priorState),
   });
+
+  if (linkOfferDecision.action === 'ASSISTED_BOOKING') {
+    return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
+  }
 
   if (linkOfferDecision.action === 'SEND_LINK') {
     const entryFromState = resolveSedeEntryFromState(priorState);
@@ -3455,6 +3468,7 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
 async function tryResolveAssistedBookingRequestWithOpenAi(userMessage, options = {}) {
   const rulesMatch = messageLooksLikeAssistedBookingRequest(userMessage);
   if (options.rulesOnly) return rulesMatch;
+  if (messageAsksIfAssistantCanBookForUser(userMessage)) return true;
 
   const priorState = options.priorState;
   const hasAssistedBookingContext =
@@ -3514,13 +3528,13 @@ async function tryResolveAssistedBookingRequestWithOpenAi(userMessage, options =
       const text = data?.choices?.[0]?.message?.content;
       const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
       if (normalized.startsWith('YES')) return true;
-      if (normalized.startsWith('NO')) return false;
+      if (normalized.startsWith('NO')) return rulesMatch;
     }
   } catch (error) {
     console.error('OpenAI assisted booking classifier failed', error);
   }
 
-  return messageLooksLikeAssistedBookingRequest(userMessage);
+  return rulesMatch;
 }
 
 async function tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName, options = {}) {
@@ -3701,10 +3715,10 @@ async function sendAssistedBookingRequiredReply(from, bodyText, priorState, prof
 }
 
 async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDisplayName, lastSede) {
-  if (
-    messageLooksLikeAssistedBookingRequest(bodyText) ||
-    (wasBookingLinkSentRecently(priorState) && !messageExplicitlyRequestsBookingLink(bodyText))
-  ) {
+  if (messageLooksLikeAssistedBookingRequest(bodyText)) {
+    return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
+  }
+  if (hasBookingLinkInStateForSede(priorState, lastSede) && !messageExplicitlyRequestsBookingLink(bodyText)) {
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
   if (stateHasRecentStudyPriceContext(priorState)) {
@@ -4138,22 +4152,22 @@ async function sendScheduleQuestionReply(from, bodyText, priorState, profileDisp
     const clinicHours = buildSedeClinicHoursReply(lastSede);
     if (clinicHours) replyParts.push(clinicHours);
   }
-  replyParts.push(buildScheduleQuestionLinkMessage(lastSede));
+  replyParts.push(buildScheduleQuestionLinkMessage(lastSede, mergedState));
   const reply = replyParts.join('\n\n');
   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
+  const linkAlreadyShared = hasBookingLinkInStateForSede(mergedState, lastSede);
+  const scheduleStateBase = linkAlreadyShared
+    ? buildClearedAwaitingLinkConfirmationStatePatch()
+    : buildAwaitingLinkConfirmationState(lastSede, 'after_schedule_question');
   await setConversationState(
     from,
-    mergeConversationStatePreservingGreeting(
-      mergedState,
-      buildAwaitingLinkConfirmationState(lastSede, 'after_schedule_question'),
-      {
-        ...(wrapped.nextStatePatch || {}),
-        ...(buildLastSedeStatePatch(lastSede) || {}),
-        ...buildLastScheduleDiscussedStatePatch(),
-        ...buildPendingBookingIntentStatePatch(),
-        ...buildLastBotReplyStatePatch(wrapped.messageText),
-      }
-    )
+    mergeConversationStatePreservingGreeting(mergedState, scheduleStateBase, {
+      ...(wrapped.nextStatePatch || {}),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...buildLastScheduleDiscussedStatePatch(),
+      ...buildPendingBookingIntentStatePatch(),
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
   );
   await sendWhatsAppText(from, wrapped.messageText);
   return true;
@@ -4278,7 +4292,7 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
     return true;
   }
   const weekdayName = extractWeekdayNameFromText(bodyText);
-  const reply = buildPreferredDayBookingReply(lastSede, weekdayName);
+  const reply = buildPreferredDayBookingReply(lastSede, weekdayName, mergedState);
   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
   await setConversationState(
     from,
@@ -4845,6 +4859,37 @@ async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage) {
   const knownNames = getUniqueHealthInsuranceNamesFromSheetsData(data);
   if (knownNames.length === 0) return null;
   return mapHealthInsuranceGuessToKnownName(String(userMessage || ''), knownNames);
+}
+
+function buildClearedAwaitingLinkConfirmationStatePatch() {
+  return {
+    state: null,
+    sedeEnvKey: null,
+    sedeDisplayName: null,
+    sedeOptionNumber: null,
+    bookingLinkOfferAtMs: null,
+    reason: null,
+  };
+}
+
+function resolveBookingLinkUrlFromState(priorState, entry) {
+  if (priorState && typeof priorState === 'object') {
+    const urlFromState =
+      typeof priorState.lastBookingLinkUrl === 'string' ? priorState.lastBookingLinkUrl.trim() : '';
+    if (urlFromState.length > 0) return urlFromState;
+  }
+  return entry ? getAgendaUrl(entry) : null;
+}
+
+function hasBookingLinkInStateForSede(priorState, entry) {
+  if (!priorState || typeof priorState !== 'object' || !entry) return false;
+  const linkUrl =
+    typeof priorState.lastBookingLinkUrl === 'string' ? priorState.lastBookingLinkUrl.trim() : '';
+  if (!linkUrl) return false;
+  if (typeof priorState.lastBookingLinkSedeEnvKey === 'string') {
+    return priorState.lastBookingLinkSedeEnvKey === entry.envKey;
+  }
+  return Boolean(resolveLastSedeEntryFromState(priorState)?.envKey === entry.envKey);
 }
 
 function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
@@ -6305,9 +6350,12 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
   return `${STUDIES_INFORMATION_MESSAGE} Para confirmarte cómo se realiza en tu situación y en qué sede, lo ideal es sacar un turno para evaluación. ${buildAskSedeMessage()}`;
 }
 
-function buildScheduleQuestionLinkMessage(entry) {
-  const url = getAgendaUrl(entry);
-  if (url) {
+function buildScheduleQuestionLinkMessage(entry, priorState = null) {
+  const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
+  if (linkUrl && hasBookingLinkInStateForSede(priorState, entry)) {
+    return `Los horarios disponibles se ven en la agenda online; por acá no confirmamos disponibilidad ni agendamos. Podés revisarlos en el link que ya te pasé:\n${linkUrl}`;
+  }
+  if (linkUrl) {
     return `En ${entry.displayName} los días y horarios en que atiende el Dr. se ven en la agenda online; por acá no agendamos. ¿Te paso el link?`;
   }
   return buildLinkMessage(entry);
@@ -7644,10 +7692,10 @@ exports.handler = async (event) => {
           if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
+          if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
+          if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
