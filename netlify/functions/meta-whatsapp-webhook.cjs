@@ -299,6 +299,10 @@ const SEDE_MAPS_URL_BY_ENV_KEY = {
 const CORRIENTES_HOW_TO_ARRIVE_MESSAGE =
   'Corrientes: ingresá a la Clínica del Pilar, subí al primer piso por la escalera negra y consultá con la primera secretaria.';
 
+const CLINIC_ASSISTANCE_PHONE_NUMBER = '3795063578';
+
+const BOOKING_PERSONAL_ASSISTANCE_MESSAGE = `Si necesitás ayuda, podés comunicarte al ${CLINIC_ASSISTANCE_PHONE_NUMBER}.`;
+
 const DERIVATIVE_HANDOFF_PATIENT_MESSAGE =
   'Si preferís, te paso con alguien del equipo para que te ayude. En breve te contactan.';
 
@@ -2856,6 +2860,10 @@ function buildGenericBookingPolicyReplyForSede(sede, priorState = null) {
   return `Perfecto, ${sede.displayName}. Por acá no agendamos por WhatsApp; escribinos y te ayudamos a coordinar.`;
 }
 
+function conversationAlreadySharedBookingLink(priorState) {
+  return conversationLooksLikeOngoingBookingLinkGuidance(priorState);
+}
+
 function buildBookingLinkStepByStepGuidanceReply(priorState, sedeEntry = null) {
   const lastSede = sedeEntry || resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   const cityName = lastSede ? lastSede.displayName : 'la sede';
@@ -2864,9 +2872,9 @@ function buildBookingLinkStepByStepGuidanceReply(priorState, sedeEntry = null) {
   const offeredStepByStep =
     lastBotReplyText.includes('paso a paso') || lastBotReplyText.includes('te guio') || lastBotReplyText.includes('te guío');
   if (offeredStepByStep) {
-    return `Dale. En el link que ya te pasé elegís día y horario en ${cityName}, completás tus datos y confirmás la reserva. Si preferís, te derivo con alguien del equipo que te acompañe.`;
+    return `Dale. En el link que ya te pasé elegís día y horario en ${cityName}, completás tus datos y confirmás la reserva. ${BOOKING_PERSONAL_ASSISTANCE_MESSAGE}`;
   }
-  return `Ya te pasé el link de ${cityName}. Abrilo, elegí el día y horario que te quede bien, completá tus datos y confirmá. Si te trabás en algún paso, avisame.`;
+  return `Ya te pasé el link de ${cityName}. Abrilo, elegí el día y horario que te quede bien, completá tus datos y confirmá. ${BOOKING_PERSONAL_ASSISTANCE_MESSAGE}`;
 }
 
 async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage = '', options = {}) {
@@ -4667,18 +4675,26 @@ async function tryHandleAssistedBookingRequest(from, bodyText, priorState, profi
   return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
 }
 
+function conversationLooksLikePatientDissatisfactionContext(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  return (
+    priorStateLooksLikeRecentPriceOrPlusReply(priorState) ||
+    conversationLooksLikeOngoingBookingLinkGuidance(priorState) ||
+    stateHasRecentBookingConversationContext(priorState) ||
+    stateHasRecentScheduleDiscussionContext(priorState) ||
+    stateLooksLikeAwaitingBookingLinkTroubleFollowup(priorState)
+  );
+}
+
 async function tryResolvePatientDissatisfactionWithOpenAi(userMessage, options = {}) {
   const rulesMatch = messageLooksLikePatientDissatisfactionByRules(userMessage);
   if (options.rulesOnly) return rulesMatch;
-  if (rulesMatch) return true;
 
   const priorState = options.priorState;
-  const hasDissatisfactionContext =
-    priorState &&
-    typeof priorState === 'object' &&
-    priorStateLooksLikeRecentPriceOrPlusReply(priorState);
+  const hasDissatisfactionContext = conversationLooksLikePatientDissatisfactionContext(priorState);
 
-  if (!hasDissatisfactionContext) return false;
+  if (rulesMatch && hasDissatisfactionContext) return true;
+  if (rulesMatch && !getOpenAiApiKey()) return true;
 
   const apiKey = getOpenAiApiKey();
   if (!apiKey) return rulesMatch;
@@ -4686,11 +4702,12 @@ async function tryResolvePatientDissatisfactionWithOpenAi(userMessage, options =
   const modelName = getOpenAiModelName();
   const systemPrompt = [
     'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense.',
-    'Tarea: decidir si el paciente expresa DISCONFORMIDAD, ENOJO o FRUSTRACIÓN (especialmente por precio), no una pregunta nueva.',
+    'Tarea: decidir si el paciente expresa DISCONFORMIDAD, ENOJO o FRUSTRACIÓN con la atención recibida, no una pregunta nueva.',
     'Respondé solo: YES o NO.',
-    'YES ejemplos: "muy caro", "es un robo", "estoy enojado", "qué bronca", "no puedo pagar", "malísimo", sarcasmo tras un precio.',
-    'NO ejemplos: pregunta de precio nueva ("cuánto sale"), pedir turno, obra social, síntomas clínicos, saludo.',
-    'Si el asistente acaba de informar un monto y el paciente reacciona mal, es YES.',
+    'YES ejemplos: "muy caro", "es un robo", "estoy enojado", "qué bronca", "no puedo pagar", "malísimo", "no me ayudan", "es un desastre", sarcasmo tras un precio o tras explicar el link de agenda.',
+    'YES también si está frustrado/enojado con el proceso de agendar o con respuestas repetidas del bot sobre el link.',
+    'NO ejemplos: pregunta de precio nueva ("cuánto sale"), pedir turno, obra social, síntomas clínicos, saludo, "no sé cómo agendar" sin enojo (eso es otro flujo).',
+    'Si el asistente acaba de informar un monto o el link y el paciente reacciona mal, es YES.',
   ].join('\n');
 
   const userContent = buildOpenAiClassifierUserContent(userMessage, {
@@ -4741,19 +4758,24 @@ async function fetchOpenAiDissatisfactionReply(userMessage, options = {}) {
   if (!apiKey) return null;
 
   const modelName = getOpenAiModelName();
+  const priorState = options.priorState;
+  const bookingFrustrationContext = conversationLooksLikeOngoingBookingLinkGuidance(priorState);
   const basePrompt = loadAgenteLiberSystemPrompt();
   const systemPrompt = [
     typeof basePrompt === 'string' && basePrompt.trim().length > 0
       ? basePrompt.trim()
       : FALLBACK_AGENTE_LIBER_SYSTEM_PROMPT,
     '',
-    'Situación: el paciente expresó enojo, frustración o que algo es muy caro.',
-    'Respondé con empatía breve (máximo 2 oraciones). NO repitas montos ni la respuesta anterior.',
-    'NO des diagnósticos. NO inventes precios. Podés validar su molestia y ofrecer ayudar con otra consulta concreta.',
+    bookingFrustrationContext
+      ? 'Situación: el paciente está enojado o frustrado con el proceso de agendar turno o con las respuestas sobre el link de agenda.'
+      : 'Situación: el paciente expresó enojo, frustración o que algo es muy caro.',
+    'Respondé con empatía breve y humana (máximo 3 oraciones). NO repitas montos ni la respuesta anterior palabra por palabra.',
+    bookingFrustrationContext
+      ? `Validá su molestia, ofrecé acompañarlo paso a paso. Si necesita ayuda humana, indicá el teléfono ${CLINIC_ASSISTANCE_PHONE_NUMBER}. NO repitas el link ni digas "te dejo el link". NO digas "te derivo" ni que alguien lo va a contactar.`
+      : 'NO des diagnósticos. NO inventes precios. Podés validar su molestia y ofrecer ayudar con otra consulta concreta.',
     'NO ofrezcas link de turno salvo que lo pida explícitamente.',
   ].join('\n');
 
-  const priorState = options.priorState;
   const userContent = buildOpenAiClassifierUserContent(userMessage, {
     profileDisplayName: options.profileDisplayName,
     conversationContext: priorState ? buildIntentRoutingOpenAiContext(priorState) : '',
@@ -4797,8 +4819,14 @@ async function tryHandlePatientDissatisfactionWithOpenAi(
   options = {}
 ) {
   if (
+    messageLooksLikeBookingLinkUsageDifficulty(bodyText) &&
+    !messageLooksLikePatientDissatisfactionByRules(bodyText)
+  ) {
+    return false;
+  }
+  if (
     priorStateLooksLikeRecentBookingLinkContext(priorState) &&
-    messageLooksLikeBookingLinkTrouble(bodyText)
+    messageLooksLikeBookingLinkTechnicalTrouble(bodyText)
   ) {
     return false;
   }
@@ -4810,20 +4838,22 @@ async function tryHandlePatientDissatisfactionWithOpenAi(
   if (!isDissatisfaction) return false;
 
   const openAiReply = await fetchOpenAiDissatisfactionReply(bodyText, { priorState, profileDisplayName });
-  const fallbackReply =
-    'Entiendo, y sé que a veces los montos pesan. Contame qué te gustaría revisar y te ayudo sin repetirte lo mismo.';
-  const replyText = processAssistantReplyForPatient(openAiReply || fallbackReply);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
-  await setConversationState(
-    from,
-    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-      ...(wrapped.nextStatePatch || {}),
-      lastPatientDissatisfactionAtMs: Date.now(),
-      ...buildLastBotReplyStatePatch(replyText),
-    })
-  );
-  await sendWhatsAppText(from, wrapped.messageText);
-  return true;
+  if (!openAiReply && getOpenAiApiKey()) {
+    console.error('OpenAI dissatisfaction reply unavailable; skipping rules fallback because AI is required');
+    return false;
+  }
+  const fallbackReply = conversationLooksLikeOngoingBookingLinkGuidance(priorState)
+    ? `Entiendo tu frustración. Si querés, te guío paso a paso. ${BOOKING_PERSONAL_ASSISTANCE_MESSAGE}`
+    : 'Entiendo, y sé que a veces los montos pesan. Contame qué te gustaría revisar y te ayudo sin repetirte lo mismo.';
+  const processedReply = processAssistantReplyForPatient(openAiReply || fallbackReply);
+  return sendFinalizedPatientTextReply(from, processedReply, priorState, profileDisplayName, {
+    lastPatientDissatisfactionAtMs: Date.now(),
+    bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+  }, {
+    userMessage: bodyText,
+    replyContext: 'patient_dissatisfaction',
+    suppressBookingLinkOffer: true,
+  });
 }
 
 async function tryResolveExplicitBookingLinkRequestWithOpenAi(userMessage, options = {}) {
@@ -5055,6 +5085,7 @@ async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
   const linkUrl = options.linkUrl || resolveBookingLinkUrlFromPriorState(options.priorState);
   const isFollowUp = Boolean(options.isFollowUp);
   const isUsageDifficulty = Boolean(options.isUsageDifficulty);
+  const patientSeemsFrustrated = Boolean(options.patientSeemsFrustrated);
   const basePrompt = loadAgenteLiberSystemPrompt();
   const systemPrompt = [
     typeof basePrompt === 'string' && basePrompt.trim().length > 0
@@ -5064,19 +5095,23 @@ async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
     isFollowUp
       ? 'Situación: el paciente sigue con problemas para usar el link de agenda después de un primer consejo.'
       : isUsageDifficulty
-        ? 'Situación: el paciente ya recibió el link de agenda y dice que no sabe cómo reservar o usarlo.'
+        ? patientSeemsFrustrated
+          ? 'Situación: el paciente ya recibió el link de agenda, no sabe cómo reservar y además está frustrado o enojado.'
+          : 'Situación: el paciente ya recibió el link de agenda y dice que no sabe cómo reservar o usarlo.'
         : 'Situación: el paciente dice que el link de agenda no funciona, no abre o no puede reservar.',
     'Reglas:',
-    '- Empatía breve (máximo 2 oraciones).',
+    patientSeemsFrustrated
+      ? '- Empezá validando su molestia con empatía breve y natural.'
+      : '- Empatía breve (máximo 2 oraciones).',
     isFollowUp
-      ? '- Ofrecé derivación a alguien del equipo que lo ayude (NO des diagnósticos ni montos).'
+      ? `- Indicá que puede comunicarse al ${CLINIC_ASSISTANCE_PHONE_NUMBER} si necesita ayuda. NO digas "te derivo" ni que alguien lo va a contactar.`
       : isUsageDifficulty
-        ? '- Explicá en 2-3 pasos simples cómo reservar (abrir link, elegir día/horario, completar datos, confirmar).'
+        ? '- Explicá en 2-4 pasos simples y concretos cómo reservar (abrir link, elegir día/horario, completar datos, confirmar).'
         : '- Sugerí probar otro navegador o abrir desde computadora si está en el celular.',
     '- NO repitas el micro-compromiso "¿Te lo mando?".',
     '- NO inventes horarios ni confirmes turnos por chat.',
     isUsageDifficulty
-      ? '- NO repitas el link ni digas "te dejo el link"; el paciente ya lo tiene.'
+      ? `- NO repitas el link ni digas "te dejo el link"; el paciente ya lo tiene. Si ofrecés ayuda humana, usá el teléfono ${CLINIC_ASSISTANCE_PHONE_NUMBER}. NO digas "te derivo".`
       : linkUrl && !isFollowUp
         ? `- Podés repetir el link al final si ayuda: ${linkUrl}`
         : '',
@@ -5120,26 +5155,61 @@ async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
   }
 }
 
+async function resolveBookingLinkUsageDifficultyReplyWithOpenAi(bodyText, priorState, profileDisplayName) {
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const patientSeemsFrustrated = messageLooksLikePatientDissatisfactionByRules(bodyText);
+  if (!getOpenAiApiKey()) {
+    return buildBookingLinkStepByStepGuidanceReply(priorState, lastSede);
+  }
+  const openAiReply = await fetchOpenAiBookingLinkTroubleReply(bodyText, {
+    priorState,
+    profileDisplayName,
+    isUsageDifficulty: true,
+    patientSeemsFrustrated,
+  });
+  if (!openAiReply) {
+    console.error('OpenAI booking usage difficulty reply unavailable; using rules fallback');
+    return buildBookingLinkStepByStepGuidanceReply(priorState, lastSede);
+  }
+  const processedReply = processAssistantReplyForPatient(openAiReply);
+  return finalizePatientReplyText(processedReply, {
+    priorState,
+    profileDisplayName,
+    userMessage: bodyText,
+    replyContext: 'booking_link_usage_difficulty',
+    suppressBookingLinkOffer: true,
+  });
+}
+
 async function tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName) {
   if (!messageLooksLikeBookingLinkUsageDifficulty(bodyText)) return false;
   if (messageLooksLikeBookingLinkTechnicalTrouble(bodyText)) return false;
   if (!conversationLooksLikeOngoingBookingLinkGuidance(priorState)) return false;
 
   const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
-  const replyText = buildBookingLinkStepByStepGuidanceReply(priorState, lastSede);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
-  await setConversationState(
+  const replyText = await resolveBookingLinkUsageDifficultyReplyWithOpenAi(bodyText, priorState, profileDisplayName);
+  if (!replyText) return false;
+
+  const nowMs = Date.now();
+  return sendFinalizedPatientTextReply(
     from,
-    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-      ...(wrapped.nextStatePatch || {}),
+    replyText,
+    priorState,
+    profileDisplayName,
+    {
+      state: 'awaiting_booking_link_trouble_followup',
+      linkTroubleFirstAtMs: nowMs,
       ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
       ...(lastSede ? buildLinkSentStatePatch(lastSede) || {} : {}),
-      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
-      ...buildLastBotReplyStatePatch(wrapped.messageText),
-    })
+      bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'booking_link_usage_difficulty',
+      suppressBookingLinkOffer: true,
+      skipHumanization: true,
+    }
   );
-  await sendWhatsAppText(from, wrapped.messageText);
-  return true;
 }
 
 async function tryHandleBookingLinkTroubleWithOpenAi(
@@ -5167,19 +5237,23 @@ async function tryHandleBookingLinkTroubleWithOpenAi(
 
   if (!isFollowUp) {
     if (isUsageDifficulty && conversationLooksLikeOngoingBookingLinkGuidance(priorState)) {
-      const replyText = buildBookingLinkStepByStepGuidanceReply(priorState);
-      const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+      return tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName);
+    }
+    if (!getOpenAiApiKey()) {
+      const fallbackReply = isUsageDifficulty
+        ? buildBookingLinkStepByStepGuidanceReply(priorState)
+        : 'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.';
+      let replyText = processAssistantReplyForPatient(fallbackReply);
+      if (!isUsageDifficulty && linkUrl && !replyText.includes(linkUrl)) {
+        replyText = `${replyText}\n${linkUrl}`;
+      }
       const nextState = mergeConversationStatePreservingGreeting(
         priorState,
         {
           state: 'awaiting_booking_link_trouble_followup',
           linkTroubleFirstAtMs: nowMs,
         },
-        {
-          bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS,
-          ...(lastSede ? buildLinkSentStatePatch(lastSede) || {} : {}),
-          ...buildLastBotReplyStatePatch(replyText),
-        }
+        { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
       );
       await setConversationState(from, nextState);
       const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
@@ -5192,21 +5266,35 @@ async function tryHandleBookingLinkTroubleWithOpenAi(
       linkUrl,
       isFollowUp: false,
       isUsageDifficulty,
+      patientSeemsFrustrated: messageLooksLikePatientDissatisfactionByRules(bodyText),
     });
-    const fallbackReply = isUsageDifficulty
-      ? buildBookingLinkStepByStepGuidanceReply(priorState)
-      : 'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.';
-    let replyText = processAssistantReplyForPatient(openAiReply || fallbackReply);
+    if (!openAiReply) {
+      console.error('OpenAI booking link trouble reply unavailable; skipping rules fallback because AI is required');
+      return false;
+    }
+    let replyText = processAssistantReplyForPatient(openAiReply);
+    replyText = await finalizePatientReplyText(replyText, {
+      priorState,
+      profileDisplayName,
+      userMessage: bodyText,
+      replyContext: isUsageDifficulty ? 'booking_link_usage_difficulty' : 'booking_link_trouble',
+      suppressBookingLinkOffer: isUsageDifficulty,
+    });
     if (!isUsageDifficulty && linkUrl && !replyText.includes(linkUrl)) {
       replyText = `${replyText}\n${linkUrl}`;
     }
+    const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
     const nextState = mergeConversationStatePreservingGreeting(
       priorState,
       {
         state: 'awaiting_booking_link_trouble_followup',
         linkTroubleFirstAtMs: nowMs,
       },
-      { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+      {
+        bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS,
+        ...(lastSede ? buildLinkSentStatePatch(lastSede) || {} : {}),
+        ...buildLastBotReplyStatePatch(replyText),
+      }
     );
     await setConversationState(from, nextState);
     const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
@@ -5214,22 +5302,43 @@ async function tryHandleBookingLinkTroubleWithOpenAi(
     return true;
   }
 
+  if (!getOpenAiApiKey()) {
+    const followUpText = processAssistantReplyForPatient(BOOKING_PERSONAL_ASSISTANCE_MESSAGE);
+    const preservedSessionState = mergeConversationStatePreservingGreeting(
+      priorState,
+      buildClearedAwaitingLinkConfirmationStatePatch(),
+      { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
+    );
+    await setConversationState(from, preservedSessionState);
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(followUpText, profileDisplayName, preservedSessionState);
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
   const openAiFollowUpReply = await fetchOpenAiBookingLinkTroubleReply(bodyText, {
     priorState,
     profileDisplayName,
     linkUrl,
     isFollowUp: true,
   });
-  const followUpText = processAssistantReplyForPatient(
-    openAiFollowUpReply || DERIVATIVE_HANDOFF_PATIENT_MESSAGE
-  );
+  if (!openAiFollowUpReply) {
+    console.error('OpenAI booking link trouble follow-up reply unavailable');
+    return false;
+  }
+  const followUpText = processAssistantReplyForPatient(openAiFollowUpReply);
+  const finalizedFollowUpText = await finalizePatientReplyText(followUpText, {
+    priorState,
+    profileDisplayName,
+    userMessage: bodyText,
+    replyContext: 'booking_link_trouble_followup',
+    suppressBookingLinkOffer: true,
+  });
   const preservedSessionState = mergeConversationStatePreservingGreeting(
     priorState,
     buildClearedAwaitingLinkConfirmationStatePatch(),
     { bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS }
   );
   await setConversationState(from, preservedSessionState);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(followUpText, profileDisplayName, preservedSessionState);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedFollowUpText, profileDisplayName, preservedSessionState);
   await sendWhatsAppText(from, wrapped.messageText);
   return true;
 }
@@ -5403,7 +5512,7 @@ async function resolvePatientContextFromMessage(rawText, priorState, options = {
 async function sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName) {
   const needsHandoff = messageAsksToBookWithoutSelfServiceLink(bodyText);
   const replyText = needsHandoff
-    ? DERIVATIVE_HANDOFF_PATIENT_MESSAGE
+    ? BOOKING_PERSONAL_ASSISTANCE_MESSAGE
     : buildSelfBookingRequiredReply(priorState);
   const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   const linkUrl = resolveBookingLinkUrlFromPriorState(priorState);
@@ -5443,20 +5552,7 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
       return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
     }
     if (messageLooksLikeBookingLinkUsageDifficulty(bodyText)) {
-      const reply = buildBookingLinkStepByStepGuidanceReply(priorState, lastSede);
-      const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-      await setConversationState(
-        from,
-        mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-          ...(wrapped.nextStatePatch || {}),
-          ...(buildLastSedeStatePatch(lastSede) || {}),
-          ...(buildLinkSentStatePatch(lastSede) || {}),
-          bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
-          ...buildLastBotReplyStatePatch(wrapped.messageText),
-        })
-      );
-      await sendWhatsAppText(from, wrapped.messageText);
-      return true;
+      return tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName);
     }
     if (
       messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState) ||
@@ -6533,6 +6629,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
+    if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
     return tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName, {
       forceFromRouter: true,
     });
@@ -6544,6 +6643,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
 
   if (primaryIntent === 'BOOKING') {
     if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
+    if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
     if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
@@ -7442,6 +7544,9 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
     }
   }
   if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
@@ -8930,7 +9035,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
 function buildScheduleQuestionLinkMessage(entry, priorState = null) {
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
   if (linkUrl && hasBookingLinkInStateForSede(priorState, entry)) {
-    return `Los horarios disponibles se ven en la agenda online; por acá no confirmamos disponibilidad ni agendamos. Podés revisarlos en el link que ya te pasé:\n${linkUrl}`;
+    return 'Los horarios disponibles se ven en la agenda online; por acá no confirmamos disponibilidad ni agendamos. Podés revisarlos en el link que ya te pasé.';
   }
   if (linkUrl) {
     return `En ${entry.displayName} los días y horarios en que atiende el Dr. se ven en la agenda online; por acá no agendamos. ¿Te paso el link?`;
@@ -9059,6 +9164,15 @@ function messageLooksLikeBookingLinkUsageDifficulty(rawText) {
     normalized.includes('cómo hago para agendar') ||
     normalized.includes('que tengo que hacer') ||
     normalized.includes('qué tengo que hacer') ||
+    normalized.includes('no entiendo nada') ||
+    normalized.includes('no entiendo como agendar') ||
+    normalized.includes('no entiendo cómo agendar') ||
+    normalized.includes('no entiendo como reservar') ||
+    normalized.includes('no entiendo cómo reservar') ||
+    normalized.includes('es muy complicado') ||
+    normalized.includes('muy complicado agendar') ||
+    normalized.includes('imposible agendar') ||
+    normalized.includes('no me sale agendar') ||
     normalized === 'como hago' ||
     normalized === 'cómo hago' ||
     normalized === 'como es' ||
@@ -9209,6 +9323,9 @@ function messageLooksLikeAssistedBookingRequest(rawText) {
 }
 
 function buildSelfBookingRequiredReply(priorState) {
+  if (conversationAlreadySharedBookingLink(priorState)) {
+    return 'Entiendo, me encantaría ayudarte con eso. No puedo agendar por vos desde acá, pero podés hacerlo con el link que ya te pasé. Si querés, te acompaño paso a paso.';
+  }
   const urlFromState =
     priorState && typeof priorState === 'object' && typeof priorState.lastBookingLinkUrl === 'string'
       ? priorState.lastBookingLinkUrl
@@ -10469,6 +10586,9 @@ exports.handler = async (event) => {
           if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -10485,9 +10605,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
