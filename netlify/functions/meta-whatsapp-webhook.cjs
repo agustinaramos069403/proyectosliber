@@ -2844,7 +2844,8 @@ async function fetchOpenAiBookingPolicyReply(userMessage, options = {}) {
 function buildGenericBookingPolicyReplyForSede(sede, priorState = null) {
   if (
     priorState &&
-    (hasBookingLinkInStateForSede(priorState, sede) || priorStateLooksLikeRecentBookingLinkContext(priorState))
+    (hasBookingLinkInStateForSede(priorState, sede) ||
+      conversationLooksLikeOngoingBookingLinkGuidance(priorState))
   ) {
     return buildBookingLinkStepByStepGuidanceReply(priorState, sede);
   }
@@ -2919,7 +2920,7 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
       `Perfecto, para el ${weekdayName} en ${sede.displayName}. Por acá no agendamos por este chat.`
     );
   } else {
-    return buildGenericBookingPolicyReplyForSede(sede);
+    return buildGenericBookingPolicyReplyForSede(sede, priorState);
   }
   if (linkUrl) {
     replyParts.push(`Podés ver días y horarios disponibles y reservar acá:\n${linkUrl}`);
@@ -3125,7 +3126,7 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
       stateLooksLikeAwaitingSedeSelection(priorState) ||
       messageLooksLikeBookingIntent(bookingRequestText));
   if (continuesBookingAfterSedePick && !userMessageRequestsSpecificAppointmentSlot(bookingRequestText, priorState)) {
-    return buildGenericBookingPolicyReplyForSede(sede);
+    return buildGenericBookingPolicyReplyForSede(sede, priorState);
   }
   if (
     stateHasPendingBookingDetails(priorState) ||
@@ -3431,6 +3432,49 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
     !Object.prototype.hasOwnProperty.call(merged, 'bookingLinkOfferAtMs')
   ) {
     merged.bookingLinkOfferAtMs = priorBookingLinkOfferAtMs;
+  }
+  const priorBookingLinkContext =
+    priorState && typeof priorState === 'object'
+      ? {
+          lastBookingLinkUrl:
+            typeof priorState.lastBookingLinkUrl === 'string' && priorState.lastBookingLinkUrl.trim().length > 0
+              ? priorState.lastBookingLinkUrl.trim()
+              : null,
+          lastBookingLinkSentAtMs: Number.isFinite(Number(priorState.lastBookingLinkSentAtMs))
+            ? Number(priorState.lastBookingLinkSentAtMs)
+            : null,
+          lastBookingLinkSedeEnvKey:
+            typeof priorState.lastBookingLinkSedeEnvKey === 'string' ? priorState.lastBookingLinkSedeEnvKey : null,
+          lastBookingLinkSedeDisplayName:
+            typeof priorState.lastBookingLinkSedeDisplayName === 'string'
+              ? priorState.lastBookingLinkSedeDisplayName
+              : null,
+        }
+      : null;
+  if (
+    priorBookingLinkContext &&
+    priorBookingLinkContext.lastBookingLinkUrl &&
+    !Object.prototype.hasOwnProperty.call(merged, 'lastBookingLinkUrl')
+  ) {
+    merged.lastBookingLinkUrl = priorBookingLinkContext.lastBookingLinkUrl;
+    if (
+      priorBookingLinkContext.lastBookingLinkSentAtMs &&
+      !Object.prototype.hasOwnProperty.call(merged, 'lastBookingLinkSentAtMs')
+    ) {
+      merged.lastBookingLinkSentAtMs = priorBookingLinkContext.lastBookingLinkSentAtMs;
+    }
+    if (
+      priorBookingLinkContext.lastBookingLinkSedeEnvKey &&
+      !Object.prototype.hasOwnProperty.call(merged, 'lastBookingLinkSedeEnvKey')
+    ) {
+      merged.lastBookingLinkSedeEnvKey = priorBookingLinkContext.lastBookingLinkSedeEnvKey;
+    }
+    if (
+      priorBookingLinkContext.lastBookingLinkSedeDisplayName &&
+      !Object.prototype.hasOwnProperty.call(merged, 'lastBookingLinkSedeDisplayName')
+    ) {
+      merged.lastBookingLinkSedeDisplayName = priorBookingLinkContext.lastBookingLinkSedeDisplayName;
+    }
   }
   return merged;
 }
@@ -4894,7 +4938,33 @@ function priorStateLooksLikeRecentBookingLinkContext(priorState) {
     lastBotReplyText.includes('calendar.app.google') ||
     lastBotReplyText.includes('calendly.com') ||
     lastBotReplyText.includes('link para elegir') ||
-    lastBotReplyText.includes('link para ver horarios')
+    lastBotReplyText.includes('link para ver horarios') ||
+    lastBotReplyText.includes('link que ya te pasé') ||
+    lastBotReplyText.includes('link que ya te pase') ||
+    lastBotReplyText.includes('te acompaño paso a paso') ||
+    lastBotReplyText.includes('te acompano paso a paso')
+  );
+}
+
+function conversationLooksLikeOngoingBookingLinkGuidance(priorState) {
+  if (priorStateLooksLikeRecentBookingLinkContext(priorState)) return true;
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (
+    lastBotReplyText.includes('paso a paso') ||
+    lastBotReplyText.includes('te guio') ||
+    lastBotReplyText.includes('te guío') ||
+    lastBotReplyText.includes('te acompaño') ||
+    lastBotReplyText.includes('te acompano')
+  ) {
+    return true;
+  }
+  return Boolean(
+    resolveLastSedeEntryFromState(priorState) &&
+      (stateHasRecentBookingConversationContext(priorState) ||
+        stateHasRecentScheduleDiscussionContext(priorState) ||
+        stateHasPendingBookingIntent(priorState))
   );
 }
 
@@ -4909,7 +4979,12 @@ function resolveBookingLinkUrlFromPriorState(priorState) {
 
 async function tryResolveBookingLinkTroubleWithOpenAi(userMessage, options = {}) {
   const priorState = options.priorState;
-  const hasLinkContext = priorStateLooksLikeRecentBookingLinkContext(priorState);
+  const usageDifficulty =
+    messageLooksLikeBookingLinkUsageDifficulty(userMessage) &&
+    !messageLooksLikeBookingLinkTechnicalTrouble(userMessage);
+  const hasLinkContext = usageDifficulty
+    ? conversationLooksLikeOngoingBookingLinkGuidance(priorState)
+    : priorStateLooksLikeRecentBookingLinkContext(priorState);
   const rulesMatch = messageLooksLikeBookingLinkTrouble(userMessage);
   if (!hasLinkContext) return false;
   if (options.rulesOnly) return rulesMatch;
@@ -4979,6 +5054,7 @@ async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
   const modelName = getOpenAiModelName();
   const linkUrl = options.linkUrl || resolveBookingLinkUrlFromPriorState(options.priorState);
   const isFollowUp = Boolean(options.isFollowUp);
+  const isUsageDifficulty = Boolean(options.isUsageDifficulty);
   const basePrompt = loadAgenteLiberSystemPrompt();
   const systemPrompt = [
     typeof basePrompt === 'string' && basePrompt.trim().length > 0
@@ -4987,17 +5063,23 @@ async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
     '',
     isFollowUp
       ? 'Situación: el paciente sigue con problemas para usar el link de agenda después de un primer consejo.'
-      : 'Situación: el paciente dice que el link de agenda no funciona, no abre o no puede reservar.',
+      : isUsageDifficulty
+        ? 'Situación: el paciente ya recibió el link de agenda y dice que no sabe cómo reservar o usarlo.'
+        : 'Situación: el paciente dice que el link de agenda no funciona, no abre o no puede reservar.',
     'Reglas:',
     '- Empatía breve (máximo 2 oraciones).',
     isFollowUp
       ? '- Ofrecé derivación a alguien del equipo que lo ayude (NO des diagnósticos ni montos).'
-      : '- Sugerí probar otro navegador o abrir desde computadora si está en el celular.',
+      : isUsageDifficulty
+        ? '- Explicá en 2-3 pasos simples cómo reservar (abrir link, elegir día/horario, completar datos, confirmar).'
+        : '- Sugerí probar otro navegador o abrir desde computadora si está en el celular.',
     '- NO repitas el micro-compromiso "¿Te lo mando?".',
     '- NO inventes horarios ni confirmes turnos por chat.',
-    linkUrl && !isFollowUp
-      ? `- Podés repetir el link al final si ayuda: ${linkUrl}`
-      : '',
+    isUsageDifficulty
+      ? '- NO repitas el link ni digas "te dejo el link"; el paciente ya lo tiene.'
+      : linkUrl && !isFollowUp
+        ? `- Podés repetir el link al final si ayuda: ${linkUrl}`
+        : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -5038,6 +5120,28 @@ async function fetchOpenAiBookingLinkTroubleReply(userMessage, options = {}) {
   }
 }
 
+async function tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeBookingLinkUsageDifficulty(bodyText)) return false;
+  if (messageLooksLikeBookingLinkTechnicalTrouble(bodyText)) return false;
+  if (!conversationLooksLikeOngoingBookingLinkGuidance(priorState)) return false;
+
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const replyText = buildBookingLinkStepByStepGuidanceReply(priorState, lastSede);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+      ...(wrapped.nextStatePatch || {}),
+      ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
+      ...(lastSede ? buildLinkSentStatePatch(lastSede) || {} : {}),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 async function tryHandleBookingLinkTroubleWithOpenAi(
   from,
   bodyText,
@@ -5062,7 +5166,7 @@ async function tryHandleBookingLinkTroubleWithOpenAi(
     !messageLooksLikeBookingLinkTechnicalTrouble(bodyText);
 
   if (!isFollowUp) {
-    if (isUsageDifficulty && priorStateLooksLikeRecentBookingLinkContext(priorState)) {
+    if (isUsageDifficulty && conversationLooksLikeOngoingBookingLinkGuidance(priorState)) {
       const replyText = buildBookingLinkStepByStepGuidanceReply(priorState);
       const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
       const nextState = mergeConversationStatePreservingGreeting(
@@ -5333,7 +5437,7 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   }
   if (
     hasBookingLinkInStateForSede(priorState, lastSede) ||
-    priorStateLooksLikeRecentBookingLinkContext(priorState)
+    conversationLooksLikeOngoingBookingLinkGuidance(priorState)
   ) {
     if (messageLooksLikeAssistedBookingRequest(bodyText)) {
       return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
@@ -5949,11 +6053,15 @@ async function sendScheduleQuestionReply(from, bodyText, priorState, profileDisp
   const scheduleStateBase = linkAlreadyShared
     ? buildClearedAwaitingLinkConfirmationStatePatch()
     : buildAwaitingLinkConfirmationState(lastSede, 'after_schedule_question');
+  const replyIncludesBookingUrl =
+    typeof reply === 'string' &&
+    (reply.includes('calendar.app.google') || reply.includes('calendly.com'));
   await setConversationState(
     from,
     mergeConversationStatePreservingGreeting(mergedState, scheduleStateBase, {
       ...(wrapped.nextStatePatch || {}),
       ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...(replyIncludesBookingUrl ? buildLinkSentStatePatch(lastSede) || {} : {}),
       ...buildLastScheduleDiscussedStatePatch(),
       ...buildPendingBookingIntentStatePatch(),
       ...buildLastBotReplyStatePatch(wrapped.messageText),
@@ -6067,6 +6175,12 @@ async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDi
 }
 
 async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (
+    messageLooksLikeBookingLinkUsageDifficulty(bodyText) &&
+    conversationLooksLikeOngoingBookingLinkGuidance(priorState)
+  ) {
+    return false;
+  }
   const forceFromRouter = Boolean(options && options.forceFromRouter);
   if (!forceFromRouter && !(await shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName))) {
     return false;
@@ -6123,7 +6237,7 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
 
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
   if (
-    priorStateLooksLikeRecentBookingLinkContext(priorState) &&
+    conversationLooksLikeOngoingBookingLinkGuidance(priorState) &&
     (messageLooksLikeBookingLinkUsageDifficulty(bodyText) ||
       (await tryResolveBookingLinkTroubleWithOpenAi(bodyText, {
         priorState,
@@ -6416,6 +6530,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'PREFERRED_DAY') {
+    if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
     return tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName, {
       forceFromRouter: true,
     });
@@ -6426,6 +6543,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'BOOKING') {
+    if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
     if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
@@ -7320,6 +7440,9 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
     if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
+  }
+  if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
+    return true;
   }
   if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
     return true;
@@ -8975,31 +9098,8 @@ function messageLooksLikeBookingLinkTechnicalTrouble(rawText) {
 function messageLooksLikeBookingLinkTrouble(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageLooksLikeBookingLinkUsageDifficulty(rawText)) return true;
+  if (messageLooksLikeBookingLinkTechnicalTrouble(rawText)) return true;
   const normalized = normalizeForMatch(rawText);
-  const hasLinkTroubleSignal =
-    normalized.includes('no me abre') ||
-    normalized.includes('no abre') ||
-    normalized.includes('no funciona') ||
-    normalized.includes('no me funciona') ||
-    normalized.includes('no anda') ||
-    normalized.includes('no puedo abrir') ||
-    normalized.includes('no puedo entrar') ||
-    normalized.includes('no me deja') ||
-    normalized.includes('no carga') ||
-    normalized.includes('no carga la pagina') ||
-    normalized.includes('no carga la página') ||
-    normalized.includes('pagina en blanco') ||
-    normalized.includes('página en blanco') ||
-    normalized.includes('error en el link') ||
-    normalized.includes('link caido') ||
-    normalized.includes('link caído') ||
-    normalized.includes('link roto') ||
-    normalized.includes('link muerto') ||
-    normalized.includes('link no sirve') ||
-    normalized.includes('problema con el link') ||
-    normalized.includes('problema con la pagina') ||
-    normalized.includes('problema con la página');
-  if (hasLinkTroubleSignal) return true;
   const hasAvailabilityComplaint =
     normalized.includes('no hay turnos') ||
     normalized.includes('no hay disponibles') ||
@@ -10364,6 +10464,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleHealthInsuranceSedeFollowUpWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
@@ -12644,6 +12747,9 @@ exports.handler = async (event) => {
                 )
               );
               await sendWhatsAppText(from, askOsWrapped.messageText);
+              continue;
+            }
+            if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
               continue;
             }
             if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
