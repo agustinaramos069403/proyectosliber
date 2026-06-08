@@ -2810,8 +2810,9 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
       bodyText,
       { forcePriceFlow: messageLooksLikeAnyPriceQuestion(bodyText) }
     );
-    if (studiesReply && typeof studiesReply === 'string' && studiesReply.trim().length > 0) {
-      return studiesReply;
+    const flattenedStudiesReply = flattenStudiesReplyPayload(studiesReply);
+    if (flattenedStudiesReply) {
+      return flattenedStudiesReply;
     }
   }
   return buildSedeConfirmedHelpMessage(sede);
@@ -5938,19 +5939,13 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
       forcePriceFlow: messageLooksLikeAnyPriceQuestion(bodyText),
       profileDisplayName,
     });
-    const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
     const detectedStudyType = getStudyTypeFromText(bodyText);
-    const studiesStatePatch = {
-      ...(wrapped.nextStatePatch || {}),
+    return deliverStudiesInformationReply(from, studiesReply, priorState, profileDisplayName, {
       ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
       ...(messageLooksLikeAnyPriceQuestion(bodyText) || detectedStudyType
         ? { lastStudyPriceContextAtMs: Date.now() }
         : {}),
-      ...buildLastBotReplyStatePatch(wrapped.messageText),
-    };
-    await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
-    await sendWhatsAppText(from, wrapped.messageText);
-    return true;
+    });
   }
 
   if (primaryIntent === 'SCHEDULE') {
@@ -6028,24 +6023,15 @@ async function sendStudyPriceInformationReply(from, bodyText, priorState, profil
     return tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName);
   }
   const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
-    forcePriceFlow: true,
+    forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
     profileDisplayName,
     ...options,
   });
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
   const detectedStudyType = getStudyTypeFromText(bodyText);
-  const studiesStatePatch = {
-    ...(wrapped.nextStatePatch || {}),
+  return deliverStudiesInformationReply(from, studiesReply, priorState, profileDisplayName, {
     ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
     lastStudyPriceContextAtMs: Date.now(),
-    ...buildLastBotReplyStatePatch(wrapped.messageText),
-  };
-  await setConversationState(
-    from,
-    mergeConversationStatePreservingGreeting(priorState, priorState || {}, studiesStatePatch)
-  );
-  await sendWhatsAppText(from, wrapped.messageText);
-  return true;
+  });
 }
 
 async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
@@ -7678,6 +7664,151 @@ function getStudyTypeFromText(rawText) {
   return null;
 }
 
+function buildStudyTypeWithArticle(studyType) {
+  if (!studyType || typeof studyType !== 'string') return 'el estudio';
+  const normalized = normalizeForMatch(studyType);
+  if (normalized.includes('espirometr')) return 'la espirometría';
+  if (normalized.includes('alerg') || normalized.includes('prick')) return 'el test de alergia';
+  if (normalized.includes('parche')) return 'el test del parche';
+  return `el ${studyType}`;
+}
+
+function messageAsksWhetherDoctorPerformsStudy(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeAnyPriceQuestion(rawText) || messageAsksAboutStudyPrice(rawText)) return false;
+  if (messageAsksAboutStudyPreparation(rawText)) return false;
+  if (messageAsksWhatStudiesToBring(rawText) || messageAsksAboutMedicalHistoryToBring(rawText)) {
+    return false;
+  }
+  const normalized = normalizeForMatch(rawText);
+  const mentionsStudy =
+    messageMentionsSpirometryStudy(rawText) ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('prick') ||
+    normalized.includes('test del parche') ||
+    normalized.includes('parche');
+  if (!mentionsStudy) return false;
+  if (messageAsksWhatStudiesDoctorDoes(rawText)) return true;
+  return (
+    /\b(hacen|hace|realizan|realiza|pueden hacer|se hace)\b/.test(normalized) ||
+    normalized.includes('hacen la') ||
+    normalized.includes('hace la') ||
+    normalized.includes('realizan la') ||
+    normalized.includes('realiza la')
+  );
+}
+
+function buildStudyAvailabilityPrimaryReply(studyType, priorState, options = {}) {
+  const sedeFromState = options.sedeEntry || resolveKnownSedeForConversationContext(priorState);
+  const studyWithArticle = buildStudyTypeWithArticle(studyType);
+  if (sedeFromState) {
+    return `Sí, el Dr. realiza ${studyWithArticle} en ${sedeFromState.displayName}.`;
+  }
+  return `Sí, el Dr. realiza ${studyWithArticle}.`;
+}
+
+function buildStudyCoverageIncludedAdjective(studyType) {
+  return normalizeForMatch(studyType).includes('espirometr') ? 'incluida' : 'incluido';
+}
+
+function buildIncludedStudyCoverageFollowUpReply(studyType, healthInsuranceName, sedeEntry) {
+  if (!healthInsuranceName || !sedeEntry) return null;
+  if (!INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(healthInsuranceName)) return null;
+  const studyWithArticle = buildStudyTypeWithArticle(studyType);
+  const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
+  return `Con ${healthInsuranceName} en ${sedeEntry.displayName}, sin plus: ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta.`;
+}
+
+function normalizeStudiesReplyPayload(studiesReply) {
+  if (studiesReply && typeof studiesReply === 'object' && typeof studiesReply.primaryReply === 'string') {
+    const primaryReply = studiesReply.primaryReply.trim();
+    if (!primaryReply) return null;
+    const followUpReply =
+      typeof studiesReply.followUpReply === 'string' && studiesReply.followUpReply.trim().length > 0
+        ? studiesReply.followUpReply.trim()
+        : null;
+    return { primaryReply, followUpReply };
+  }
+  if (typeof studiesReply === 'string' && studiesReply.trim().length > 0) {
+    return { primaryReply: studiesReply.trim(), followUpReply: null };
+  }
+  return null;
+}
+
+function flattenStudiesReplyPayload(studiesReply) {
+  const payload = normalizeStudiesReplyPayload(studiesReply);
+  if (!payload) return null;
+  if (payload.followUpReply) {
+    return `${payload.primaryReply} ${payload.followUpReply}`;
+  }
+  return payload.primaryReply;
+}
+
+async function buildStudyAvailabilitySplitReply(studyType, priorState, rawText, context = {}) {
+  const knownHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+  const sedeForReply = context.lastSede || resolveKnownSedeForConversationContext(priorState);
+  const primaryReply = buildStudyAvailabilityPrimaryReply(studyType, priorState, { sedeEntry: sedeForReply });
+  if (!knownHealthInsuranceName && !sedeForReply) {
+    return {
+      primaryReply,
+      followUpReply: `Contame qué obra social/prepaga tenés y desde qué ciudad te consultás. ${buildAskSedeMessage()}`,
+    };
+  }
+  if (!knownHealthInsuranceName) {
+    return { primaryReply, followUpReply: '¿Qué obra social/prepaga tenés?' };
+  }
+  if (!sedeForReply) {
+    return {
+      primaryReply,
+      followUpReply: `¿Desde qué ciudad te consultás? ${buildAskSedeMessage()}`,
+    };
+  }
+  const includedFollowUp = buildIncludedStudyCoverageFollowUpReply(
+    studyType,
+    knownHealthInsuranceName,
+    sedeForReply
+  );
+  if (includedFollowUp) {
+    return { primaryReply, followUpReply: includedFollowUp };
+  }
+  return {
+    primaryReply,
+    followUpReply: '¿Querés que te cuente el valor con tu cobertura o preferís agendar?',
+  };
+}
+
+async function deliverStudiesInformationReply(
+  from,
+  studiesReply,
+  priorState,
+  profileDisplayName,
+  extraStatePatch = {}
+) {
+  const payload = normalizeStudiesReplyPayload(studiesReply);
+  if (!payload) return false;
+  const wrappedPrimary = buildAutoReplyWithGreetingIfNeeded(payload.primaryReply, profileDisplayName, priorState);
+  const combinedLastReply = payload.followUpReply
+    ? `${wrappedPrimary.messageText} ${payload.followUpReply}`
+    : wrappedPrimary.messageText;
+  let nextState = mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+    ...extraStatePatch,
+    ...(wrappedPrimary.nextStatePatch || {}),
+    ...buildLastBotReplyStatePatch(combinedLastReply),
+  });
+  await setConversationState(from, nextState);
+  await sendWhatsAppText(from, wrappedPrimary.messageText);
+  if (payload.followUpReply) {
+    const wrappedFollowUp = buildAutoReplyWithGreetingIfNeeded(payload.followUpReply, profileDisplayName, nextState);
+    nextState = mergeConversationStatePreservingGreeting(nextState, {}, {
+      ...(wrappedFollowUp.nextStatePatch || {}),
+      ...buildLastBotReplyStatePatch(payload.followUpReply),
+    });
+    await setConversationState(from, nextState);
+    await sendWhatsAppText(from, wrappedFollowUp.messageText, { skipDelay: true });
+  }
+  return true;
+}
+
 function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -8079,14 +8210,21 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     return `Si querés solo espirometría sin consulta, sale $${formattedAmount}.`;
   }
 
+  if (studyTypeFromMessage && messageAsksWhetherDoctorPerformsStudy(rawText)) {
+    return buildStudyAvailabilitySplitReply(studyTypeFromMessage, priorState, rawText, { lastSede });
+  }
+
   if (
+    (asksPrice || forcePriceFlow) &&
     inferredHealthInsuranceName &&
     INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)
   ) {
+    const studyWithArticle = buildStudyTypeWithArticle(studyType);
+    const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
     if (lastSede) {
-      return `Con ${inferredHealthInsuranceName} en ${lastSede.displayName}, sin plus: el ${studyType} queda incluido en el valor de la consulta.`;
+      return `Con ${inferredHealthInsuranceName} en ${lastSede.displayName}, sin plus: ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta.`;
     }
-    return `Con ${inferredHealthInsuranceName}, sin plus: el ${studyType} queda incluido en el valor de la consulta.`;
+    return `Con ${inferredHealthInsuranceName}, sin plus: ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta.`;
   }
 
   if (messageAsksAboutConsultationPlusStudy(rawText) || (asksPrice && normalized.includes('particular'))) {
@@ -8112,7 +8250,9 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       return `Antes de pasarte el valor final, ¿desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
     }
     if (INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)) {
-      return `Con ${inferredHealthInsuranceName} en ${lastSede.displayName}, sin plus: el ${studyType} queda incluido en el valor de la consulta.`;
+      const studyWithArticle = buildStudyTypeWithArticle(studyType);
+      const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
+      return `Con ${inferredHealthInsuranceName} en ${lastSede.displayName}, sin plus: ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta.`;
     }
     const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
     const plusRule = await lookupPlusRule(lastSede.displayName, inferredHealthInsuranceName);
@@ -8145,19 +8285,20 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
 
   if (studyTypeFromMessage) {
     const knownHealthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+    const studyWithArticle = buildStudyTypeWithArticle(studyTypeFromMessage);
     if (!knownHealthInsuranceName && !lastSede) {
-      return `Sí, el Dr. realiza ${studyTypeFromMessage}. Contame qué obra social/prepaga tenés y desde qué ciudad te consultás. ${buildAskSedeMessage()}`;
+      return `Sí, el Dr. realiza ${studyWithArticle}. Contame qué obra social/prepaga tenés y desde qué ciudad te consultás. ${buildAskSedeMessage()}`;
     }
     if (!knownHealthInsuranceName) {
-      return `Sí, el Dr. realiza ${studyTypeFromMessage}. Contame qué obra social/prepaga tenés.`;
+      return `Sí, el Dr. realiza ${studyWithArticle}. Contame qué obra social/prepaga tenés.`;
     }
     if (!lastSede) {
-      return `Sí, el Dr. realiza ${studyTypeFromMessage}. ¿Desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
+      return `Sí, el Dr. realiza ${studyWithArticle}. ¿Desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
     }
     if (knownHealthInsuranceName) {
-      return `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName} con ${knownHealthInsuranceName}. ¿Querés que te cuente el valor o preferís agendar?`;
+      return `Sí, el Dr. realiza ${studyWithArticle} en ${lastSede.displayName} con ${knownHealthInsuranceName}. ¿Querés que te cuente el valor o preferís agendar?`;
     }
-    return `Sí, el Dr. realiza ${studyTypeFromMessage} en ${lastSede.displayName}. ¿Querés que te cuente el valor o preferís agendar?`;
+    return `Sí, el Dr. realiza ${studyWithArticle} en ${lastSede.displayName}. ¿Querés que te cuente el valor o preferís agendar?`;
   }
 
   if (messageLooksLikeSedeOnlyAnswer(rawText)) {
@@ -9564,26 +9705,17 @@ exports.handler = async (event) => {
                   }
                 );
                 const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
-                  forcePriceFlow: true,
+                  forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
                 });
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, enrichedState);
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(
-                    enrichedState,
-                    { state: undefined, awaitingStudyPriceHealthInsuranceAtMs: undefined },
-                    {
-                      ...(wrapped.nextStatePatch || {}),
-                      healthInsuranceName: extractedHealthInsuranceName,
-                      lastHealthInsuranceName: extractedHealthInsuranceName,
-                      ...buildLastHealthInsuranceDiscussionStatePatch(),
-                      lastStudyPriceContextAtMs: nowMs,
-                      ...(patientContext.statePatch || {}),
-                      ...buildLastBotReplyStatePatch(wrapped.messageText),
-                    }
-                  )
-                );
-                await sendWhatsAppText(from, wrapped.messageText);
+                await deliverStudiesInformationReply(from, studiesReply, enrichedState, profileDisplayName, {
+                  state: undefined,
+                  awaitingStudyPriceHealthInsuranceAtMs: undefined,
+                  healthInsuranceName: extractedHealthInsuranceName,
+                  lastHealthInsuranceName: extractedHealthInsuranceName,
+                  ...buildLastHealthInsuranceDiscussionStatePatch(),
+                  lastStudyPriceContextAtMs: nowMs,
+                  ...(patientContext.statePatch || {}),
+                });
                 continue;
               }
               if (sedeFromMessage) {
@@ -9750,23 +9882,13 @@ exports.handler = async (event) => {
                 }
               );
               const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
-                forcePriceFlow: true,
+                forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
               });
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, enrichedState);
-              await setConversationState(
-                from,
-                mergeConversationStatePreservingGreeting(
-                  enrichedState,
-                  enrichedState || {},
-                  {
-                    ...(wrapped.nextStatePatch || {}),
-                    healthInsuranceName: extractedHealthInsuranceName,
-                    lastHealthInsuranceName: extractedHealthInsuranceName,
-                    lastStudyPriceContextAtMs: Date.now(),
-                  }
-                )
-              );
-              await sendWhatsAppText(from, wrapped.messageText);
+              await deliverStudiesInformationReply(from, studiesReply, enrichedState, profileDisplayName, {
+                healthInsuranceName: extractedHealthInsuranceName,
+                lastHealthInsuranceName: extractedHealthInsuranceName,
+                lastStudyPriceContextAtMs: Date.now(),
+              });
               continue;
             }
           }
@@ -10311,14 +10433,11 @@ exports.handler = async (event) => {
               Date.now() - Number(priorState.awaitingStudyTypeForPriceAtMs) <= STUDY_TYPE_FOR_PRICE_WINDOW_MS;
             const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
             const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
-              forcePriceFlow: isAwaitingStudyTypeForPrice && Boolean(detectedStudyType),
+              forcePriceFlow:
+                (isAwaitingStudyTypeForPrice && Boolean(detectedStudyType)) ||
+                messageLooksLikeAnyPriceQuestion(bodyText),
               profileDisplayName,
             });
-            const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              studiesReply,
-              profileDisplayName,
-              priorState
-            );
             const hasStudyTypeContext =
               Boolean(detectedStudyType) ||
               (priorState && typeof priorState === 'object' && typeof priorState.lastStudyType === 'string');
@@ -10336,7 +10455,6 @@ exports.handler = async (event) => {
               !knownHealthInsuranceForStudyPrice;
             const studiesStatePatch = {
               ...(patientContext.statePatch || {}),
-              ...(wrapped.nextStatePatch || {}),
               ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
               ...(messageAsksAboutStudyPrice(bodyText) || isAwaitingStudyTypeForPrice || Boolean(detectedStudyType)
                 ? { lastStudyPriceContextAtMs: Date.now() }
@@ -10359,12 +10477,14 @@ exports.handler = async (event) => {
                     awaitingStudyTypeForPriceAtMs: undefined,
                   }
                 : {}),
-              ...buildLastBotReplyStatePatch(wrapped.messageText),
             };
-            if (Object.keys(studiesStatePatch).length > 0) {
-              await setConversationState(from, { ...(priorState || {}), ...studiesStatePatch });
-            }
-            await sendWhatsAppText(from, wrapped.messageText);
+            await deliverStudiesInformationReply(
+              from,
+              studiesReply,
+              priorState,
+              profileDisplayName,
+              studiesStatePatch
+            );
             continue;
           }
 
@@ -10726,21 +10846,11 @@ exports.handler = async (event) => {
                 !messageLooksLikePrivatePriceQuestion(bodyText, priorState)
               ) {
                 const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
-                  forcePriceFlow: true,
+                  forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
                 });
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(studiesReply, profileDisplayName, priorState);
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(
-                    priorState,
-                    priorState || {},
-                    {
-                      ...(wrapped.nextStatePatch || {}),
-                      lastStudyPriceContextAtMs: Date.now(),
-                    }
-                  )
-                );
-                await sendWhatsAppText(from, wrapped.messageText);
+                await deliverStudiesInformationReply(from, studiesReply, priorState, profileDisplayName, {
+                  lastStudyPriceContextAtMs: Date.now(),
+                });
                 continue;
               }
               const preservedSessionState =
