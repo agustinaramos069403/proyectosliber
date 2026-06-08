@@ -3313,7 +3313,7 @@ async function buildConsultationPriceReplyForSedeAndHealthInsurance(sede, health
     replyOptions
   );
   if (plusReply === 'ASK_CITY_FOR_HEALTH_INSURANCE') {
-    return buildHealthInsuranceMismatchReplyForKnownSede(sede, healthInsuranceName);
+    return await buildHealthInsuranceMismatchReplyForKnownSede(sede, healthInsuranceName);
   }
   return plusReply;
 }
@@ -5928,6 +5928,7 @@ async function tryResolveAddressQuestionWithOpenAi(userMessage, options = {}) {
 }
 
 async function shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName, options = {}) {
+  if (messageLooksLikeClinicInformationBundleInquiry(bodyText)) return false;
   if (!options.rulesOnly && getOpenAiApiKey()) {
     const openAiDecision = await tryResolveAddressQuestionWithOpenAi(bodyText, {
       priorState,
@@ -6055,6 +6056,7 @@ async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, option
 }
 
 async function shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName, options = {}) {
+  if (messageLooksLikeClinicInformationBundleInquiry(bodyText)) return false;
   if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) return false;
   if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText)) return false;
   if (!options.rulesOnly && getOpenAiApiKey()) {
@@ -6815,6 +6817,9 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
 
 async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName, primaryIntent) {
   if (!primaryIntent || primaryIntent === 'OTHER') return false;
+  if (messageLooksLikeClinicInformationBundleInquiry(bodyText)) {
+    return tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName);
+  }
   if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) {
     return tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName);
   }
@@ -9041,6 +9046,146 @@ async function buildRichPatientIntakeReplies(priorState, rawText, lastSede, heal
     );
   }
   return replies;
+}
+
+function messageAsksAboutClinicHours(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('horarios') ||
+    normalized.includes('horario de atencion') ||
+    normalized.includes('horario de la clinica') ||
+    normalized.includes('horario de la clínica')
+  );
+}
+
+function messageAsksAboutHealthInsuranceCoverage(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('cobertura') ||
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageStatesHealthInsuranceMembership(rawText) ||
+    Boolean(tryExtractHealthInsuranceName(rawText))
+  );
+}
+
+function messageLooksLikeClinicInformationBundleInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const signalCount = [
+    messageAsksAboutSedeAddressOrHowToArrive(rawText) || messageAsksForMapsLocation(rawText),
+    messageAsksAboutClinicHours(rawText),
+    messageLooksLikePrivatePriceQuestion(rawText) || normalized.includes('precio particular'),
+    messageAsksAboutPaymentMethods(rawText),
+    messageAsksAboutHealthInsuranceCoverage(rawText),
+  ].filter(Boolean).length;
+  return signalCount >= 3;
+}
+
+async function buildClinicInformationBundleReplies(priorState, rawText, lastSede, healthInsuranceName) {
+  const enrichedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}
+  );
+  const normalized = normalizeForMatch(rawText);
+  const replies = [];
+  if (messageAsksAboutHealthInsuranceCoverage(rawText)) {
+    if (healthInsuranceName && lastSede) {
+      replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
+    } else if (healthInsuranceName) {
+      replies.push(
+        `¿Desde qué ciudad consultás? ${buildAskSedeMessage()} Así te confirmo la cobertura de ${healthInsuranceName}.`
+      );
+    } else {
+      replies.push('¿Qué obra social/prepaga tenés? Te digo si la aceptamos.');
+    }
+  }
+  if (messageLooksLikePrivatePriceQuestion(rawText) || normalized.includes('precio particular')) {
+    if (lastSede) {
+      replies.push(await buildPrivatePriceReply(lastSede));
+    }
+  }
+  if (messageAsksAboutPaymentMethods(rawText)) {
+    replies.push(PAYMENT_METHODS_MESSAGE);
+  }
+  if (lastSede && messageAsksAboutSedeAddressOrHowToArrive(rawText)) {
+    replies.push(buildSedeAddressReply(enrichedState, lastSede));
+  } else if (lastSede && messageAsksAboutClinicHours(rawText)) {
+    const clinicHours = buildSedeClinicHoursReply(lastSede);
+    if (clinicHours) replies.push(clinicHours);
+  }
+  if (lastSede && messageAsksForMapsLocation(rawText)) {
+    const mapsUrl = SEDE_MAPS_URL_BY_ENV_KEY[lastSede.envKey] || null;
+    if (mapsUrl) {
+      replies.push(`Ubicación en Google Maps:\n${mapsUrl}`);
+    }
+  }
+  return replies;
+}
+
+async function tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeClinicInformationBundleInquiry(bodyText)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
+    profileDisplayName,
+  });
+  const needsSedeForReply =
+    (messageAsksAboutHealthInsuranceCoverage(bodyText) && healthInsuranceName) ||
+    messageLooksLikePrivatePriceQuestion(bodyText) ||
+    normalizeForMatch(bodyText).includes('precio particular') ||
+    messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
+    messageAsksForMapsLocation(bodyText) ||
+    messageAsksAboutClinicHours(bodyText);
+  if (!lastSede && needsSedeForReply) {
+    const askSedeText = healthInsuranceName
+      ? `Para pasarte dirección, precios y cobertura de ${healthInsuranceName}, ¿desde qué ciudad consultás? ${ACTIVE_SEDE_OPTIONS_MESSAGE}`
+      : `Para pasarte la info, ¿desde qué ciudad consultás? ${ACTIVE_SEDE_OPTIONS_MESSAGE}`;
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(askSedeText, profileDisplayName, mergedState);
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(mergedState, { state: 'awaiting_sede_selection' }, {
+        ...(wrapped.nextStatePatch || {}),
+        ...(healthInsuranceName
+          ? { healthInsuranceName, lastHealthInsuranceName: healthInsuranceName }
+          : {}),
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      })
+    );
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+  const replies = await buildClinicInformationBundleReplies(
+    mergedState,
+    bodyText,
+    lastSede,
+    healthInsuranceName
+  );
+  if (replies.length === 0) return false;
+  const statePatch = {
+    ...(patientContext.statePatch || {}),
+    ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
+    ...(lastSede
+      ? buildAwaitingLinkConfirmationState(lastSede, 'after_clinic_information_bundle', {
+          healthInsuranceName: healthInsuranceName || undefined,
+        })
+      : {}),
+  };
+  return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch);
 }
 
 async function tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName) {
@@ -11336,6 +11481,9 @@ exports.handler = async (event) => {
           if (await tryHandleHealthInsuranceSedeFollowUpWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -11823,6 +11971,9 @@ exports.handler = async (event) => {
 
 
           if (messageLooksLikeMultiIntentCandidate(bodyText)) {
+            if (await tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName)) {
+              continue;
+            }
             const intents = (await decideIntentsWithOpenAi(bodyText)) || [];
             const hasHealthInsurance = intents.includes('HEALTH_INSURANCE');
             const hasPrivatePrice = intents.includes('PRIVATE_PRICE');
