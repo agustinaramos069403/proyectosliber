@@ -2447,6 +2447,8 @@ function humanizedReplyPreservesCriticalFacts(originalReply, humanizedReply) {
   }
   const amountPattern = /\$\s?[\d.]+/g;
   const originalAmounts = original.match(amountPattern) || [];
+  const revisedAmounts = revised.match(amountPattern) || [];
+  if (originalAmounts.length === 0 && revisedAmounts.length > 0) return false;
   for (const amount of originalAmounts) {
     const compactAmount = amount.replace(/\s/g, '');
     if (!revised.replace(/\s/g, '').includes(compactAmount)) return false;
@@ -2559,6 +2561,11 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
 }
 
 async function tryResolveFocusedPatientReplyWithOpenAi(originalReply, options = {}) {
+  if (options.skipHumanization) {
+    const sourceReply =
+      typeof originalReply === 'string' && originalReply.trim().length > 0 ? originalReply.trim() : '';
+    return { reply: sourceReply, source: 'skip-humanization' };
+  }
   const rulesFocused = tryRulesFirstFocusPatientReply(originalReply, options);
   if (replyLooksOverwhelmingByRules(rulesFocused)) {
     const apiKey = getOpenAiApiKey();
@@ -6523,6 +6530,7 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
 }
 
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
+  if (messageLooksLikeSpirometryOnlyInquiry(bodyText)) return false;
   if (
     conversationLooksLikeOngoingBookingLinkGuidance(priorState) &&
     (messageLooksLikeBookingLinkUsageDifficulty(bodyText) ||
@@ -8803,46 +8811,49 @@ function messageLooksLikeSpirometryOnlyInquiry(rawText) {
   );
 }
 
+function buildSpirometryOnlyInquiryPriceAndLinkReply() {
+  const formattedAmount = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
+  return `Si querés solo espirometría sin consulta, sale $${formattedAmount}. ${buildMicroCommitmentMessage()}`;
+}
+
 async function buildSpirometryOnlyInquirySplitReply(priorState, rawText) {
   const patientContext = await resolvePatientContextFromMessage(rawText, priorState);
   const lastSede = patientContext.sedeEntry || resolveKnownSedeForConversationContext(priorState);
   const primaryReply = buildStudyAvailabilityPrimaryReply('espirometría', priorState, { sedeEntry: lastSede });
-  const formattedAmount = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
-  const followUpReply = `Si querés solo espirometría sin consulta, sale $${formattedAmount}.`;
-  let thirdReply = null;
-  if (
-    messageLooksLikeRealtimeAvailabilityQuestion(rawText) ||
-    messageLooksLikeScheduleAvailabilityQuestion(rawText)
-  ) {
-    thirdReply = 'Sí, hay turnos disponibles esta semana.';
-  }
-  thirdReply = thirdReply
-    ? `${thirdReply} ${buildMicroCommitmentMessage()}`
-    : buildMicroCommitmentMessage();
-  return { primaryReply, followUpReply, thirdReply };
+  return { primaryReply, followUpReply: buildSpirometryOnlyInquiryPriceAndLinkReply() };
 }
 
 async function sendSpirometryOnlyInquiryReply(from, bodyText, priorState, profileDisplayName) {
-  const studiesReply = await buildSpirometryOnlyInquirySplitReply(priorState, bodyText);
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
   const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(priorState);
-  return deliverStudiesInformationReply(
-    from,
-    studiesReply,
-    priorState,
-    profileDisplayName,
-    {
-      lastStudyType: 'espirometría',
-      lastStudyPriceContextAtMs: Date.now(),
-      ...(patientContext.statePatch || {}),
-      ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
-    },
-    {
-      userMessage: bodyText,
-      replyContext: 'studies_info',
-      awaitingLinkConfirmationSede: lastSede || null,
-    }
-  );
+  const primaryReply = buildStudyAvailabilityPrimaryReply('espirometría', priorState, { sedeEntry: lastSede });
+  const followUpReply = buildSpirometryOnlyInquiryPriceAndLinkReply();
+  const wrappedPrimary = buildAutoReplyWithGreetingIfNeeded(primaryReply, profileDisplayName, priorState);
+  let nextState = mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+    lastStudyType: 'espirometría',
+    lastStudyPriceContextAtMs: Date.now(),
+    ...(patientContext.statePatch || {}),
+    ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
+    ...(wrappedPrimary.nextStatePatch || {}),
+    ...buildLastBotReplyStatePatch(wrappedPrimary.messageText),
+  });
+  await setConversationState(from, nextState);
+  await sendWhatsAppText(from, wrappedPrimary.messageText);
+  const wrappedFollowUp = buildAutoReplyWithGreetingIfNeeded(followUpReply, profileDisplayName, nextState);
+  const followUpStatePatch = {
+    ...(wrappedFollowUp.nextStatePatch || {}),
+    ...buildLastBotReplyStatePatch(`${wrappedPrimary.messageText} ${wrappedFollowUp.messageText}`),
+  };
+  if (lastSede) {
+    Object.assign(
+      followUpStatePatch,
+      buildAwaitingLinkConfirmationState(lastSede, 'after_spirometry_only_inquiry')
+    );
+  }
+  nextState = mergeConversationStatePreservingGreeting(nextState, {}, followUpStatePatch);
+  await setConversationState(from, nextState);
+  await sendWhatsAppText(from, wrappedFollowUp.messageText, { skipDelay: true });
+  return true;
 }
 
 async function tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName) {
@@ -10967,6 +10978,9 @@ exports.handler = async (event) => {
           if (await tryHandleHealthInsuranceSedeFollowUpWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -10998,9 +11012,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName)) {
