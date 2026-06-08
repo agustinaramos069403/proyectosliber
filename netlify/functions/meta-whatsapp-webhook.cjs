@@ -2537,9 +2537,7 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
       `Perfecto, para el ${weekdayName} en ${sede.displayName}. Por acá no agendamos por este chat.`
     );
   } else {
-    replyParts.push(
-      `Dale, te ayudo con el turno en ${sede.displayName}. Por acá no agendamos por WhatsApp.`
-    );
+    return buildGenericBookingPolicyReplyForSede(sede);
   }
   if (linkUrl) {
     replyParts.push(`Podés ver días y horarios disponibles y reservar acá:\n${linkUrl}`);
