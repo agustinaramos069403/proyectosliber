@@ -1891,20 +1891,10 @@ function processAssistantReplyForPatient(rawModelText, options = {}) {
   if (messageMentionsOutOfCoverageCity(trimmed)) {
     return buildOutOfCoverageCityReply(trimmed);
   }
-  const asksForSpecificDateOrTime =
-    normalized.includes('fecha') ||
-    normalized.includes('día y hora') ||
-    normalized.includes('dia y hora') ||
-    normalized.includes('horario') ||
-    normalized.includes('indicame la fecha') ||
-    normalized.includes('indicame el dia') ||
-    normalized.includes('indicame el día') ||
-    normalized.includes('indicame el horario') ||
-    normalized.includes('por favor, indicame la fecha') ||
-    normalized.includes('por favor indicame la fecha') ||
-    normalized.includes('por favor indicame el dia') ||
-    normalized.includes('por favor indicame el día');
-  if (asksForSpecificDateOrTime) {
+  if (
+    assistantReplyAsksPatientForSpecificDateOrTime(trimmed) &&
+    userMessageRequestsSpecificAppointmentSlot(bodyText, priorState)
+  ) {
     const confirmedSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState);
     if (confirmedSede) {
       return sanitizePatientReplyWhenSedeUnknown(
@@ -1920,6 +1910,41 @@ function processAssistantReplyForPatient(rawModelText, options = {}) {
     );
   }
   return sanitizePatientReplyWhenSedeUnknown(trimmed, priorState, bodyText);
+}
+
+function assistantReplyAsksPatientForSpecificDateOrTime(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  const normalized = normalizeForMatch(replyText);
+  return (
+    normalized.includes('indicame la fecha') ||
+    normalized.includes('indicame el dia') ||
+    normalized.includes('indicame el día') ||
+    normalized.includes('indicame el horario') ||
+    normalized.includes('por favor indicame la fecha') ||
+    normalized.includes('por favor indicame el dia') ||
+    normalized.includes('por favor indicame el día') ||
+    normalized.includes('decime la fecha') ||
+    normalized.includes('decime el dia') ||
+    normalized.includes('decime el día') ||
+    normalized.includes('decime el horario') ||
+    normalized.includes('que dia preferis') ||
+    normalized.includes('qué día preferís') ||
+    normalized.includes('que horario preferis') ||
+    normalized.includes('qué horario preferís') ||
+    normalized.includes('a que hora') ||
+    normalized.includes('a qué hora')
+  );
+}
+
+function userMessageRequestsSpecificAppointmentSlot(bodyText, priorState) {
+  const requestText = resolvePendingBookingRequestText(priorState, bodyText || '');
+  return (
+    messageIncludesSpecificAppointmentTime(requestText) ||
+    messageIncludesSpecificAppointmentTime(bodyText) ||
+    Boolean(extractWeekdayNameFromText(requestText)) ||
+    Boolean(extractWeekdayNameFromText(bodyText)) ||
+    Boolean(priorState && priorState.pendingBookingIncludesTime)
+  );
 }
 
 function getAgendaUrl(entry) {
@@ -2450,6 +2475,17 @@ async function fetchOpenAiBookingPolicyReply(userMessage, options = {}) {
   }
 }
 
+function buildGenericBookingPolicyReplyForSede(sede) {
+  const linkUrl = getAgendaUrl(sede);
+  const replyParts = [
+    `Dale, te ayudo con el turno en ${sede.displayName}. Por acá no agendamos por WhatsApp.`,
+  ];
+  if (linkUrl) {
+    replyParts.push(`Podés ver días y horarios disponibles y reservar acá:\n${linkUrl}`);
+  }
+  return replyParts.join('\n');
+}
+
 async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage = '', options = {}) {
   const requestText = resolvePendingBookingRequestText(priorState, currentMessage);
   const weekdayName =
@@ -2464,6 +2500,10 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
     Boolean(priorState && priorState.pendingBookingIncludesTime);
   const linkUrl = getAgendaUrl(sede);
 
+  if (!weekdayName && !includesTime) {
+    return buildGenericBookingPolicyReplyForSede(sede);
+  }
+
   const openAiReply = await fetchOpenAiBookingPolicyReply(requestText || currentMessage, {
     priorState,
     profileDisplayName: options.profileDisplayName,
@@ -2475,7 +2515,7 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
   if (openAiReply) {
     const processed = processAssistantReplyForPatient(openAiReply, {
       priorState,
-      bodyText: currentMessage,
+      bodyText: requestText || currentMessage,
     });
     const mayIncludeLink =
       linkUrl &&
