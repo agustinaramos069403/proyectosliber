@@ -2477,13 +2477,10 @@ async function fetchOpenAiBookingPolicyReply(userMessage, options = {}) {
 
 function buildGenericBookingPolicyReplyForSede(sede) {
   const linkUrl = getAgendaUrl(sede);
-  const replyParts = [
-    `Dale, te ayudo con el turno en ${sede.displayName}. Por acá no agendamos por WhatsApp.`,
-  ];
   if (linkUrl) {
-    replyParts.push(`Podés ver días y horarios disponibles y reservar acá:\n${linkUrl}`);
+    return `Perfecto, ${sede.displayName}. Te dejo el link para que veas días y horarios disponibles y reserves tu turno:\n${linkUrl}`;
   }
-  return replyParts.join('\n');
+  return `Perfecto, ${sede.displayName}. Por acá no agendamos por WhatsApp; escribinos y te ayudamos a coordinar.`;
 }
 
 async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage = '', options = {}) {
@@ -2717,13 +2714,24 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
     return await buildPrivatePriceReply(sede);
   }
   const bookingRequestText = resolvePendingBookingRequestText(priorState, bodyText);
+  const isBareSedePick =
+    messageLooksLikeBareSedeOptionAnswer(bodyText) || messageLooksLikeSedeOnlyAnswer(bodyText);
+  const continuesBookingAfterSedePick =
+    isBareSedePick &&
+    (stateHasPendingBookingDetails(priorState) ||
+      stateHasRecentBookingConversationContext(priorState) ||
+      stateLooksLikeAwaitingSedeSelection(priorState) ||
+      messageLooksLikeBookingIntent(bookingRequestText));
+  if (continuesBookingAfterSedePick && !userMessageRequestsSpecificAppointmentSlot(bookingRequestText, priorState)) {
+    return buildGenericBookingPolicyReplyForSede(sede);
+  }
   if (
     stateHasPendingBookingDetails(priorState) ||
     messageLooksLikeBookingIntent(bookingRequestText)
   ) {
     return buildBookingPolicyReplyForSede(sede, priorState, bookingRequestText);
   }
-  if (messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText)) {
+  if (isBareSedePick) {
     if (
       stateHasRecentBookingConversationContext(priorState) ||
       stateLooksLikeAwaitingSedeSelection(priorState) ||
@@ -5631,6 +5639,12 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
 }
 
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
+  if (
+    conversationRecentlyAskedSedeSelection(priorState) &&
+    (messageLooksLikeBareSedeOptionAnswer(bodyText) || messageLooksLikeSedeOnlyAnswer(bodyText))
+  ) {
+    return false;
+  }
   if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
     return false;
   }
@@ -6323,8 +6337,17 @@ function userMessageRequiresFreshSedeForBooking(bodyText, priorState = null) {
 }
 
 function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
+  if (
+    priorState &&
+    conversationRecentlyAskedSedeSelection(priorState) &&
+    messageLooksLikeBareSedeOptionAnswer(bodyText)
+  ) {
+    return null;
+  }
+
   const fromMessage = findSedeFromText(bodyText);
-  if (fromMessage) return fromMessage;
+  if (fromMessage && !messageLooksLikeBareSedeOptionAnswer(bodyText)) return fromMessage;
+  if (fromMessage && !conversationRecentlyAskedSedeSelection(priorState)) return fromMessage;
 
   if (!priorState || typeof priorState !== 'object') return null;
 
@@ -9569,13 +9592,13 @@ exports.handler = async (event) => {
           if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
@@ -11855,6 +11878,9 @@ exports.handler = async (event) => {
               await sendWhatsAppText(from, askOsWrapped.messageText);
               continue;
             }
+            if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+              continue;
+            }
             if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
               continue;
             }
@@ -11865,9 +11891,6 @@ exports.handler = async (event) => {
               if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
                 continue;
               }
-            }
-            if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
-              continue;
             }
             if (await tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileDisplayName)) {
               continue;
