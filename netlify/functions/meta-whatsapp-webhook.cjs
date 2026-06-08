@@ -2436,6 +2436,15 @@ function isOpenAiReplyHumanizationEnabled() {
   return true;
 }
 
+function extractReplyAmountTokens(replyText) {
+  const matches = String(replyText || '').match(/\$\s?[\d.]+/g) || [];
+  return matches.map((amount) => amount.replace(/\s/g, ''));
+}
+
+function replyTextContainsPriceAmount(replyText) {
+  return extractReplyAmountTokens(replyText).length > 0;
+}
+
 function humanizedReplyPreservesCriticalFacts(originalReply, humanizedReply) {
   const original = String(originalReply || '');
   const revised = String(humanizedReply || '');
@@ -2445,13 +2454,14 @@ function humanizedReplyPreservesCriticalFacts(originalReply, humanizedReply) {
   for (const url of originalUrls) {
     if (!revised.includes(url)) return false;
   }
-  const amountPattern = /\$\s?[\d.]+/g;
-  const originalAmounts = original.match(amountPattern) || [];
-  const revisedAmounts = revised.match(amountPattern) || [];
+  const originalAmounts = extractReplyAmountTokens(original);
+  const revisedAmounts = extractReplyAmountTokens(revised);
   if (originalAmounts.length === 0 && revisedAmounts.length > 0) return false;
   for (const amount of originalAmounts) {
-    const compactAmount = amount.replace(/\s/g, '');
-    if (!revised.replace(/\s/g, '').includes(compactAmount)) return false;
+    if (!revised.replace(/\s/g, '').includes(amount)) return false;
+  }
+  for (const amount of revisedAmounts) {
+    if (!originalAmounts.includes(amount)) return false;
   }
   const sedeNames = ['Corrientes', 'Resistencia'];
   for (const sedeName of sedeNames) {
@@ -2478,6 +2488,7 @@ function extractOpenAiRevisedReplyText(modelText, fallbackReply) {
 function shouldSkipReplyHumanization(replyText, options = {}) {
   if (options.skipHumanization) return true;
   if (!replyText || typeof replyText !== 'string') return true;
+  if (replyTextContainsPriceAmount(replyText)) return true;
   const normalized = normalizeForMatch(replyText);
   if (
     normalized.includes('escribi solo el numero') ||
@@ -6197,6 +6208,7 @@ async function sendHealthInsurancePlusReplyForSedeEntry(
   const focusedReply = await tryResolveFocusedPatientReplyWithOpenAi(rawReply, {
     replyContext: 'health_insurance_info',
     suppressBookingLinkOffer: true,
+    skipHumanization: true,
     priorState: mergedState,
     userMessage: bodyText,
     profileDisplayName,
@@ -8719,6 +8731,7 @@ async function deliverStudiesInformationReply(
     userMessage: deliveryOptions.userMessage || '',
     replyContext: deliveryOptions.replyContext || 'studies_info',
     suppressBookingLinkOffer: true,
+    skipHumanization: true,
     conversationContext: buildIntentRoutingOpenAiContext(priorState),
   };
   const finalizedPrimary = await finalizePatientReplyText(payload.primaryReply, finalizeOptions);
