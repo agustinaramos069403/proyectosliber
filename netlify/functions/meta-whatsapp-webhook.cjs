@@ -2,7 +2,8 @@
  * WhatsApp Cloud API (Meta) webhook — Netlify Function
  *
 e Op with /agente-liber-reglas.md prompt file)
- * - OPENAI_MODELss (optional; default vvgpt-4o-mini)
+ * - OPENAI_MODEL (optional; default gpt-4o-mini)
+ * - OPENAI_HUMANIZE_REPLIES (optional; default on when OPENAI_API_KEY is set)
  *
  * Conversational rules: docs/agente-liber-reglas.md — system prompt text: agente-liber-system-prompt.txt (same folder)
  */
@@ -17,6 +18,8 @@ const OPENAI_CHAT_COMPLETIONS_URL = 'https://api.openai.com/v1/chat/completions'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const OPENAI_MAX_OUTPUT_TOKENS = 380;
 const OPENAI_CHAT_TEMPERATURE = 0.6;
+const OPENAI_HUMANIZE_TEMPERATURE = 0.72;
+const OPENAI_HUMANIZE_MAX_TOKENS = 160;
 
 const GOOGLE_SHEETS_API_BASE_URL = 'https://sheets.googleapis.com/v4/spreadsheets';
 const GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -2089,24 +2092,93 @@ function tryRulesFirstFocusPatientReply(originalReply, options = {}) {
   return focused;
 }
 
-async function tryResolveFocusedPatientReplyWithOpenAi(originalReply, options = {}) {
-  const rulesFocused = tryRulesFirstFocusPatientReply(originalReply, options);
-  if (!replyLooksOverwhelmingByRules(rulesFocused)) {
-    return { reply: rulesFocused, source: 'rules' };
+function isOpenAiReplyHumanizationEnabled() {
+  if (!getOpenAiApiKey()) return false;
+  const raw = process.env.OPENAI_HUMANIZE_REPLIES;
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+      return false;
+    }
+  }
+  return true;
+}
+
+function humanizedReplyPreservesCriticalFacts(originalReply, humanizedReply) {
+  const original = String(originalReply || '');
+  const revised = String(humanizedReply || '');
+  if (!original || !revised) return false;
+  const urlPattern = /https?:\/\/\S+/gi;
+  const originalUrls = original.match(urlPattern) || [];
+  for (const url of originalUrls) {
+    if (!revised.includes(url)) return false;
+  }
+  const amountPattern = /\$\s?[\d.]+/g;
+  const originalAmounts = original.match(amountPattern) || [];
+  for (const amount of originalAmounts) {
+    const compactAmount = amount.replace(/\s/g, '');
+    if (!revised.replace(/\s/g, '').includes(compactAmount)) return false;
+  }
+  const sedeNames = ['Corrientes', 'Resistencia'];
+  for (const sedeName of sedeNames) {
+    if (original.includes(sedeName) && !revised.includes(sedeName)) return false;
+  }
+  return true;
+}
+
+function extractOpenAiRevisedReplyText(modelText, fallbackReply) {
+  const normalized = typeof modelText === 'string' ? modelText.trim() : '';
+  if (!normalized || normalized.toUpperCase() === 'OK') {
+    return { reply: fallbackReply, changed: false };
+  }
+  const revisedMatch = normalized.match(/^REVISED:\s*(.+)$/is);
+  if (revisedMatch && revisedMatch[1].trim().length > 0) {
+    return { reply: revisedMatch[1].trim(), changed: true };
+  }
+  if (normalized.length > 0 && normalized.length <= PATIENT_REPLY_MAX_RECOMMENDED_LENGTH + 120) {
+    return { reply: normalized, changed: true };
+  }
+  return { reply: fallbackReply, changed: false };
+}
+
+function shouldSkipReplyHumanization(replyText, options = {}) {
+  if (options.skipHumanization) return true;
+  if (!replyText || typeof replyText !== 'string') return true;
+  const normalized = normalizeForMatch(replyText);
+  if (
+    normalized.includes('escribi solo el numero') ||
+    normalized.includes('1 corrientes') ||
+    normalized.includes('2 resistencia')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
+  const sourceReply =
+    typeof originalReply === 'string' && originalReply.trim().length > 0 ? originalReply.trim() : '';
+  if (
+    !sourceReply ||
+    !isOpenAiReplyHumanizationEnabled() ||
+    shouldSkipReplyHumanization(sourceReply, options)
+  ) {
+    return { reply: sourceReply, source: 'rules' };
   }
 
   const apiKey = getOpenAiApiKey();
-  if (!apiKey) {
-    return { reply: rulesFocused, source: 'rules-fallback' };
-  }
-
   const modelName = getOpenAiModelName();
   const systemPrompt = [
-    'Sos un editor de respuestas de WhatsApp para un consultorio médico en español rioplatense.',
-    'Tarea: si la respuesta propuesta es abruminante (mezcla precio + link de turno + particular + varias preguntas), devolvé una versión CORTA que responda SOLO lo que el paciente preguntó.',
-    'Si la respuesta ya es concisa y responde una sola cosa, devolvé exactamente: OK',
-    'Si hay que acortar, devolvé: REVISED: <texto>',
-    'Reglas: no inventes datos; no agregues link de agenda ni turno si preguntaron solo costo/plus/obra social; máximo 2 oraciones cortas; no hagas preguntas extra salvo que la respuesta original sea solo una pregunta necesaria.',
+    'Sos la voz humana de WhatsApp de la asistente del Dr. Liber Acosta (alergia e inmunología), en español rioplatense.',
+    'Recibís un borrador factual generado por reglas. Reescribilo para que suene natural, cálido y fluido, como una recepcionista real (estilo bot de n8n), NO como call center ni robot.',
+    'Mantené EXACTOS: montos ($), links URL, nombres de obra social/prepaga, ciudades (Corrientes/Resistencia), números de sede (1/2) y datos clínicos.',
+    'No inventes ni omitas información. No agregues temas nuevos.',
+    'Máximo 2 oraciones cortas por mensaje. Texto plano, sin markdown.',
+    'Evitá frases plantilla: "Entendido", "Perfecto", "¿En qué te puedo ayudar?", "Soy un asistente virtual".',
+    'Si el paciente preguntó algo concreto, respondé eso primero con naturalidad.',
+    'Podés usar como mucho 1 emoji cálido si suma (😊 🙂), no en todos los mensajes.',
+    'Si el borrador ya suena humano y claro, devolvé exactamente: OK',
+    'Si lo mejorás, devolvé: REVISED: <texto>',
   ].join('\n');
   const userContent = `${buildOpenAiClassifierUserContent(options.userMessage || '', {
     conversationContext:
@@ -2118,7 +2190,7 @@ async function tryResolveFocusedPatientReplyWithOpenAi(originalReply, options = 
         ? options.priorState.lastBotReplyText
         : ''),
     profileDisplayName: options.profileDisplayName,
-  })}\n\nRespuesta propuesta del bot:\n${originalReply}`;
+  })}\n\nBorrador del bot:\n${sourceReply}`;
 
   try {
     const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
@@ -2129,33 +2201,124 @@ async function tryResolveFocusedPatientReplyWithOpenAi(originalReply, options = 
       },
       body: JSON.stringify({
         model: modelName,
-        temperature: 0,
-        max_tokens: 120,
+        temperature: OPENAI_HUMANIZE_TEMPERATURE,
+        max_tokens: OPENAI_HUMANIZE_MAX_TOKENS,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent },
         ],
       }),
     });
-    if (!response.ok) return { reply: rulesFocused, source: 'openai-error' };
+    if (!response.ok) return { reply: sourceReply, source: 'humanize-error' };
     const data = await response.json();
     const text = data?.choices?.[0]?.message?.content;
-    const normalized = typeof text === 'string' ? text.trim() : '';
-    if (!normalized || normalized.toUpperCase() === 'OK') {
-      return { reply: rulesFocused, source: 'openai-ok' };
+    const parsed = extractOpenAiRevisedReplyText(text, sourceReply);
+    if (!parsed.changed) {
+      return { reply: sourceReply, source: 'humanize-ok' };
     }
-    const revisedMatch = normalized.match(/^REVISED:\s*(.+)$/is);
-    if (revisedMatch && revisedMatch[1].trim().length > 0) {
-      return { reply: revisedMatch[1].trim(), source: 'openai-revised' };
+    if (!humanizedReplyPreservesCriticalFacts(sourceReply, parsed.reply)) {
+      return { reply: sourceReply, source: 'humanize-facts-guard' };
     }
-    if (normalized.length > 0 && normalized.length <= PATIENT_REPLY_MAX_RECOMMENDED_LENGTH + 80) {
-      return { reply: normalized, source: 'openai-direct' };
-    }
-    return { reply: rulesFocused, source: 'openai-unparsed' };
+    return { reply: parsed.reply, source: 'humanize-revised' };
   } catch (error) {
-    console.error('OpenAI focused patient reply editor failed', error);
-    return { reply: rulesFocused, source: 'openai-exception' };
+    console.error('OpenAI patient reply humanizer failed', error);
+    return { reply: sourceReply, source: 'humanize-exception' };
   }
+}
+
+async function tryResolveFocusedPatientReplyWithOpenAi(originalReply, options = {}) {
+  const rulesFocused = tryRulesFirstFocusPatientReply(originalReply, options);
+  if (replyLooksOverwhelmingByRules(rulesFocused)) {
+    const apiKey = getOpenAiApiKey();
+    if (apiKey) {
+      const modelName = getOpenAiModelName();
+      const systemPrompt = [
+        'Sos un editor de respuestas de WhatsApp para un consultorio médico en español rioplatense.',
+        'Tarea: si la respuesta propuesta es abruminante (mezcla precio + link de turno + particular + varias preguntas), devolvé una versión CORTA que responda SOLO lo que el paciente preguntó.',
+        'Si la respuesta ya es concisa y responde una sola cosa, devolvé exactamente: OK',
+        'Si hay que acortar, devolvé: REVISED: <texto>',
+        'Reglas: no inventes datos; no agregues link de agenda ni turno si preguntaron solo costo/plus/obra social; máximo 2 oraciones cortas; no hagas preguntas extra salvo que la respuesta original sea solo una pregunta necesaria.',
+      ].join('\n');
+      const userContent = `${buildOpenAiClassifierUserContent(options.userMessage || '', {
+        conversationContext:
+          options.conversationContext ||
+          (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+        lastAssistantMessage:
+          options.lastAssistantMessage ||
+          (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+            ? options.priorState.lastBotReplyText
+            : ''),
+        profileDisplayName: options.profileDisplayName,
+      })}\n\nRespuesta propuesta del bot:\n${originalReply}`;
+
+      try {
+        const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: modelName,
+            temperature: 0,
+            max_tokens: 120,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userContent },
+            ],
+          }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          const text = data?.choices?.[0]?.message?.content;
+          const parsed = extractOpenAiRevisedReplyText(text, rulesFocused);
+          if (parsed.changed && humanizedReplyPreservesCriticalFacts(rulesFocused, parsed.reply)) {
+            const humanized = await tryHumanizePatientReplyWithOpenAi(parsed.reply, options);
+            return humanized;
+          }
+        }
+      } catch (error) {
+        console.error('OpenAI focused patient reply editor failed', error);
+      }
+    }
+  }
+
+  return tryHumanizePatientReplyWithOpenAi(rulesFocused, options);
+}
+
+async function finalizePatientReplyText(originalReply, options = {}) {
+  const focused = await tryResolveFocusedPatientReplyWithOpenAi(originalReply, options);
+  return focused.reply;
+}
+
+async function sendFinalizedPatientTextReply(
+  from,
+  rawReply,
+  priorState,
+  profileDisplayName,
+  conversationStatePatch = {},
+  finalizeOptions = {}
+) {
+  const finalizedReply = await finalizePatientReplyText(rawReply, {
+    priorState,
+    profileDisplayName,
+    userMessage: finalizeOptions.userMessage || '',
+    replyContext: finalizeOptions.replyContext,
+    suppressBookingLinkOffer: finalizeOptions.suppressBookingLinkOffer,
+    skipHumanization: finalizeOptions.skipHumanization,
+    conversationContext: finalizeOptions.conversationContext,
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedReply, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+      ...conversationStatePatch,
+      ...(wrapped.nextStatePatch || {}),
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
 }
 
 function buildConsultationPriceAnsweredStatePatch() {
@@ -2864,7 +3027,13 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
 
   const bookingRequestText = resolvePendingBookingRequestText(priorState, bodyText);
   const reply = await buildReplyAfterSedeSelection(sede, priorState, bodyText);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  const finalizedReply = await finalizePatientReplyText(reply, {
+    priorState,
+    profileDisplayName,
+    userMessage: bodyText,
+    replyContext: 'sede_selection',
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedReply, profileDisplayName, priorState);
   const continuesConsultationPriceFlow = shouldAskHealthInsuranceBeforeConsultationPrice(priorState);
   const continuesPrivatePriceFlow =
     stateHasPendingPrivatePriceIntent(priorState) &&
@@ -5071,7 +5240,13 @@ async function sendAddressQuestionReply(from, bodyText, priorState, profileDispl
   const reply = messageAsksForMapsLocation(bodyText)
     ? buildSedeMapsLocationReply(mergedState, lastSede)
     : buildSedeAddressReply(mergedState, lastSede);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, mergedState);
+  const finalizedReply = await finalizePatientReplyText(reply, {
+    priorState: mergedState,
+    profileDisplayName,
+    userMessage: bodyText,
+    replyContext: 'address_info',
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedReply, profileDisplayName, mergedState);
   const preservedSessionState =
     stateLooksLikeAwaitingLinkConfirmation(priorState) && priorState && typeof priorState === 'object'
       ? {
@@ -5940,12 +6115,19 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
       profileDisplayName,
     });
     const detectedStudyType = getStudyTypeFromText(bodyText);
-    return deliverStudiesInformationReply(from, studiesReply, priorState, profileDisplayName, {
-      ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
-      ...(messageLooksLikeAnyPriceQuestion(bodyText) || detectedStudyType
-        ? { lastStudyPriceContextAtMs: Date.now() }
-        : {}),
-    });
+    return deliverStudiesInformationReply(
+      from,
+      studiesReply,
+      priorState,
+      profileDisplayName,
+      {
+        ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+        ...(messageLooksLikeAnyPriceQuestion(bodyText) || detectedStudyType
+          ? { lastStudyPriceContextAtMs: Date.now() }
+          : {}),
+      },
+      { userMessage: bodyText, replyContext: 'studies_info' }
+    );
   }
 
   if (primaryIntent === 'SCHEDULE') {
@@ -6028,10 +6210,17 @@ async function sendStudyPriceInformationReply(from, bodyText, priorState, profil
     ...options,
   });
   const detectedStudyType = getStudyTypeFromText(bodyText);
-  return deliverStudiesInformationReply(from, studiesReply, priorState, profileDisplayName, {
-    ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
-    lastStudyPriceContextAtMs: Date.now(),
-  });
+  return deliverStudiesInformationReply(
+    from,
+    studiesReply,
+    priorState,
+    profileDisplayName,
+    {
+      ...(detectedStudyType ? { lastStudyType: detectedStudyType } : {}),
+      lastStudyPriceContextAtMs: Date.now(),
+    },
+    { userMessage: bodyText, replyContext: 'studies_info' }
+  );
 }
 
 async function tryRouteOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName) {
@@ -7782,13 +7971,32 @@ async function deliverStudiesInformationReply(
   studiesReply,
   priorState,
   profileDisplayName,
-  extraStatePatch = {}
+  extraStatePatch = {},
+  deliveryOptions = {}
 ) {
   const payload = normalizeStudiesReplyPayload(studiesReply);
   if (!payload) return false;
-  const wrappedPrimary = buildAutoReplyWithGreetingIfNeeded(payload.primaryReply, profileDisplayName, priorState);
-  const combinedLastReply = payload.followUpReply
-    ? `${wrappedPrimary.messageText} ${payload.followUpReply}`
+  const finalizeOptions = {
+    priorState,
+    profileDisplayName,
+    userMessage: deliveryOptions.userMessage || '',
+    replyContext: deliveryOptions.replyContext || 'studies_info',
+    suppressBookingLinkOffer: true,
+    conversationContext: buildIntentRoutingOpenAiContext(priorState),
+  };
+  const finalizedPrimary = await finalizePatientReplyText(payload.primaryReply, finalizeOptions);
+  const wrappedPrimary = buildAutoReplyWithGreetingIfNeeded(finalizedPrimary, profileDisplayName, priorState);
+  let finalizedFollowUp = null;
+  if (payload.followUpReply) {
+    finalizedFollowUp = await finalizePatientReplyText(payload.followUpReply, {
+      ...finalizeOptions,
+      priorState: mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+        lastBotReplyText: wrappedPrimary.messageText,
+      }),
+    });
+  }
+  const combinedLastReply = finalizedFollowUp
+    ? `${wrappedPrimary.messageText} ${finalizedFollowUp}`
     : wrappedPrimary.messageText;
   let nextState = mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
     ...extraStatePatch,
@@ -7797,11 +8005,11 @@ async function deliverStudiesInformationReply(
   });
   await setConversationState(from, nextState);
   await sendWhatsAppText(from, wrappedPrimary.messageText);
-  if (payload.followUpReply) {
-    const wrappedFollowUp = buildAutoReplyWithGreetingIfNeeded(payload.followUpReply, profileDisplayName, nextState);
+  if (finalizedFollowUp) {
+    const wrappedFollowUp = buildAutoReplyWithGreetingIfNeeded(finalizedFollowUp, profileDisplayName, nextState);
     nextState = mergeConversationStatePreservingGreeting(nextState, {}, {
       ...(wrappedFollowUp.nextStatePatch || {}),
-      ...buildLastBotReplyStatePatch(payload.followUpReply),
+      ...buildLastBotReplyStatePatch(finalizedFollowUp),
     });
     await setConversationState(from, nextState);
     await sendWhatsAppText(from, wrappedFollowUp.messageText, { skipDelay: true });
@@ -9707,15 +9915,22 @@ exports.handler = async (event) => {
                 const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
                   forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
                 });
-                await deliverStudiesInformationReply(from, studiesReply, enrichedState, profileDisplayName, {
-                  state: undefined,
-                  awaitingStudyPriceHealthInsuranceAtMs: undefined,
-                  healthInsuranceName: extractedHealthInsuranceName,
-                  lastHealthInsuranceName: extractedHealthInsuranceName,
-                  ...buildLastHealthInsuranceDiscussionStatePatch(),
-                  lastStudyPriceContextAtMs: nowMs,
-                  ...(patientContext.statePatch || {}),
-                });
+                await deliverStudiesInformationReply(
+                  from,
+                  studiesReply,
+                  enrichedState,
+                  profileDisplayName,
+                  {
+                    state: undefined,
+                    awaitingStudyPriceHealthInsuranceAtMs: undefined,
+                    healthInsuranceName: extractedHealthInsuranceName,
+                    lastHealthInsuranceName: extractedHealthInsuranceName,
+                    ...buildLastHealthInsuranceDiscussionStatePatch(),
+                    lastStudyPriceContextAtMs: nowMs,
+                    ...(patientContext.statePatch || {}),
+                  },
+                  { userMessage: bodyText, replyContext: 'studies_info' }
+                );
                 continue;
               }
               if (sedeFromMessage) {
@@ -9884,11 +10099,18 @@ exports.handler = async (event) => {
               const studiesReply = await buildStudiesInformationReply(enrichedState, bodyText, {
                 forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
               });
-              await deliverStudiesInformationReply(from, studiesReply, enrichedState, profileDisplayName, {
-                healthInsuranceName: extractedHealthInsuranceName,
-                lastHealthInsuranceName: extractedHealthInsuranceName,
-                lastStudyPriceContextAtMs: Date.now(),
-              });
+              await deliverStudiesInformationReply(
+                from,
+                studiesReply,
+                enrichedState,
+                profileDisplayName,
+                {
+                  healthInsuranceName: extractedHealthInsuranceName,
+                  lastHealthInsuranceName: extractedHealthInsuranceName,
+                  lastStudyPriceContextAtMs: Date.now(),
+                },
+                { userMessage: bodyText, replyContext: 'studies_info' }
+              );
               continue;
             }
           }
@@ -10483,7 +10705,8 @@ exports.handler = async (event) => {
               studiesReply,
               priorState,
               profileDisplayName,
-              studiesStatePatch
+              studiesStatePatch,
+              { userMessage: bodyText, replyContext: 'studies_info' }
             );
             continue;
           }
@@ -10848,9 +11071,14 @@ exports.handler = async (event) => {
                 const studiesReply = await buildStudiesInformationReply(priorState, bodyText, {
                   forcePriceFlow: !messageAsksWhetherDoctorPerformsStudy(bodyText),
                 });
-                await deliverStudiesInformationReply(from, studiesReply, priorState, profileDisplayName, {
-                  lastStudyPriceContextAtMs: Date.now(),
-                });
+                await deliverStudiesInformationReply(
+                  from,
+                  studiesReply,
+                  priorState,
+                  profileDisplayName,
+                  { lastStudyPriceContextAtMs: Date.now() },
+                  { userMessage: bodyText, replyContext: 'studies_info' }
+                );
                 continue;
               }
               const preservedSessionState =
