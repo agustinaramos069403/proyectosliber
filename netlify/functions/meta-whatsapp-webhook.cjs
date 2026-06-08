@@ -4051,6 +4051,7 @@ function messageLooksLikeStudyPriceFollowUp(rawText, priorState) {
 }
 
 function shouldRouteToStudyPrice(rawText, priorState) {
+  if (messageLooksLikeFamilyConsultationCostEstimateInquiry(rawText)) return false;
   return (
     messageLooksLikeStudyPriceFollowUp(rawText, priorState) ||
     (stateHasRecentStudyPriceContext(priorState) &&
@@ -6057,6 +6058,7 @@ async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, option
 
 async function shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName, options = {}) {
   if (messageLooksLikeClinicInformationBundleInquiry(bodyText)) return false;
+  if (messageLooksLikeFamilyConsultationCostEstimateInquiry(bodyText)) return false;
   if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) return false;
   if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText)) return false;
   if (!options.rulesOnly && getOpenAiApiKey()) {
@@ -6819,6 +6821,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (!primaryIntent || primaryIntent === 'OTHER') return false;
   if (messageLooksLikeClinicInformationBundleInquiry(bodyText)) {
     return tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName);
+  }
+  if (messageLooksLikeFamilyConsultationCostEstimateInquiry(bodyText)) {
+    return tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName);
   }
   if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) {
     return tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName);
@@ -9188,6 +9193,194 @@ async function tryHandleClinicInformationBundleInquiry(from, bodyText, priorStat
   return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch);
 }
 
+function messageAsksApproximateConsultationCost(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('cuanto gast') ||
+    normalized.includes('cuanto nos sal') ||
+    normalized.includes('cuanto saldria') ||
+    normalized.includes('cuanto tendriamos que gastar') ||
+    normalized.includes('aproximad') ||
+    normalized.includes('mas o menos cuanto') ||
+    normalized.includes('idea de cuanto') ||
+    normalized.includes('valor aprox')
+  );
+}
+
+function extractChildAgeYearsFromMessage(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+  const normalized = normalizeForMatch(rawText);
+  const childAgeMatch = normalized.match(
+    /(?:hijo|hija|nene|nena|menor)[^0-9]{0,24}(\d{1,2})\s*anos/
+  );
+  if (!childAgeMatch || !childAgeMatch[1]) return null;
+  const childAgeYears = Number(childAgeMatch[1]);
+  return Number.isFinite(childAgeYears) ? childAgeYears : null;
+}
+
+function extractFamilyConditionLabels(rawText) {
+  if (!rawText || typeof rawText !== 'string') return [];
+  const normalized = normalizeForMatch(rawText);
+  const conditionLabels = [];
+  if (normalized.includes('asma')) conditionLabels.push('asma');
+  if (normalized.includes('dermatitis') || normalized.includes('eczema')) conditionLabels.push('dermatitis');
+  if (normalized.includes('rinitis')) conditionLabels.push('rinitis');
+  if (normalized.includes('alerg')) conditionLabels.push('alergias');
+  return conditionLabels;
+}
+
+function messageLooksLikeFamilyConsultationCostEstimateInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const familyContext =
+    normalized.includes('ambos') ||
+    normalized.includes('los dos') ||
+    messageMentionsChildPatientContext(rawText);
+  if (!familyContext) return false;
+  return (
+    messageAsksApproximateConsultationCost(rawText) ||
+    (messageLooksLikeAnyPriceQuestion(rawText) &&
+      (normalized.includes('consultar') || normalized.includes('consulta')))
+  );
+}
+
+async function buildFamilyConsultationCostEstimateReplies(
+  priorState,
+  rawText,
+  lastSede,
+  healthInsuranceName
+) {
+  const normalized = normalizeForMatch(rawText);
+  const childAgeYears = extractChildAgeYearsFromMessage(rawText);
+  const conditionLabels = extractFamilyConditionLabels(rawText);
+  const mentionsBoth =
+    normalized.includes('ambos') ||
+    normalized.includes('los dos') ||
+    messageMentionsChildPatientContext(rawText);
+  const mentionsStudies = normalized.includes('estudios') || normalized.includes('estudio');
+  const privatePriceArs = await lookupPrivatePrice(lastSede.displayName);
+  const privatePriceFormatted = formatArsAmount(privatePriceArs);
+  const studyAmountFormatted = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
+  const replies = [];
+  replies.push('Qué bueno que consulten antes, así van con una idea más clara de los valores 😊');
+  let clinicalLine = 'Sí, el Dr. atiende';
+  if (conditionLabels.length > 0) {
+    clinicalLine += ` ${conditionLabels.join(' y ')}`;
+  } else {
+    clinicalLine += ' este tipo de consultas';
+  }
+  clinicalLine += ' en adultos y en niños.';
+  if (mentionsBoth) {
+    const childDescription = childAgeYears
+      ? `tu hijo de ${childAgeYears} años`
+      : 'tu hijo/a';
+    clinicalLine += ` Para consultar los dos en ${lastSede.displayName} (${childDescription} y vos), conviene una evaluación por persona.`;
+  } else {
+    clinicalLine += ` Para consultar en ${lastSede.displayName}, lo ideal es una evaluación en consulta.`;
+  }
+  replies.push(clinicalLine);
+  if (healthInsuranceName) {
+    replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
+  }
+  if (Number.isFinite(privatePriceArs) && privatePriceFormatted) {
+    let costLine = `Como referencia en ${lastSede.displayName}: la consulta particular sale $${privatePriceFormatted} por persona`;
+    if (mentionsBoth) {
+      const twoConsultationsTotal = privatePriceArs * 2;
+      const twoConsultationsFormatted = formatArsAmount(twoConsultationsTotal);
+      costLine += ` — para ustedes dos serían unas $${twoConsultationsFormatted} en total por las consultas`;
+    }
+    costLine += '.';
+    if (mentionsStudies) {
+      costLine += ` Si el Dr. indica estudios (espirometría, test de alergia, etc.), suelen sumar $${studyAmountFormatted} del estudio cada uno; no siempre hace falta en la primera visita y depende de cada caso.`;
+    }
+    if (healthInsuranceName) {
+      const plusRule = await lookupPlusRule(lastSede.displayName, healthInsuranceName);
+      if (plusRule && plusRule.isAccepted && plusRule.hasPlus && plusRule.plusAmountArs) {
+        const plusFormatted = formatArsAmount(plusRule.plusAmountArs);
+        const twoPlusTotalFormatted = formatArsAmount(plusRule.plusAmountArs * (mentionsBoth ? 2 : 1));
+        costLine += ` Con ${healthInsuranceName}, el plus es $${plusFormatted} por consulta`;
+        if (mentionsBoth) {
+          costLine += ` (unas $${twoPlusTotalFormatted} si consultan los dos)`;
+        }
+        costLine += '.';
+      } else {
+        const alternateCityEntry = await findPrimaryAcceptedCityEntryForHealthInsurance(
+          healthInsuranceName,
+          lastSede.displayName
+        );
+        if (alternateCityEntry) {
+          const alternatePlusRule = await lookupPlusRule(
+            alternateCityEntry.displayName,
+            healthInsuranceName
+          );
+          if (
+            alternatePlusRule &&
+            alternatePlusRule.isAccepted &&
+            alternatePlusRule.hasPlus &&
+            alternatePlusRule.plusAmountArs
+          ) {
+            const plusFormatted = formatArsAmount(alternatePlusRule.plusAmountArs);
+            const twoPlusTotalFormatted = formatArsAmount(
+              alternatePlusRule.plusAmountArs * (mentionsBoth ? 2 : 1)
+            );
+            costLine += ` Con ${healthInsuranceName} en ${alternateCityEntry.displayName}, el plus es $${plusFormatted} por consulta`;
+            if (mentionsBoth) {
+              costLine += ` (unas $${twoPlusTotalFormatted} si consultan los dos)`;
+            }
+            costLine += '.';
+          }
+        }
+      }
+    }
+    costLine += ' El total exacto lo define el Dr. según qué estudios pida en cada consulta.';
+    replies.push(costLine);
+  }
+  replies.push(buildMicroCommitmentMessage());
+  return replies;
+}
+
+async function tryHandleFamilyConsultationCostEstimateInquiry(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (!messageLooksLikeFamilyConsultationCostEstimateInquiry(bodyText)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  if (!lastSede) return false;
+  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
+    profileDisplayName,
+  });
+  const replies = await buildFamilyConsultationCostEstimateReplies(
+    mergedState,
+    bodyText,
+    lastSede,
+    healthInsuranceName
+  );
+  const statePatch = {
+    ...(patientContext.statePatch || {}),
+    ...(buildLastSedeStatePatch(lastSede) || {}),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
+    ...buildAwaitingLinkConfirmationState(lastSede, 'after_family_cost_estimate', {
+      healthInsuranceName: healthInsuranceName || undefined,
+    }),
+  };
+  return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch);
+}
+
 async function tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName) {
   if (!messageLooksLikeRichPatientIntakeInquiry(bodyText)) return false;
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
@@ -9745,7 +9938,9 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     normalized.includes('cuanto seria el total') ||
     normalized.includes('cuanto sería el total') ||
     normalized.includes('total final') ||
-    normalized.includes('precio final');
+    normalized.includes('precio final') ||
+    messageAsksApproximateConsultationCost(rawText) ||
+    messageLooksLikeFamilyConsultationCostEstimateInquiry(rawText);
 
   if (messageLooksLikeSpirometryOnlyInquiry(rawText)) {
     return buildSpirometryOnlyInquirySplitReply(priorState, rawText);
@@ -11482,6 +11677,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
