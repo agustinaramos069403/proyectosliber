@@ -1367,12 +1367,180 @@ function guessKeyLooksLikeSedeKeywordOnly(guessKey) {
   return Boolean(withoutFillerWords && sedeKeywords.has(withoutFillerWords));
 }
 
+function guessKeyLooksLikePrivatePayIntent(guessKey) {
+  if (!guessKey || typeof guessKey !== 'string') return false;
+  const normalized = guessKey.replace(/\s+/g, ' ').trim();
+  if (!normalized) return false;
+  if (normalized === 'particular' || normalized === 'particualr' || normalized === 'privado') return true;
+  if (normalized === 'sin obra social' || normalized === 'sin prepaga' || normalized === 'sin os') {
+    return true;
+  }
+  if (
+    normalized === 'no tengo obra social' ||
+    normalized === 'no tengo prepaga' ||
+    normalized === 'no tengo os' ||
+    normalized === 'no tengo cobertura' ||
+    normalized === 'sin cobertura'
+  ) {
+    return true;
+  }
+  if (
+    normalized === 'soy particular' ||
+    normalized === 'pago particular' ||
+    normalized === 'de forma particular' ||
+    normalized === 'atencion particular'
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function messageStatesPrivatePayWithoutHealthInsurance(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageExplicitlyAsksPrivateConsultationPrice(rawText)) return true;
+  const normalized = normalizePriceTyposInText(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return guessKeyLooksLikePrivatePayIntent(normalized);
+}
+
+function messageLooksLikePrivatePayOrHealthInsuranceAmbiguity(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  if (messageStatesPrivatePayWithoutHealthInsurance(rawText)) return true;
+  return (
+    normalized.includes('particular') ||
+    normalized.includes('particulares') ||
+    normalized.includes('privado') ||
+    normalized.includes('sin obra social') ||
+    normalized.includes('sin prepaga') ||
+    normalized.includes('no tengo obra social') ||
+    normalized.includes('no tengo prepaga')
+  );
+}
+
+function stateLooksLikeAwaitingHealthInsuranceAnswer(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  return (
+    stateLooksLikeAwaitingConsultationPriceHealthInsurance(priorState) ||
+    stateLooksLikeAwaitingStudyPriceHealthInsurance(priorState) ||
+    priorState.state === 'awaiting_health_insurance_name' ||
+    priorState.state === 'awaiting_health_insurance_plan' ||
+    shouldAskHealthInsuranceBeforeConsultationPrice(priorState)
+  );
+}
+
+async function tryResolvePrivatePayWithoutHealthInsuranceWithOpenAi(userMessage, options = {}) {
+  const apiKey = getOpenAiApiKey();
+  if (!apiKey) return null;
+  const modelName = getOpenAiModelName();
+  const systemPrompt = [
+    'Sos un clasificador para WhatsApp de un consultorio médico en español rioplatense (Argentina).',
+    'Tarea: decidir si el paciente indica que NO tiene obra social/prepaga y quiere atención PRIVADA (pago particular), o si está nombrando una obra social/prepaga.',
+    'Respondé solo una etiqueta: PRIVATE_PAY, HEALTH_INSURANCE o UNSURE.',
+    '',
+    'PRIVATE_PAY: "particular" solo o casi solo; "soy particular"; "sin obra social"; "no tengo prepaga"; "pago particular"; "privado"; "no tengo cobertura".',
+    'CRÍTICO: si el asistente acaba de preguntar "¿qué obra social/prepaga tenés?" y el paciente responde solo "Particular", es PRIVATE_PAY (quiere precio/atención privada), NO una obra social.',
+    'CRÍTICO: "particular" NO es lo mismo que obras sociales cuyo nombre contiene "PARTICULARES" (ej. OSDOP DOCENTES PARTICULARES). Solo "particular" = PRIVATE_PAY.',
+    '',
+    'HEALTH_INSURANCE: nombra claramente una cobertura (OSDE, Sancor, OSDOP, "tengo OSDOP docentes particulares", "mi obra social es ...").',
+    'Si el mensaje incluye el nombre explícito de una obra social aunque contenga la palabra "particulares", es HEALTH_INSURANCE.',
+    '',
+    'UNSURE: no alcanza el contexto para decidir con seguridad.',
+  ].join('\n');
+  const userContent = buildOpenAiClassifierUserContent(userMessage, {
+    conversationContext:
+      options.conversationContext ||
+      (options.priorState ? buildIntentRoutingOpenAiContext(options.priorState) : ''),
+    lastAssistantMessage:
+      options.lastAssistantMessage ||
+      (options.priorState && typeof options.priorState.lastBotReplyText === 'string'
+        ? options.priorState.lastBotReplyText
+        : ''),
+    profileDisplayName: options.profileDisplayName,
+  });
+
+  try {
+    const response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0,
+        max_tokens: 8,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userContent },
+        ],
+      }),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const text = data?.choices?.[0]?.message?.content;
+    const normalized = typeof text === 'string' ? text.trim().toUpperCase() : '';
+    if (normalized.startsWith('PRIVATE_PAY')) return true;
+    if (normalized.startsWith('HEALTH_INSURANCE')) return false;
+    return null;
+  } catch (error) {
+    console.error('OpenAI private-pay classifier failed', error);
+    return null;
+  }
+}
+
+async function resolvePrivatePayWithoutHealthInsuranceFromMessage(userMessage, options = {}) {
+  if (!userMessage || typeof userMessage !== 'string') return false;
+  if (messageExplicitlyAsksPrivateConsultationPrice(userMessage)) return true;
+  const normalized = normalizePriceTyposInText(userMessage)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (guessKeyLooksLikePrivatePayIntent(normalized)) return true;
+
+  const shouldUseOpenAi =
+    getOpenAiApiKey() &&
+    (messageLooksLikePrivatePayOrHealthInsuranceAmbiguity(userMessage) ||
+      stateLooksLikeAwaitingHealthInsuranceAnswer(options.priorState));
+
+  if (shouldUseOpenAi) {
+    const openAiDecision = await tryResolvePrivatePayWithoutHealthInsuranceWithOpenAi(userMessage, options);
+    if (openAiDecision === true) return true;
+    if (openAiDecision === false) return false;
+  }
+
+  return messageStatesPrivatePayWithoutHealthInsurance(userMessage);
+}
+
+function healthInsuranceGuessMatchesCandidateKey(guessKey, candidateKey) {
+  if (!guessKey || !candidateKey) return false;
+  if (guessKey === candidateKey) return true;
+  if (guessKeyLooksLikePrivatePayIntent(guessKey)) return false;
+  const guessTokens = guessKey.split(/\s+/).filter(Boolean);
+  const candidateTokens = candidateKey.split(/\s+/).filter(Boolean);
+  if (guessTokens.length === 1) {
+    return candidateTokens.includes(guessTokens[0]);
+  }
+  if (candidateTokens.length === 1) {
+    return guessTokens.includes(candidateTokens[0]);
+  }
+  return candidateKey.includes(guessKey) || guessKey.includes(candidateKey);
+}
+
 function mapHealthInsuranceGuessToKnownName(guess, knownNames) {
   const guessRaw = typeof guess === 'string' ? guess.trim() : '';
   if (!guessRaw) return null;
+  if (messageStatesPrivatePayWithoutHealthInsurance(guessRaw)) return null;
   const guessKey = normalizeHealthInsuranceNameForKey(guessRaw);
   if (!guessKey) return null;
   if (guessKeyLooksLikeSedeKeywordOnly(guessKey)) return null;
+  if (guessKeyLooksLikePrivatePayIntent(guessKey)) return null;
 
   const candidates = knownNames
     .map((name) => ({
@@ -1386,7 +1554,7 @@ function mapHealthInsuranceGuessToKnownName(guess, knownNames) {
   }
 
   for (const candidate of candidates) {
-    if (candidate.key.includes(guessKey) || guessKey.includes(candidate.key)) {
+    if (healthInsuranceGuessMatchesCandidateKey(guessKey, candidate.key)) {
       return candidate.name;
     }
   }
@@ -2673,12 +2841,31 @@ async function fetchOpenAiBookingPolicyReply(userMessage, options = {}) {
   }
 }
 
-function buildGenericBookingPolicyReplyForSede(sede) {
+function buildGenericBookingPolicyReplyForSede(sede, priorState = null) {
+  if (
+    priorState &&
+    (hasBookingLinkInStateForSede(priorState, sede) || priorStateLooksLikeRecentBookingLinkContext(priorState))
+  ) {
+    return buildBookingLinkStepByStepGuidanceReply(priorState, sede);
+  }
   const linkUrl = getAgendaUrl(sede);
   if (linkUrl) {
     return `Perfecto, ${sede.displayName}. Te dejo el link para que veas días y horarios disponibles y reserves tu turno:\n${linkUrl}`;
   }
   return `Perfecto, ${sede.displayName}. Por acá no agendamos por WhatsApp; escribinos y te ayudamos a coordinar.`;
+}
+
+function buildBookingLinkStepByStepGuidanceReply(priorState, sedeEntry = null) {
+  const lastSede = sedeEntry || resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const cityName = lastSede ? lastSede.displayName : 'la sede';
+  const lastBotReplyText =
+    typeof priorState?.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  const offeredStepByStep =
+    lastBotReplyText.includes('paso a paso') || lastBotReplyText.includes('te guio') || lastBotReplyText.includes('te guío');
+  if (offeredStepByStep) {
+    return `Dale. En el link que ya te pasé elegís día y horario en ${cityName}, completás tus datos y confirmás la reserva. Si preferís, te derivo con alguien del equipo que te acompañe.`;
+  }
+  return `Ya te pasé el link de ${cityName}. Abrilo, elegí el día y horario que te quede bien, completá tus datos y confirmá. Si te trabás en algún paso, avisame.`;
 }
 
 async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage = '', options = {}) {
@@ -2696,7 +2883,7 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
   const linkUrl = getAgendaUrl(sede);
 
   if (!weekdayName && !includesTime) {
-    return buildGenericBookingPolicyReplyForSede(sede);
+    return buildGenericBookingPolicyReplyForSede(sede, priorState);
   }
 
   const openAiReply = await fetchOpenAiBookingPolicyReply(requestText || currentMessage, {
@@ -3331,7 +3518,15 @@ function tryExtractHealthInsuranceNameFromPhrase(rawText) {
   return null;
 }
 
-async function resolveHealthInsuranceNameFromMessage(bodyText, priorState) {
+async function resolveHealthInsuranceNameFromMessage(bodyText, priorState, options = {}) {
+  if (
+    await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+      priorState,
+      profileDisplayName: options.profileDisplayName,
+    })
+  ) {
+    return null;
+  }
   const fromRules = tryExtractHealthInsuranceName(bodyText) || tryExtractHealthInsuranceNameFromPhrase(bodyText);
   if (fromRules) return normalizeHealthInsuranceCanonicalName(fromRules);
   if (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)) {
@@ -4068,8 +4263,8 @@ async function tryResolveRequiresHealthInsuranceBeforeConsultationPriceWithOpenA
   if (messageAsksGenericConsultationPrice(userMessage)) {
     return { requiresHealthInsurance: true, source: 'rules-generic-consultation' };
   }
-  if (messageExplicitlyAsksPrivateConsultationPrice(userMessage)) {
-    return { requiresHealthInsurance: false, source: 'rules-explicit-particular' };
+  if (await resolvePrivatePayWithoutHealthInsuranceFromMessage(userMessage, options)) {
+    return { requiresHealthInsurance: false, source: 'rules-or-openai-particular' };
   }
   if (options.priorState && shouldAskHealthInsuranceBeforeConsultationPrice(options.priorState)) {
     return { requiresHealthInsurance: true, source: 'rules-pending-consultation-flow' };
@@ -4729,7 +4924,7 @@ async function tryResolveBookingLinkTroubleWithOpenAi(userMessage, options = {})
     'Contexto: el asistente ya envió el link de agenda para sacar turno.',
     'Tarea: decidir si el paciente reporta PROBLEMA TÉCNICO o dificultad para usar el link (no abre, no funciona, no carga, error, no puede reservar en la web).',
     'Respondé solo: YES o NO.',
-    'YES ejemplos: "no me abre", "no funciona", "no anda", "no carga", "error en el link", "no pude agendar en el link", "no me deja entrar", "la página queda en blanco".',
+    'YES ejemplos: "no me abre", "no funciona", "no anda", "no carga", "error en el link", "no pude agendar en el link", "no me deja entrar", "la página queda en blanco", "no sé cómo hacer", "no se como usar el link", "no entiendo cómo reservar".',
     'NO ejemplos: pedir otro link sin queja ("pasame el link"), preguntar precio, "no hay turnos" sin problema técnico, enojo por precio ("muy caro").',
     'Si dice que no hay disponibilidad pero NO hay fallo técnico del link, respondé NO (eso es otro flujo).',
   ].join('\n');
@@ -4862,18 +5057,43 @@ async function tryHandleBookingLinkTroubleWithOpenAi(
     stateLooksLikeAwaitingBookingLinkTroubleFollowup(priorState) &&
     nowMs - Number(priorState.linkTroubleFirstAtMs) <= BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS;
   const linkUrl = resolveBookingLinkUrlFromPriorState(priorState);
+  const isUsageDifficulty =
+    messageLooksLikeBookingLinkUsageDifficulty(bodyText) &&
+    !messageLooksLikeBookingLinkTechnicalTrouble(bodyText);
 
   if (!isFollowUp) {
+    if (isUsageDifficulty && priorStateLooksLikeRecentBookingLinkContext(priorState)) {
+      const replyText = buildBookingLinkStepByStepGuidanceReply(priorState);
+      const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+      const nextState = mergeConversationStatePreservingGreeting(
+        priorState,
+        {
+          state: 'awaiting_booking_link_trouble_followup',
+          linkTroubleFirstAtMs: nowMs,
+        },
+        {
+          bookingLinkOptOutUntilMs: nowMs + BOOKING_LINK_OFFER_OPTOUT_MS,
+          ...(lastSede ? buildLinkSentStatePatch(lastSede) || {} : {}),
+          ...buildLastBotReplyStatePatch(replyText),
+        }
+      );
+      await setConversationState(from, nextState);
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, priorState);
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
+    }
     const openAiReply = await fetchOpenAiBookingLinkTroubleReply(bodyText, {
       priorState,
       profileDisplayName,
       linkUrl,
       isFollowUp: false,
+      isUsageDifficulty,
     });
-    const fallbackReply =
-      'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.';
+    const fallbackReply = isUsageDifficulty
+      ? buildBookingLinkStepByStepGuidanceReply(priorState)
+      : 'Qué garrón. Probá abrirlo desde otro navegador o desde la computadora si estás en el celu.';
     let replyText = processAssistantReplyForPatient(openAiReply || fallbackReply);
-    if (linkUrl && !replyText.includes(linkUrl)) {
+    if (!isUsageDifficulty && linkUrl && !replyText.includes(linkUrl)) {
       replyText = `${replyText}\n${linkUrl}`;
     }
     const nextState = mergeConversationStatePreservingGreeting(
@@ -4981,6 +5201,8 @@ async function tryExtractPatientContextWithOpenAi(rawText, priorState) {
     '{"city":"CORRIENTES","healthInsurance":"OSDE"}',
     'city debe ser CORRIENTES, RESISTENCIA o UNKNOWN.',
     'healthInsurance: nombre canónico si se menciona (OSDE, IOSCOR, Sancor, etc.) o null.',
+    'Si el paciente dice solo "particular" o quiere atención privada sin cobertura, healthInsurance debe ser null (NO es obra social).',
+    'No confundas "particular" con obras sociales cuyo nombre contiene "PARTICULARES".',
     'Aceptá typos y frases combinadas: "osde y soy de corrientes", "ctes con ioscor", "de resis sancor".',
     'ctes=Corrientes, resis/rcia=Resistencia.',
   ].join('\n');
@@ -5023,30 +5245,43 @@ async function tryExtractPatientContextWithOpenAi(rawText, priorState) {
   }
 }
 
-async function resolvePatientContextFromMessage(rawText, priorState) {
+async function resolvePatientContextFromMessage(rawText, priorState, options = {}) {
   const requiresFreshSede = userMessageRequiresFreshSedeForBooking(rawText, priorState);
+  const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(rawText, {
+    priorState,
+    profileDisplayName: options.profileDisplayName,
+  });
   let sedeEntry = findSedeFromText(rawText) || null;
   if (!sedeEntry && !requiresFreshSede) {
     sedeEntry = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState) || null;
   }
-  let healthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+  let healthInsuranceName = isPrivatePay
+    ? null
+    : resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
 
   if (!sedeEntry && !requiresFreshSede) {
     sedeEntry = await resolveSedeFromTextWithOpenAi(rawText);
   }
-  if (!healthInsuranceName && !shouldSkipHealthInsuranceFuzzyResolutionForMessage(rawText)) {
-    const fuzzyHealthInsuranceName = await tryResolveHealthInsuranceNameFromSheetsFuzzy(rawText);
+  if (
+    !healthInsuranceName &&
+    !isPrivatePay &&
+    !shouldSkipHealthInsuranceFuzzyResolutionForMessage(rawText)
+  ) {
+    const fuzzyHealthInsuranceName = await tryResolveHealthInsuranceNameFromSheetsFuzzy(rawText, {
+      priorState,
+      profileDisplayName: options.profileDisplayName,
+    });
     if (fuzzyHealthInsuranceName) {
       healthInsuranceName = normalizeHealthInsuranceNameForStudyPricing(fuzzyHealthInsuranceName);
     }
   }
-  if (getOpenAiApiKey() && (!sedeEntry || !healthInsuranceName)) {
+  if (getOpenAiApiKey() && (!sedeEntry || (!healthInsuranceName && !isPrivatePay))) {
     const openAiPatientContext = await tryExtractPatientContextWithOpenAi(rawText, priorState);
     if (openAiPatientContext) {
       if (!sedeEntry && openAiPatientContext.sedeEntry && !requiresFreshSede) {
         sedeEntry = openAiPatientContext.sedeEntry;
       }
-      if (!healthInsuranceName && openAiPatientContext.healthInsuranceName) {
+      if (!healthInsuranceName && !isPrivatePay && openAiPatientContext.healthInsuranceName) {
         healthInsuranceName = openAiPatientContext.healthInsuranceName;
       }
     }
@@ -5066,10 +5301,18 @@ async function sendAssistedBookingRequiredReply(from, bodyText, priorState, prof
   const replyText = needsHandoff
     ? DERIVATIVE_HANDOFF_PATIENT_MESSAGE
     : buildSelfBookingRequiredReply(priorState);
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const linkUrl = resolveBookingLinkUrlFromPriorState(priorState);
+  const shouldPersistLinkSent =
+    !needsHandoff && lastSede && linkUrl && typeof replyText === 'string' && replyText.includes(linkUrl);
   const preservedSessionState = mergeConversationStatePreservingGreeting(
     priorState,
     priorState || {},
-    needsHandoff ? { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS } : null
+    {
+      ...(needsHandoff ? { bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS } : {}),
+      ...(shouldPersistLinkSent ? buildLinkSentStatePatch(lastSede) || {} : {}),
+      ...buildLastBotReplyStatePatch(replyText),
+    }
   );
   await setConversationState(from, preservedSessionState);
   const wrapped = buildAutoReplyWithGreetingIfNeeded(replyText, profileDisplayName, preservedSessionState);
@@ -5088,9 +5331,28 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   if (await shouldSendBookingLinkDirectly(bodyText, priorState, profileDisplayName)) {
     return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
   }
-  if (hasBookingLinkInStateForSede(priorState, lastSede)) {
+  if (
+    hasBookingLinkInStateForSede(priorState, lastSede) ||
+    priorStateLooksLikeRecentBookingLinkContext(priorState)
+  ) {
     if (messageLooksLikeAssistedBookingRequest(bodyText)) {
       return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
+    }
+    if (messageLooksLikeBookingLinkUsageDifficulty(bodyText)) {
+      const reply = buildBookingLinkStepByStepGuidanceReply(priorState, lastSede);
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+          ...(wrapped.nextStatePatch || {}),
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          ...(buildLinkSentStatePatch(lastSede) || {}),
+          bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+          ...buildLastBotReplyStatePatch(wrapped.messageText),
+        })
+      );
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
     }
     if (
       messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState) ||
@@ -5362,7 +5624,9 @@ async function sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, 
     priorState || {},
     patientContext.statePatch
   );
-  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState);
+  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
+    profileDisplayName,
+  });
   const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
 
   if (healthInsuranceName && lastSede) {
@@ -5858,6 +6122,17 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
 }
 
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
+  if (
+    priorStateLooksLikeRecentBookingLinkContext(priorState) &&
+    (messageLooksLikeBookingLinkUsageDifficulty(bodyText) ||
+      (await tryResolveBookingLinkTroubleWithOpenAi(bodyText, {
+        priorState,
+        profileDisplayName,
+        rulesOnly: true,
+      })))
+  ) {
+    return false;
+  }
   if (
     conversationRecentlyAskedSedeSelection(priorState) &&
     (messageLooksLikeBareSedeOptionAnswer(bodyText) || messageLooksLikeSedeOnlyAnswer(bodyText))
@@ -6385,6 +6660,8 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
     'Rules:',
     '- Accept typos and variants (e.g., "issune", "issunne", "ioscor", "sancor salud", "pani" for PAMI).',
     '- PAMI may not be in the canonical list; still return bestGuess "PAMI" when the user means PAMI.',
+    '- If the user says only "particular" or means private pay without coverage, return isHealthInsurance=false (NOT an OS name).',
+    '- Do NOT map "particular" to obra social names containing "PARTICULARES" (e.g. OSDOP DOCENTES PARTICULARES).',
     '- If the message is about something else, return isHealthInsurance=false.',
   ].join('\n');
 
@@ -6436,7 +6713,15 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
   }
 }
 
-async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage) {
+async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage, options = {}) {
+  if (
+    await resolvePrivatePayWithoutHealthInsuranceFromMessage(userMessage, {
+      priorState: options.priorState,
+      profileDisplayName: options.profileDisplayName,
+    })
+  ) {
+    return null;
+  }
   if (shouldSkipHealthInsuranceFuzzyResolutionForMessage(userMessage)) return null;
   const data = await getGoogleSheetsData();
   const knownNames = getUniqueHealthInsuranceNamesFromSheetsData(data);
@@ -8623,8 +8908,73 @@ function wasBookingLinkSentRecently(priorState) {
   return Date.now() - lastAtMs <= BOOKING_LINK_RECENTLY_SENT_MS;
 }
 
+function messageLooksLikeBookingLinkUsageDifficulty(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('no se como hacer') ||
+    normalized.includes('no sé cómo hacer') ||
+    normalized.includes('no se como usar') ||
+    normalized.includes('no sé cómo usar') ||
+    normalized.includes('no se como reservar') ||
+    normalized.includes('no sé cómo reservar') ||
+    normalized.includes('no se como agendar') ||
+    normalized.includes('no sé cómo agendar') ||
+    normalized.includes('no entiendo como') ||
+    normalized.includes('no entiendo cómo') ||
+    normalized.includes('no se usar el link') ||
+    normalized.includes('no sé usar el link') ||
+    normalized.includes('no se usar la pagina') ||
+    normalized.includes('no sé usar la página') ||
+    normalized.includes('como hago para reservar') ||
+    normalized.includes('cómo hago para reservar') ||
+    normalized.includes('como hago para agendar') ||
+    normalized.includes('cómo hago para agendar') ||
+    normalized.includes('que tengo que hacer') ||
+    normalized.includes('qué tengo que hacer') ||
+    normalized === 'como hago' ||
+    normalized === 'cómo hago' ||
+    normalized === 'como es' ||
+    normalized === 'cómo es'
+  );
+}
+
+function messageLooksLikeBookingLinkTechnicalTrouble(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('no me abre') ||
+    normalized.includes('no abre') ||
+    normalized.includes('no funciona') ||
+    normalized.includes('no me funciona') ||
+    normalized.includes('no anda') ||
+    normalized.includes('no puedo abrir') ||
+    normalized.includes('no puedo entrar') ||
+    normalized.includes('no me deja') ||
+    normalized.includes('no carga') ||
+    normalized.includes('no carga la pagina') ||
+    normalized.includes('no carga la página') ||
+    normalized.includes('pagina en blanco') ||
+    normalized.includes('página en blanco') ||
+    normalized.includes('error en el link') ||
+    normalized.includes('link caido') ||
+    normalized.includes('link caído') ||
+    normalized.includes('link roto') ||
+    normalized.includes('link muerto') ||
+    normalized.includes('link no sirve') ||
+    normalized.includes('problema con el link') ||
+    normalized.includes('problema con la pagina') ||
+    normalized.includes('problema con la página')
+  );
+}
+
 function messageLooksLikeBookingLinkTrouble(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeBookingLinkUsageDifficulty(rawText)) return true;
   const normalized = normalizeForMatch(rawText);
   const hasLinkTroubleSignal =
     normalized.includes('no me abre') ||
@@ -9858,10 +10208,20 @@ exports.handler = async (event) => {
               nowMs - Number(priorState.awaitingConsultationPriceHealthInsuranceAtMs) <=
               CONSULTATION_PRICE_HEALTH_INSURANCE_WINDOW_MS;
             if (isInWindow) {
-              const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+              const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+                priorState,
+                profileDisplayName,
+              });
+              const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, {
+                profileDisplayName,
+              });
               const lastSede =
                 patientContext.sedeEntry || resolveLastSedeEntryFromState(priorState);
-              const healthInsuranceName = patientContext.healthInsuranceName;
+              const healthInsuranceName = isPrivatePay ? null : patientContext.healthInsuranceName;
+              if (isPrivatePay && lastSede) {
+                await sendPrivatePriceQuestionReply(from, bodyText, priorState, profileDisplayName);
+                continue;
+              }
               if (lastSede && healthInsuranceName) {
                 await sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
                 continue;
@@ -9894,14 +10254,39 @@ exports.handler = async (event) => {
             const isInWindow =
               nowMs - Number(priorState.awaitingStudyPriceHealthInsuranceAtMs) <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS;
             if (isInWindow) {
-              const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
+              const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+                priorState,
+                profileDisplayName,
+              });
+              const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, {
+                profileDisplayName,
+              });
               const sedeFromMessage = patientContext.sedeEntry;
-              const extractedHealthInsuranceName = patientContext.healthInsuranceName;
+              const extractedHealthInsuranceName = isPrivatePay ? null : patientContext.healthInsuranceName;
               const workingState = mergeConversationStatePreservingGreeting(
                 priorState,
                 priorState || {},
                 patientContext.statePatch
               );
+              if (isPrivatePay) {
+                const lastSede = sedeFromMessage || resolveLastSedeEntryFromState(workingState);
+                if (lastSede) {
+                  await sendStudyPriceInformationReply(
+                    from,
+                    'consulta particular',
+                    mergeConversationStatePreservingGreeting(
+                      workingState,
+                      {
+                        state: undefined,
+                        awaitingStudyPriceHealthInsuranceAtMs: undefined,
+                      },
+                      buildLastSedeStatePatch(lastSede) || {}
+                    ),
+                    profileDisplayName
+                  );
+                  continue;
+                }
+              }
               if (extractedHealthInsuranceName) {
                 const enrichedState = mergeConversationStatePreservingGreeting(
                   workingState,
@@ -9990,13 +10375,13 @@ exports.handler = async (event) => {
           if (await tryHandlePreferredDayBooking(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
