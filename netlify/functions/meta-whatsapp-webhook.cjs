@@ -1339,11 +1339,37 @@ function computeLevenshteinDistance(firstValue, secondValue) {
   return costs[secondLength];
 }
 
+function getNormalizedSedeKeywordSet() {
+  const keywords = new Set();
+  for (const entry of SEDE_ENTRIES) {
+    for (const keyword of entry.match) {
+      if (/^[12]$/.test(keyword)) continue;
+      const normalizedKeyword = normalizeForMatch(keyword);
+      if (normalizedKeyword) keywords.add(normalizedKeyword);
+    }
+  }
+  return keywords;
+}
+
+function guessKeyLooksLikeSedeKeywordOnly(guessKey) {
+  if (!guessKey || typeof guessKey !== 'string') return false;
+  const normalizedGuess = guessKey.replace(/\s+/g, ' ').trim();
+  if (!normalizedGuess) return false;
+  const sedeKeywords = getNormalizedSedeKeywordSet();
+  if (sedeKeywords.has(normalizedGuess)) return true;
+  const withoutFillerWords = normalizedGuess
+    .replace(/\b(y|en|la|el|para|de|a|o|ahí|ahi)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return Boolean(withoutFillerWords && sedeKeywords.has(withoutFillerWords));
+}
+
 function mapHealthInsuranceGuessToKnownName(guess, knownNames) {
   const guessRaw = typeof guess === 'string' ? guess.trim() : '';
   if (!guessRaw) return null;
   const guessKey = normalizeHealthInsuranceNameForKey(guessRaw);
   if (!guessKey) return null;
+  if (guessKeyLooksLikeSedeKeywordOnly(guessKey)) return null;
 
   const candidates = knownNames
     .map((name) => ({
@@ -2343,6 +2369,15 @@ function messageLooksLikeAlternateSedeFollowUp(rawText) {
   return messageLooksLikeSedeOnlyAnswer(rawText);
 }
 
+function shouldSkipHealthInsuranceFuzzyResolutionForMessage(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return (
+    messageLooksLikeSedeOnlyAnswer(rawText) ||
+    messageLooksLikeAlternateSedeFollowUp(rawText) ||
+    messageLooksLikeBareSedeOptionAnswer(rawText)
+  );
+}
+
 function extractWeekdayNameFromText(rawText) {
   if (!rawText || typeof rawText !== 'string') return null;
   const normalized = normalizeForMatch(rawText);
@@ -2707,6 +2742,23 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
   if (shouldAskHealthInsuranceBeforeConsultationPrice(priorState)) {
     return buildAskHealthInsuranceForConsultationPriceMessage();
   }
+  const activeHealthInsuranceName = resolveActiveHealthInsuranceNameFromState(priorState);
+  if (
+    activeHealthInsuranceName &&
+    sede &&
+    (stateHasRecentHealthInsuranceDiscussionContext(priorState) ||
+      messageLooksLikeAlternateSedeFollowUp(bodyText))
+  ) {
+    const healthInsuranceReply = await buildHealthInsurancePlusReplyOrAskCity(
+      sede,
+      activeHealthInsuranceName,
+      priorState,
+      { suppressBookingLinkOffer: true, replyContext: 'health_insurance_info' }
+    );
+    if (healthInsuranceReply !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+      return healthInsuranceReply;
+    }
+  }
   if (
     stateHasPendingPrivatePriceIntent(priorState) &&
     stateExplicitlyRequestedPrivateConsultationPrice(priorState)
@@ -2762,27 +2814,17 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
       return studiesReply;
     }
   }
-  const activeHealthInsuranceName = resolveActiveHealthInsuranceNameFromState(priorState);
-  if (
-    activeHealthInsuranceName &&
-    findSedeFromText(bodyText) &&
-    (stateHasRecentHealthInsuranceDiscussionContext(priorState) ||
-      messageLooksLikeAlternateSedeFollowUp(bodyText))
-  ) {
-    const healthInsuranceReply = await buildHealthInsurancePlusReplyOrAskCity(
-      sede,
-      activeHealthInsuranceName,
-      priorState,
-      { suppressBookingLinkOffer: true, replyContext: 'health_insurance_info' }
-    );
-    if (healthInsuranceReply !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
-      return healthInsuranceReply;
-    }
-  }
   return buildSedeConfirmedHelpMessage(sede);
 }
 
 async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName) {
+  if (
+    messageLooksLikeAlternateSedeFollowUp(bodyText) &&
+    stateHasRecentHealthInsuranceDiscussionContext(priorState) &&
+    resolveActiveHealthInsuranceNameFromState(priorState)
+  ) {
+    return false;
+  }
   const recentlyAskedSedeSelection = conversationRecentlyAskedSedeSelection(priorState);
   const isSedeSelectionAttempt =
     ((messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText)) &&
@@ -2820,7 +2862,7 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
   }
 
   const bookingRequestText = resolvePendingBookingRequestText(priorState, bodyText);
-  const reply = await buildReplyAfterSedeSelection(sede, priorState, bookingRequestText);
+  const reply = await buildReplyAfterSedeSelection(sede, priorState, bodyText);
   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
   const continuesConsultationPriceFlow = shouldAskHealthInsuranceBeforeConsultationPrice(priorState);
   const continuesPrivatePriceFlow =
@@ -3999,6 +4041,7 @@ async function sendConsultationPriceQuestionReply(from, bodyText, priorState, pr
           ...(buildLastSedeStatePatch(lastSede) || {}),
           healthInsuranceName,
           lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
           ...buildClearedPendingConsultationPriceIntentPatch(),
           ...buildConsultationPriceAnsweredStatePatch(),
           ...buildLastBotReplyStatePatch(wrapped.messageText),
@@ -4821,7 +4864,7 @@ async function resolvePatientContextFromMessage(rawText, priorState) {
   if (!sedeEntry && !requiresFreshSede) {
     sedeEntry = await resolveSedeFromTextWithOpenAi(rawText);
   }
-  if (!healthInsuranceName) {
+  if (!healthInsuranceName && !shouldSkipHealthInsuranceFuzzyResolutionForMessage(rawText)) {
     const fuzzyHealthInsuranceName = await tryResolveHealthInsuranceNameFromSheetsFuzzy(rawText);
     if (fuzzyHealthInsuranceName) {
       healthInsuranceName = normalizeHealthInsuranceNameForStudyPricing(fuzzyHealthInsuranceName);
@@ -6219,6 +6262,7 @@ async function tryResolveHealthInsuranceNameWithOpenAi(userMessage) {
 }
 
 async function tryResolveHealthInsuranceNameFromSheetsFuzzy(userMessage) {
+  if (shouldSkipHealthInsuranceFuzzyResolutionForMessage(userMessage)) return null;
   const data = await getGoogleSheetsData();
   const knownNames = getUniqueHealthInsuranceNamesFromSheetsData(data);
   if (knownNames.length === 0) return null;
@@ -9532,6 +9576,7 @@ exports.handler = async (event) => {
                       ...(wrapped.nextStatePatch || {}),
                       healthInsuranceName: extractedHealthInsuranceName,
                       lastHealthInsuranceName: extractedHealthInsuranceName,
+                      ...buildLastHealthInsuranceDiscussionStatePatch(),
                       lastStudyPriceContextAtMs: nowMs,
                       ...(patientContext.statePatch || {}),
                       ...buildLastBotReplyStatePatch(wrapped.messageText),
