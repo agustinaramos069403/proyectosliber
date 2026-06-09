@@ -70,6 +70,7 @@ const SEDE_ENTRIES = [
       'resistencia',
       'resitencia',
       'resis',
+      'ress',
       'resi',
       'immi',
       'instituto modelo de medicina infantil',
@@ -187,6 +188,7 @@ const MAX_LEVENSHTEIN_DISTANCE = 3;
 const MESSAGE_COLLECTION_WINDOW_MS = 6000;
 const SMALL_TALK_COOLDOWN_MS = 20000;
 const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
+const PRICE_OBJECTION_CONTEXT_WINDOW_MS = 30 * 60 * 1000;
 const BOOKING_LINK_OFFER_REPEAT_COOLDOWN_MS = 8 * 60 * 1000;
 const BOOKING_LINK_RECENTLY_SENT_MS = 24 * 60 * 60 * 1000;
 const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
@@ -614,7 +616,61 @@ function findSedeFromText(rawText) {
     }
   }
 
+  const compactTokens = normalized
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+  if (compactTokens.length > 0 && compactTokens.length <= 2) {
+    const compactText = compactTokens.join(' ');
+    if (compactText.length >= 3 && compactText.length <= 8) {
+      if (
+        normalizedTextContainsApproxWord(compactText, 'resistencia', 2) ||
+        normalizedTextContainsApproxWord(compactText, 'resis', 1)
+      ) {
+        return SEDE_ENTRIES.find((entry) => entry.displayName === 'Resistencia') || null;
+      }
+      if (
+        normalizedTextContainsApproxWord(compactText, 'corrientes', 2) ||
+        normalizedTextContainsApproxWord(compactText, 'ctes', 1)
+      ) {
+        return SEDE_ENTRIES.find((entry) => entry.displayName === 'Corrientes') || null;
+      }
+    }
+  }
+
   return null;
+}
+
+function messageLooksLikePossibleSedeTypoAnswer(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (findSedeFromText(rawText)) return true;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  if (wordCount > 3) return false;
+  return (
+    normalizedTextContainsApproxWord(normalized, 'resistencia', 2) ||
+    normalizedTextContainsApproxWord(normalized, 'resis', 1) ||
+    normalizedTextContainsApproxWord(normalized, 'corrientes', 2) ||
+    normalizedTextContainsApproxWord(normalized, 'ctes', 1)
+  );
+}
+
+function messageConflictsWithSedeSelectionReprompt(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return (
+    messageLooksLikeAnyPriceQuestion(rawText) ||
+    messageMatchesStudiesTopic(rawText) ||
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    (messageLooksLikeBookingIntent(rawText) && !messageLooksLikePossibleSedeTypoAnswer(rawText)) ||
+    messageExplicitlyRequestsBookingLink(rawText) ||
+    textMatchesMedicalEmergency(rawText)
+  );
 }
 
 function messageAlreadyStatesSymptomDuration(rawText) {
@@ -1196,30 +1252,52 @@ async function tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorStat
   );
 }
 
-function messageLooksLikePatientDissatisfactionByRules(rawText) {
+function messageLooksLikePriceObjection(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (textMatchesMedicalEmergency(rawText)) return false;
-  if (messageLooksLikeChronicSymptomFrustration(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return false;
-  const priceObjection =
+  return (
     normalized.includes('muy caro') ||
     normalized.includes('re caro') ||
     normalized.includes('carisimo') ||
     normalized.includes('carísimo') ||
+    normalized.includes('muchisimo') ||
+    normalized.includes('muchísima') ||
     normalized.includes('demasiado caro') ||
     normalized.includes('es caro') ||
     normalized.includes('esta caro') ||
     normalized.includes('está caro') ||
     normalized.includes('un robo') ||
     normalized.includes('no puedo pagar') ||
+    normalized.includes('no puedo gastar') ||
     normalized.includes('no me alcanza') ||
     normalized.includes('sale mucho') ||
     normalized.includes('es mucho') ||
-    normalized.includes('mucho dinero');
+    normalized.includes('mucho dinero') ||
+    normalized.includes('monto elevado') ||
+    (normalized.includes('como que') &&
+      (normalized.includes('mil') ||
+        normalized.includes('mas la consulta') ||
+        normalized.includes('más la consulta') ||
+        normalized.includes('consulta')))
+  );
+}
+
+function messageLooksLikePatientDissatisfactionByRules(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  if (messageLooksLikeChronicSymptomFrustration(rawText) && !messageLooksLikePriceObjection(rawText)) {
+    return false;
+  }
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const priceObjection = messageLooksLikePriceObjection(rawText);
   const emotionalFrustration =
     normalized.includes('estoy enojad') ||
     normalized.includes('estoy molest') ||
@@ -1254,6 +1332,73 @@ function priorStateLooksLikeRecentPriceOrPlusReply(priorState) {
     lastBotReplyText.includes('plus') ||
     lastBotReplyText.includes('consulta') ||
     lastBotReplyText.includes('espirometr')
+  );
+}
+
+function buildPriceObjectionEmpathyReply() {
+  return 'Entiendo que es un monto elevado y puede ser frustrante.';
+}
+
+function buildPriceObjectionPersonalAssistanceFollowUpReply(priorState) {
+  const sedeEntry = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
+  if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    return `Si querés una atención más personalizada, podés comunicarte con la clínica de ${sedeEntry.displayName.trim()} al ${phoneNumber}.`;
+  }
+  return `Si querés una atención más personalizada, podés comunicarte con la clínica al ${phoneNumber}.`;
+}
+
+function priorStateLooksLikeRecentPriceObjectionContext(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastHandledAtMs = Number(priorState.lastPriceObjectionHandledAtMs);
+  const lastDissatisfactionAtMs = Number(priorState.lastPatientDissatisfactionAtMs);
+  const referenceAtMs = Number.isFinite(lastHandledAtMs)
+    ? lastHandledAtMs
+    : Number.isFinite(lastDissatisfactionAtMs)
+      ? lastDissatisfactionAtMs
+      : null;
+  if (!Number.isFinite(referenceAtMs)) return false;
+  if (Date.now() - referenceAtMs > PRICE_OBJECTION_CONTEXT_WINDOW_MS) return false;
+  return (
+    Number.isFinite(lastHandledAtMs) ||
+    (priorStateLooksLikeRecentPriceOrPlusReply(priorState) && Number.isFinite(lastDissatisfactionAtMs))
+  );
+}
+
+function messageAsksWhatOptionsOrHelpIsAvailable(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('que tenes para ofrecer') ||
+    normalized.includes('que tienes para ofrecer') ||
+    normalized.includes('que me ofreces') ||
+    normalized.includes('que opciones') ||
+    normalized.includes('que alternativas') ||
+    normalized.includes('que mas podes') ||
+    normalized.includes('que mas puedes') ||
+    normalized.includes('que mas tenes') ||
+    normalized.includes('que mas tienes') ||
+    (normalized.includes('que tenes') && normalized.includes('ofrecer')) ||
+    (normalized.includes('que tienes') && normalized.includes('ofrecer'))
+  );
+}
+
+async function tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!priorStateLooksLikeRecentPriceObjectionContext(priorState)) return false;
+  if (!messageAsksWhatOptionsOrHelpIsAvailable(bodyText)) return false;
+  return deliverSequentialPatientTextMessages(
+    from,
+    [buildPriceObjectionPersonalAssistanceFollowUpReply(priorState)],
+    priorState,
+    profileDisplayName,
+    {
+      lastPriceObjectionFollowUpAtMs: Date.now(),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    }
   );
 }
 
@@ -3658,27 +3803,37 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
     ((messageLooksLikeSedeOnlyAnswer(bodyText) || messageLooksLikeBareSedeOptionAnswer(bodyText)) &&
       !stateConflictsWithSedeOnlyAnswer(priorState)) ||
     messageLooksLikeVagueAnswer(bodyText) ||
-    messageLooksLikeSedeSelectionConfusion(bodyText);
+    messageLooksLikeSedeSelectionConfusion(bodyText) ||
+    messageLooksLikePossibleSedeTypoAnswer(bodyText);
 
   if (
     userMessageRequiresFreshSedeForBooking(bodyText, priorState) &&
-    !messageLooksLikeBareSedeOptionAnswer(bodyText)
+    !messageLooksLikeBareSedeOptionAnswer(bodyText) &&
+    !messageLooksLikePossibleSedeTypoAnswer(bodyText)
   ) {
     return false;
   }
 
   if (!recentlyAskedSedeSelection && !isSedeSelectionAttempt) return false;
-  if (recentlyAskedSedeSelection && !isSedeSelectionAttempt) return false;
+  if (
+    recentlyAskedSedeSelection &&
+    !isSedeSelectionAttempt &&
+    messageConflictsWithSedeSelectionReprompt(bodyText)
+  ) {
+    return false;
+  }
 
   const sede = await resolveSedeFromTextWithOpenAi(bodyText);
   if (!sede) {
     if (await tryHandleInactiveSedeReferral(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
-    if (!recentlyAskedSedeSelection) return false;
+    if (!recentlyAskedSedeSelection && !messageLooksLikePossibleSedeTypoAnswer(bodyText)) return false;
     const repromptText = messageLooksLikeSedeSelectionConfusion(bodyText)
       ? `Escribí solo el número de la sede. ${buildSedeNumberedOptionsSuffix()}`
-      : buildConsolidatedAskSedePrompt();
+      : messageLooksLikePossibleSedeTypoAnswer(bodyText)
+        ? `No llegué a entender la sede. ${buildSedeNumberedOptionsSuffix()}`
+        : buildConsolidatedAskSedePrompt();
     const wrapped = buildAutoReplyWithGreetingIfNeeded(repromptText, profileDisplayName, priorState);
     await setConversationState(
       from,
@@ -4751,6 +4906,9 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
 
 async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName) {
   if (!stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+  if (stateLooksLikeAwaitingSedeSelection(priorState) || conversationRecentlyAskedSedeSelection(priorState)) {
+    return false;
+  }
   if (
     messageAsksAboutSedeAddressOrHowToArrive(bodyText) ||
     (messageAsksForMapsLocation(bodyText) && !messageLooksLikeBookingIntent(bodyText))
@@ -5189,11 +5347,17 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
 }
 
 async function tryResolveAssistedBookingRequestWithOpenAi(userMessage, options = {}) {
+  const priorState = options.priorState;
+  if (
+    priorState &&
+    (conversationRecentlyAskedSedeSelection(priorState) || stateLooksLikeAwaitingSedeSelection(priorState)) &&
+    !messageLooksLikeAssistedBookingRequest(userMessage)
+  ) {
+    return false;
+  }
   const rulesMatch = messageLooksLikeAssistedBookingRequest(userMessage);
   if (options.rulesOnly) return rulesMatch;
   if (messageAsksIfAssistantCanBookForUser(userMessage)) return true;
-
-  const priorState = options.priorState;
   const hasAssistedBookingContext =
     priorState &&
     typeof priorState === 'object' &&
@@ -5261,6 +5425,12 @@ async function tryResolveAssistedBookingRequestWithOpenAi(userMessage, options =
 }
 
 async function tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (
+    (conversationRecentlyAskedSedeSelection(priorState) || stateLooksLikeAwaitingSedeSelection(priorState)) &&
+    !messageLooksLikeAssistedBookingRequest(bodyText)
+  ) {
+    return false;
+  }
   const isAssistedBooking = await tryResolveAssistedBookingRequestWithOpenAi(bodyText, {
     priorState,
     profileDisplayName,
@@ -5283,6 +5453,13 @@ function conversationLooksLikePatientDissatisfactionContext(priorState) {
 
 async function tryResolvePatientDissatisfactionWithOpenAi(userMessage, options = {}) {
   if (messageAsksWhyChooseDoctorOrTrustQuestion(userMessage)) return false;
+  if (
+    options.priorState &&
+    priorStateLooksLikeRecentPriceOrPlusReply(options.priorState) &&
+    messageLooksLikePriceObjection(userMessage)
+  ) {
+    return true;
+  }
   const rulesMatch = messageLooksLikePatientDissatisfactionByRules(userMessage);
   if (options.rulesOnly) return rulesMatch;
 
@@ -5366,10 +5543,10 @@ async function fetchOpenAiDissatisfactionReply(userMessage, options = {}) {
     bookingFrustrationContext
       ? 'Situación: el paciente está enojado o frustrado con el proceso de agendar turno o con las respuestas sobre el link de agenda.'
       : 'Situación: el paciente expresó enojo, frustración o que algo es muy caro.',
-    'Respondé con empatía breve y humana (máximo 3 oraciones). NO repitas montos ni la respuesta anterior palabra por palabra.',
+    'Respondé con empatía breve y humana (máximo 2 oraciones). NO repitas montos ni la respuesta anterior palabra por palabra.',
     bookingFrustrationContext
       ? `Validá su molestia, ofrecé acompañarlo paso a paso. Si necesita ayuda humana, indicá el teléfono ${assistancePhoneNumber}. NO repitas el link ni digas "te dejo el link". NO digas "te derivo" ni que alguien lo va a contactar.`
-      : 'NO des diagnósticos. NO inventes precios. Podés validar su molestia y ofrecer ayudar con otra consulta concreta.',
+      : 'NO des diagnósticos. NO inventes precios. NO listes estudios ni tratamientos alternativos. NO preguntes qué quiere revisar. Solo validá empatía breve sobre el monto.',
     'NO ofrezcas link de turno salvo que lo pida explícitamente.',
   ].join('\n');
 
@@ -5427,12 +5604,31 @@ async function tryHandlePatientDissatisfactionWithOpenAi(
   ) {
     return false;
   }
-  const isDissatisfaction = await tryResolvePatientDissatisfactionWithOpenAi(bodyText, {
-    priorState,
-    profileDisplayName,
-    rulesOnly: options.rulesOnly,
-  });
+  const isPriceObjectionAfterQuote =
+    priorStateLooksLikeRecentPriceOrPlusReply(priorState) && messageLooksLikePriceObjection(bodyText);
+
+  const isDissatisfaction =
+    isPriceObjectionAfterQuote ||
+    (await tryResolvePatientDissatisfactionWithOpenAi(bodyText, {
+      priorState,
+      profileDisplayName,
+      rulesOnly: options.rulesOnly,
+    }));
   if (!isDissatisfaction) return false;
+
+  if (isPriceObjectionAfterQuote) {
+    return deliverSequentialPatientTextMessages(
+      from,
+      [buildPriceObjectionEmpathyReply(), buildPriceObjectionPersonalAssistanceFollowUpReply(priorState)],
+      priorState,
+      profileDisplayName,
+      {
+        lastPatientDissatisfactionAtMs: Date.now(),
+        lastPriceObjectionHandledAtMs: Date.now(),
+        bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      }
+    );
+  }
 
   const openAiReply = await fetchOpenAiDissatisfactionReply(bodyText, { priorState, profileDisplayName });
   if (!openAiReply && getOpenAiApiKey()) {
@@ -5980,8 +6176,8 @@ async function tryResolveSedeFromTextWithOpenAi(rawText) {
     'Sos un extractor de sede para un consultorio que atiende solo en Corrientes y Resistencia (Argentina).',
     'Tarea: identificar a qué ciudad se refiere el paciente en un mensaje de WhatsApp en español.',
     'Respondé SOLO uno de: CORRIENTES, RESISTENCIA, UNKNOWN.',
-    'Aceptá typos, abreviaturas (ctes, resis, rcia), números de menú (1=Corrientes, 2=Resistencia) y menciones indirectas.',
-    'Ejemplos: "soy de corrientes", "de ctes", "osde y soy de corrientes", "vivo en resistencia".',
+    'Aceptá typos, abreviaturas (ctes, resis, ress, rcia), números de menú (1=Corrientes, 2=Resistencia) y menciones indirectas.',
+    'Ejemplos: "soy de corrientes", "de ctes", "ress", "osde y soy de corrientes", "vivo en resistencia".',
     'Si no se puede saber, devolvé UNKNOWN.',
   ].join('\n');
 
@@ -6123,6 +6319,12 @@ async function resolvePatientContextFromMessage(rawText, priorState, options = {
 }
 
 async function sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName) {
+  if (
+    (conversationRecentlyAskedSedeSelection(priorState) || stateLooksLikeAwaitingSedeSelection(priorState)) &&
+    !messageLooksLikeAssistedBookingRequest(bodyText)
+  ) {
+    return tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName);
+  }
   const needsHandoff = messageAsksToBookWithoutSelfServiceLink(bodyText);
   const replyText = needsHandoff
     ? buildBookingPersonalAssistanceMessage(priorState)
@@ -7343,6 +7545,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
 }
 
 async function sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (await tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (messageLooksLikePatientDissatisfactionByRules(bodyText)) {
     return tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName);
   }
@@ -8217,6 +8422,10 @@ async function tryHandleConversationalContinuationWithOpenAi(
   if (!getOpenAiApiKey()) return false;
   if (!stateHasActiveConversationalThread(priorState)) return false;
 
+  if (await tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+
   if (await tryHandleStudyPriceAffirmativeFollowUp(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -8308,12 +8517,18 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
   if (await tryHandleConversationalContinuationWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (await tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   const primaryIntent = await decidePrimaryIntentWithOpenAi(bodyText, {
     priorState,
     profileDisplayName,
   });
   if (primaryIntent && primaryIntent !== 'OTHER') {
     return dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName, primaryIntent);
+  }
+  if (priorStateLooksLikeRecentPriceObjectionContext(priorState)) {
+    return false;
   }
   const openAiReply = await fetchOpenAiAssistantReply(bodyText, {
     profileDisplayName,
@@ -12118,9 +12333,14 @@ exports.handler = async (event) => {
           }
 
           if (
-            stateLooksLikeAwaitingSedeSelection(priorState) &&
-            (messageLooksLikeSedeSelectionConfusion(bodyText) || messageLooksLikeVagueAnswer(bodyText))
+            (stateLooksLikeAwaitingSedeSelection(priorState) || conversationRecentlyAskedSedeSelection(priorState)) &&
+            (messageLooksLikeSedeSelectionConfusion(bodyText) ||
+              messageLooksLikeVagueAnswer(bodyText) ||
+              messageLooksLikePossibleSedeTypoAnswer(bodyText))
           ) {
+            if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
+              continue;
+            }
             await sendSedeSelectionHelpMessage(from, profileDisplayName, priorState);
             continue;
           }
@@ -12504,6 +12724,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
