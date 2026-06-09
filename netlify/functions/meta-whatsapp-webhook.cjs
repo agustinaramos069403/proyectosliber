@@ -6015,9 +6015,53 @@ async function sendAssistedBookingRequiredReply(from, bodyText, priorState, prof
   return true;
 }
 
+async function tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksWhereOrHowToBook(bodyText)) return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  if (!lastSede) return false;
+  if (
+    wasBookingLinkSentRecently(priorState) ||
+    hasBookingLinkInStateForSede(priorState, lastSede) ||
+    conversationLooksLikeOngoingBookingLinkGuidance(priorState)
+  ) {
+    const reply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede);
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+        ...(wrapped.nextStatePatch || {}),
+        ...(buildLastSedeStatePatch(lastSede) || {}),
+        ...(buildLinkSentStatePatch(lastSede) || {}),
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      })
+    );
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
+  }
+  return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
+}
+
 async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDisplayName, lastSede) {
   if (messageLooksLikeAssistedBookingRequest(bodyText)) {
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
+  }
+  if (messageAsksWhereOrHowToBook(bodyText)) {
+    const reply =
+      wasBookingLinkSentRecently(priorState) || hasBookingLinkInStateForSede(priorState, lastSede)
+        ? buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede)
+        : buildLinkMessage(lastSede);
+    const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+        ...(wrapped.nextStatePatch || {}),
+        ...(buildLastSedeStatePatch(lastSede) || {}),
+        ...(buildLinkSentStatePatch(lastSede) || {}),
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      })
+    );
+    await sendWhatsAppText(from, wrapped.messageText);
+    return true;
   }
   if (shouldWithholdBookingLinkUntilSedeConfirmed(priorState, bodyText, lastSede)) {
     await sendAskSedeTwoStep(from, profileDisplayName, priorState);
@@ -7561,6 +7605,14 @@ function userMessageRequiresFreshSedeForBooking(bodyText, priorState = null) {
   if (!bodyText || typeof bodyText !== 'string') return false;
   if (findSedeFromText(bodyText)) return false;
   if (priorState && messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState)) return false;
+  if (messageAsksWhereOrHowToBook(bodyText) && priorStateHasKnownBookingSede(priorState)) return false;
+  if (
+    messageAsksWhereOrHowToBook(bodyText) &&
+    priorState &&
+    wasBookingLinkSentRecently(priorState)
+  ) {
+    return false;
+  }
   return (
     messageLooksLikeBookingIntent(bodyText) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
@@ -7607,6 +7659,10 @@ function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
 
   const lastSede = resolveLastSedeEntryFromState(priorState);
   if (!lastSede) return null;
+
+  if (messageAsksWhereOrHowToBook(bodyText)) {
+    return lastSede;
+  }
 
   const lastSedeAt = Number(priorState.lastSedeAtMs);
   if (Number.isFinite(lastSedeAt) && Date.now() - lastSedeAt <= SEDE_SELECTION_WINDOW_MS) {
@@ -7666,6 +7722,7 @@ function buildFreshBookingWithoutSedeStatePatch(bodyText) {
 }
 
 function shouldWithholdBookingLinkUntilSedeConfirmed(priorState, bodyText, sedeEntry) {
+  if (messageAsksWhereOrHowToBook(bodyText) && sedeEntry) return false;
   if (stateLooksLikeAwaitingSedeSelection(priorState)) return true;
   const confirmedSede = resolveConfirmedSedeEntryForBookingFlow(bodyText || '', priorState);
   if (!confirmedSede) {
@@ -8334,6 +8391,40 @@ function buildSedeClinicHoursReply(entry) {
   if (!entry) return null;
   const clinicHours = getSedeClinicHours(entry);
   return clinicHours ? `Horarios de la clínica: ${clinicHours}` : null;
+}
+
+function messageAsksWhereOrHowToBook(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const whereHowPatterns = [
+    /\bdonde\s+agend/,
+    /\bdonde\s+reserv/,
+    /\bdonde\s+saco\s+turno/,
+    /\bdonde\s+turno/,
+    /\bcomo\s+agend/,
+    /\bcomo\s+reserv/,
+    /\bcomo\s+saco\s+turno/,
+    /\bpor\s+donde\s+agend/,
+    /\bpor\s+donde\s+reserv/,
+    /\bdonde\s+me\s+anoto/,
+    /\bdonde\s+anoto/,
+    /\ben\s+donde\s+agend/,
+    /\ben\s+donde\s+reserv/,
+  ];
+  if (whereHowPatterns.some((pattern) => pattern.test(normalized))) return true;
+  return (
+    (normalized.includes('donde') || normalized.includes('como')) &&
+    (normalized.includes('agend') || normalized.includes('turno') || normalized.includes('reserv'))
+  );
+}
+
+function priorStateHasKnownBookingSede(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  return Boolean(resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState));
 }
 
 function messageLooksLikeBookingIntent(rawText) {
@@ -12045,6 +12136,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleBookingLinkTroubleWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
