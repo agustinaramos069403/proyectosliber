@@ -2684,15 +2684,30 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
 
   const apiKey = getOpenAiApiKey();
   const modelName = getOpenAiModelName();
+  const replyContextInstructions = [];
+  if (options.replyContext === 'booking_link_reminder') {
+    replyContextInstructions.push(
+      'Contexto: recordatorio de agenda/link ya enviado.',
+      'NO uses "Sí, exacto" ni confirmaciones redundantes. Variá el tono según el mensaje del paciente.',
+      'Si preguntó cómo o dónde sacar turno, respondé directo con el recordatorio del link, sin preámbulo innecesario.'
+    );
+  }
+  if (options.replyContext === 'bare_ack') {
+    replyContextInstructions.push(
+      'Contexto: el paciente solo dijo "dale", "ok" o "gracias" sin pedir turno.',
+      'Respuesta breve y cálida. NO repitas el link de agenda ni vuelvas a explicar cómo reservar.'
+    );
+  }
   const systemPrompt = [
     'Sos la voz humana de WhatsApp de la asistente del Dr. Liber Acosta (alergia e inmunología), en español rioplatense.',
     'Recibís un borrador factual generado por reglas. Reescribilo para que suene natural, cálido y fluido, como una recepcionista real (estilo bot de n8n), NO como call center ni robot.',
     'Mantené EXACTOS: montos ($), links URL, nombres de obra social/prepaga, ciudades (Corrientes/Resistencia), números de sede (1/2) y datos clínicos.',
     'No inventes ni omitas información. No agregues temas nuevos.',
     'Máximo 2 oraciones cortas por mensaje. Texto plano, sin markdown.',
-    'Evitá frases plantilla: "Entendido", "Perfecto", "¿En qué te puedo ayudar?", "Soy un asistente virtual".',
+    'Evitá frases plantilla: "Entendido", "Perfecto", "¿En qué te puedo ayudar?", "Soy un asistente virtual", "Sí, exacto".',
     'Si el paciente preguntó algo concreto, respondé eso primero con naturalidad.',
     'Podés usar como mucho 1 emoji cálido si suma (😊 🙂), no en todos los mensajes.',
+    ...replyContextInstructions,
     'Si el borrador ya suena humano y claro, devolvé exactamente: OK',
     'Si lo mejorás, devolvé: REVISED: <texto>',
   ].join('\n');
@@ -4357,10 +4372,19 @@ function messageConfirmsLinkSend(rawText) {
   if (messageRequestsPersonalBookingAssistance(rawText)) return false;
   if (messageClearlyRejectsLinkSend(rawText)) return false;
   if (messageLooksLikeAnyPriceQuestion(rawText)) return false;
+  if (messageAsksWhereOrHowToBook(rawText)) return false;
+  if (messageAsksExplicitlyHowToBookTurn(rawText)) return false;
+  if (messageAsksHowBookingWorks(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (
+    (normalized.includes('como') || normalized.includes('cómo')) &&
+    (normalized.includes('turno') || normalized.includes('agend') || normalized.includes('reserv'))
+  ) {
+    return false;
+  }
 
   // Accept short confirmations even with extra words: "si quiero", "si pasame el link", "dale pasalo"
   if (/^(si|dale|ok|oka|de una|listo|ya)\b/.test(normalized)) return true;
@@ -6016,7 +6040,7 @@ async function sendAssistedBookingRequiredReply(from, bodyText, priorState, prof
 }
 
 async function tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName) {
-  if (!messageAsksWhereOrHowToBook(bodyText)) return false;
+  if (!messageAsksWhereOrHowToBook(bodyText) && !messageAsksExplicitlyHowToBookTurn(bodyText)) return false;
   const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   if (!lastSede) return false;
   if (
@@ -6024,19 +6048,7 @@ async function tryHandleWhereToBookQuestion(from, bodyText, priorState, profileD
     hasBookingLinkInStateForSede(priorState, lastSede) ||
     conversationLooksLikeOngoingBookingLinkGuidance(priorState)
   ) {
-    const reply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede);
-    const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-    await setConversationState(
-      from,
-      mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-        ...(wrapped.nextStatePatch || {}),
-        ...(buildLastSedeStatePatch(lastSede) || {}),
-        ...(buildLinkSentStatePatch(lastSede) || {}),
-        ...buildLastBotReplyStatePatch(wrapped.messageText),
-      })
-    );
-    await sendWhatsAppText(from, wrapped.messageText);
-    return true;
+    return deliverBookingLinkReminderReply(from, bodyText, priorState, profileDisplayName, lastSede);
   }
   return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
 }
@@ -6045,23 +6057,11 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   if (messageLooksLikeAssistedBookingRequest(bodyText)) {
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
-  if (messageAsksWhereOrHowToBook(bodyText)) {
-    const reply =
-      wasBookingLinkSentRecently(priorState) || hasBookingLinkInStateForSede(priorState, lastSede)
-        ? buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede)
-        : buildLinkMessage(lastSede);
-    const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-    await setConversationState(
-      from,
-      mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-        ...(wrapped.nextStatePatch || {}),
-        ...(buildLastSedeStatePatch(lastSede) || {}),
-        ...(buildLinkSentStatePatch(lastSede) || {}),
-        ...buildLastBotReplyStatePatch(wrapped.messageText),
-      })
-    );
-    await sendWhatsAppText(from, wrapped.messageText);
-    return true;
+  if (messageAsksWhereOrHowToBook(bodyText) || messageAsksExplicitlyHowToBookTurn(bodyText)) {
+    if (wasBookingLinkSentRecently(priorState) || hasBookingLinkInStateForSede(priorState, lastSede)) {
+      return deliverBookingLinkReminderReply(from, bodyText, priorState, profileDisplayName, lastSede);
+    }
+    return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
   }
   if (shouldWithholdBookingLinkUntilSedeConfirmed(priorState, bodyText, lastSede)) {
     await sendAskSedeTwoStep(from, profileDisplayName, priorState);
@@ -6088,19 +6088,7 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
       messageConfirmsLinkSend(bodyText) ||
       messageLooksLikeBookingIntent(bodyText)
     ) {
-      const reply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede);
-      const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-      await setConversationState(
-        from,
-        mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-          ...(wrapped.nextStatePatch || {}),
-          ...(buildLastSedeStatePatch(lastSede) || {}),
-          ...(buildLinkSentStatePatch(lastSede) || {}),
-          ...buildLastBotReplyStatePatch(wrapped.messageText),
-        })
-      );
-      await sendWhatsAppText(from, wrapped.messageText);
-      return true;
+      return deliverBookingLinkReminderReply(from, bodyText, priorState, profileDisplayName, lastSede);
     }
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
@@ -8378,8 +8366,39 @@ function messageAsksHowBookingWorks(rawText) {
     normalized === 'como funciona' ||
     normalized === 'cómo funciona' ||
     normalized === 'como hago' ||
-    normalized === 'cómo hago'
+    normalized === 'cómo hago' ||
+    normalized.includes('como puedo sacar') ||
+    normalized.includes('cómo puedo sacar') ||
+    normalized.includes('puedo sacar un turno') ||
+    normalized.includes('puedo sacar turno')
   );
+}
+
+function messageAsksExplicitlyHowToBookTurn(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('como puedo sacar') ||
+    normalized.includes('cómo puedo sacar') ||
+    normalized.includes('como saco turno') ||
+    normalized.includes('cómo saco turno') ||
+    normalized.includes('como pido turno') ||
+    normalized.includes('cómo pido turno') ||
+    normalized.includes('como reservo') ||
+    normalized.includes('cómo reservo') ||
+    normalized.includes('como agendo') ||
+    normalized.includes('cómo agendo') ||
+    normalized.includes('puedo sacar un turno') ||
+    normalized.includes('puedo sacar turno')
+  );
+}
+
+function buildBareConversationAcknowledgementDraft() {
+  return 'Genial. Cualquier otra consulta, escribime.';
 }
 
 function buildSedeScheduleReply(entry) {
@@ -10489,18 +10508,84 @@ function buildLinkMessage(entry) {
   ].join('\n');
 }
 
-function buildAlreadySentBookingLinkAffirmationReply(priorState, entry) {
+function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options = {}) {
+  const userMessage = typeof options.userMessage === 'string' ? options.userMessage : '';
+  const cityName = entry.displayName;
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
   const linkAlreadyShared =
     conversationLooksLikeOngoingBookingLinkGuidance(priorState) ||
     hasBookingLinkInStateForSede(priorState, entry);
-  if (linkUrl && linkAlreadyShared) {
-    return `¡Sí, exacto! Con el link que ya te pasé podés ver horarios y reservar tu turno en ${entry.displayName}.`;
+  const directReminderLine = linkAlreadyShared
+    ? `Con el link que ya te pasé podés ver horarios y reservar tu turno en ${cityName}.`
+    : linkUrl
+      ? `Podés ver horarios y reservar tu turno en ${cityName} en este link:\n${linkUrl}`
+      : null;
+
+  if (!directReminderLine) {
+    return buildLinkMessage(entry);
   }
-  if (linkUrl) {
-    return `¡Sí, exacto! Con ese link podés ver horarios y reservar tu turno en ${entry.displayName}:\n${linkUrl}`;
+
+  if (
+    messageAsksWhereOrHowToBook(userMessage) ||
+    messageAsksExplicitlyHowToBookTurn(userMessage) ||
+    messageAsksHowBookingWorks(userMessage)
+  ) {
+    return directReminderLine;
   }
-  return buildLinkMessage(entry);
+
+  if (messageIsAcknowledgement(userMessage) && !messageExplicitlyRequestsBookingLink(userMessage)) {
+    return null;
+  }
+
+  if (messageExplicitlyRequestsBookingLink(userMessage)) {
+    return directReminderLine;
+  }
+
+  return directReminderLine;
+}
+
+async function deliverBookingLinkReminderReply(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName,
+  lastSede,
+  options = {}
+) {
+  const rulesReply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede, {
+    userMessage: bodyText,
+  });
+  if (!rulesReply) {
+    return sendFinalizedPatientTextReply(
+      from,
+      buildBareConversationAcknowledgementDraft(),
+      priorState,
+      profileDisplayName,
+      {
+        ...(buildLastSedeStatePatch(lastSede) || {}),
+      },
+      {
+        userMessage: bodyText,
+        replyContext: 'bare_ack',
+        conversationContext: buildIntentRoutingOpenAiContext(priorState),
+      }
+    );
+  }
+  return sendFinalizedPatientTextReply(
+    from,
+    rulesReply,
+    priorState,
+    profileDisplayName,
+    {
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...(buildLinkSentStatePatch(lastSede) || {}),
+    },
+    {
+      userMessage: bodyText,
+      replyContext: options.replyContext || 'booking_link_reminder',
+      conversationContext: buildIntentRoutingOpenAiContext(priorState),
+    }
+  );
 }
 
 function messageRequestsPersonalBookingAssistance(rawText) {
@@ -10623,19 +10708,7 @@ async function tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorStat
   if (!messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState)) return false;
   const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   if (!lastSede) return false;
-  const reply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede);
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-  await setConversationState(
-    from,
-    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-      ...(wrapped.nextStatePatch || {}),
-      ...(buildLastSedeStatePatch(lastSede) || {}),
-      ...(buildLinkSentStatePatch(lastSede) || {}),
-      ...buildLastBotReplyStatePatch(wrapped.messageText),
-    })
-  );
-  await sendWhatsAppText(from, wrapped.messageText);
-  return true;
+  return deliverBookingLinkReminderReply(from, bodyText, priorState, profileDisplayName, lastSede);
 }
 
 function buildLinkSentStatePatch(entry) {
@@ -13300,6 +13373,27 @@ exports.handler = async (event) => {
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
             wasBookingLinkSentRecently(priorState) &&
+            messageIsAcknowledgement(bodyText) &&
+            !messageExplicitlyRequestsBookingLink(bodyText) &&
+            !messageAsksWhereOrHowToBook(bodyText) &&
+            !messageAsksExplicitlyHowToBookTurn(bodyText)
+          ) {
+            const acknowledgementSede = resolveLastSedeEntryFromState(priorState);
+            if (acknowledgementSede) {
+              await deliverBookingLinkReminderReply(
+                from,
+                bodyText,
+                priorState,
+                profileDisplayName,
+                acknowledgementSede
+              );
+              continue;
+            }
+          }
+
+          if (
+            !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
+            wasBookingLinkSentRecently(priorState) &&
             (messageConfirmsLinkSend(bodyText) ||
               messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState))
           ) {
@@ -13309,21 +13403,7 @@ exports.handler = async (event) => {
               (messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState) ||
                 hasBookingLinkInStateForSede(priorState, lastSede))
             ) {
-              const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede),
-                profileDisplayName,
-                priorState
-              );
-              await setConversationState(
-                from,
-                mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
-                  ...(wrapped.nextStatePatch || {}),
-                  ...(buildLastSedeStatePatch(lastSede) || {}),
-                  ...(buildLinkSentStatePatch(lastSede) || {}),
-                  ...buildLastBotReplyStatePatch(wrapped.messageText),
-                })
-              );
-              await sendWhatsAppText(from, wrapped.messageText);
+              await deliverBookingLinkReminderReply(from, bodyText, priorState, profileDisplayName, lastSede);
               continue;
             }
             if (messageExplicitlyRequestsBookingLink(bodyText) && lastSede) {
