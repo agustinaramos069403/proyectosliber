@@ -9619,12 +9619,65 @@ function messageAsksApproximateConsultationCost(rawText) {
     normalized.includes('cuanto gast') ||
     normalized.includes('cuanto nos sal') ||
     normalized.includes('cuanto saldria') ||
-    normalized.includes('cuanto tendriamos que gastar') ||
     normalized.includes('aproximad') ||
     normalized.includes('mas o menos cuanto') ||
     normalized.includes('idea de cuanto') ||
     normalized.includes('valor aprox')
   );
+}
+
+function messageAsksCompleteOrTotalCost(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  if (
+    normalized.includes('total') ||
+    normalized.includes('valor final') ||
+    normalized.includes('precio final') ||
+    normalized.includes('total final') ||
+    normalized.includes('cuanto me sale todo') ||
+    normalized.includes('cuanto sale todo') ||
+    normalized.includes('cuanto me saldria todo') ||
+    normalized.includes('cuanto saldria todo') ||
+    normalized.includes('cuanto es todo') ||
+    normalized.includes('precio de todo') ||
+    normalized.includes('costo de todo') ||
+    normalized.includes('valor de todo') ||
+    normalized.includes('cuanto sale en total') ||
+    normalized.includes('cuanto me sale en total') ||
+    normalized.includes('cuanto seria mi total') ||
+    normalized.includes('cuanto sería mi total') ||
+    normalized.includes('cuanto seria el total') ||
+    normalized.includes('cuanto sería el total') ||
+    normalized.includes('cuanto me sale en total')
+  ) {
+    return true;
+  }
+  return (
+    normalized.includes('todo') &&
+    (normalized.includes('cuanto') ||
+      normalized.includes('precio') ||
+      normalized.includes('costo') ||
+      normalized.includes('valor'))
+  );
+}
+
+function messageLooksLikeCompleteCostTotalInquiry(rawText, priorState = null) {
+  if (!messageAsksCompleteOrTotalCost(rawText)) return false;
+  const hasStudyContext =
+    Boolean(getStudyTypeFromText(rawText)) ||
+    messageMatchesStudiesTopic(rawText) ||
+    messageAsksAboutStudyPrice(rawText) ||
+    (priorState &&
+      typeof priorState === 'object' &&
+      typeof priorState.lastStudyType === 'string' &&
+      priorState.lastStudyType.trim().length > 0);
+  const hasPriceAsk =
+    messageLooksLikeAnyPriceQuestion(rawText) || messageAsksApproximateConsultationCost(rawText);
+  return hasStudyContext && hasPriceAsk;
 }
 
 function extractChildAgeYearsFromMessage(rawText) {
@@ -9882,6 +9935,148 @@ function messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText) {
     messageAsksExplicitParticularConsultationPrice(rawText) &&
     messageAsksObraSocialOrCoveragePrice(rawText) &&
     messageAsksStudyProcedurePrice(rawText)
+  );
+}
+
+async function estimatePatientOutOfPocketTotalForConsultationAndStudy(
+  sedeEntry,
+  healthInsuranceName,
+  studyType
+) {
+  const canonicalHealthInsuranceName =
+    normalizeHealthInsuranceCanonicalName(healthInsuranceName) || healthInsuranceName;
+  const studyIncludedInConsultation = INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(
+    canonicalHealthInsuranceName
+  );
+  const studyAmountArs = studyIncludedInConsultation ? 0 : STUDY_PRICE_WITH_CONSULTATION_ARS;
+  const plusRule = await lookupPlusRule(sedeEntry.displayName, healthInsuranceName);
+  if (!plusRule || !plusRule.isAccepted) {
+    return null;
+  }
+  const plusAmountArs =
+    plusRule.hasPlus && Number.isFinite(Number(plusRule.plusAmountArs))
+      ? Number(plusRule.plusAmountArs)
+      : 0;
+  return {
+    plusAmountArs,
+    studyAmountArs,
+    totalAmountArs: plusAmountArs + studyAmountArs,
+    studyIncludedInConsultation,
+    hasPlus: Boolean(plusRule.hasPlus && plusAmountArs > 0),
+    isAccepted: true,
+    healthInsuranceDisplayName: canonicalHealthInsuranceName,
+    studyType,
+  };
+}
+
+async function estimatePrivateConsultationAndStudyTotal(sedeEntry, studyType) {
+  const consultationAmountArs = await lookupPrivatePrice(sedeEntry.displayName);
+  if (!Number.isFinite(consultationAmountArs)) return null;
+  const studyAmountArs = STUDY_PRICE_WITH_CONSULTATION_ARS;
+  return {
+    consultationAmountArs,
+    studyAmountArs,
+    totalAmountArs: consultationAmountArs + studyAmountArs,
+    isPrivatePay: true,
+    studyType,
+  };
+}
+
+async function buildCompleteCostTotalReply(sedeEntry, healthInsuranceName, studyType, rawText = '') {
+  const studyWithArticle = buildStudyTypeWithArticle(studyType);
+  const cityName = sedeEntry.displayName;
+  const warmPrefix = messageMentionsChildPatientContext(rawText)
+    ? 'Qué bueno que consulten antes, así van con una idea más clara. '
+    : '';
+
+  if (healthInsuranceName) {
+    const estimate = await estimatePatientOutOfPocketTotalForConsultationAndStudy(
+      sedeEntry,
+      healthInsuranceName,
+      studyType
+    );
+    if (!estimate) {
+      return `${warmPrefix}Con ${healthInsuranceName} en ${cityName} no trabajamos. Si querés hacerlo particular, escribime y te paso el total.`;
+    }
+    const insuranceLabel = estimate.healthInsuranceDisplayName;
+    if (estimate.studyIncludedInConsultation) {
+      if (estimate.hasPlus) {
+        const plusFormatted = formatArsAmount(estimate.plusAmountArs);
+        return `${warmPrefix}En ${cityName}, con ${insuranceLabel}, ${studyWithArticle} queda incluido en la consulta. Total aproximado: $${plusFormatted} (plus de la consulta).`;
+      }
+      return `${warmPrefix}En ${cityName}, con ${insuranceLabel}, ${studyWithArticle} queda incluido en el valor de la consulta, sin plus.`;
+    }
+    const plusFormatted = formatArsAmount(estimate.plusAmountArs);
+    const studyFormatted = formatArsAmount(estimate.studyAmountArs);
+    const totalFormatted = formatArsAmount(estimate.totalAmountArs);
+    if (estimate.hasPlus) {
+      return `${warmPrefix}En ${cityName}, con ${insuranceLabel}: plus de consulta $${plusFormatted} + ${studyWithArticle} $${studyFormatted}. Total aproximado: $${totalFormatted}.`;
+    }
+    return `${warmPrefix}En ${cityName}, con ${insuranceLabel}, sin plus: ${studyWithArticle} $${studyFormatted} sobre la consulta. Total aproximado del estudio: $${studyFormatted}.`;
+  }
+
+  const privateEstimate = await estimatePrivateConsultationAndStudyTotal(sedeEntry, studyType);
+  if (!privateEstimate) {
+    return `${warmPrefix}En ${cityName}, consulta particular + ${studyType} es el valor de la consulta de la sede + $${formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS)} del estudio.`;
+  }
+  const consultationFormatted = formatArsAmount(privateEstimate.consultationAmountArs);
+  const studyFormatted = formatArsAmount(privateEstimate.studyAmountArs);
+  const totalFormatted = formatArsAmount(privateEstimate.totalAmountArs);
+  return `${warmPrefix}En ${cityName}, consulta particular $${consultationFormatted} + ${studyWithArticle} $${studyFormatted}. Total aproximado: $${totalFormatted}.`;
+}
+
+async function tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeCompleteCostTotalInquiry(bodyText, priorState)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  const healthInsuranceName = isPrivatePay
+    ? null
+    : await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, { profileDisplayName });
+  const studyType =
+    getStudyTypeFromText(bodyText) ||
+    (mergedState &&
+    typeof mergedState === 'object' &&
+    typeof mergedState.lastStudyType === 'string' &&
+    mergedState.lastStudyType.trim().length > 0
+      ? mergedState.lastStudyType.trim()
+      : 'estudio');
+  if (!lastSede) return false;
+  if (!healthInsuranceName && !isPrivatePay) return false;
+
+  const reply = await buildCompleteCostTotalReply(
+    lastSede,
+    healthInsuranceName,
+    studyType,
+    bodyText
+  );
+  return sendFinalizedPatientTextReply(
+    from,
+    reply,
+    mergedState,
+    profileDisplayName,
+    {
+      lastStudyType: studyType,
+      lastStudyPriceContextAtMs: Date.now(),
+      ...(healthInsuranceName
+        ? { healthInsuranceName, lastHealthInsuranceName: healthInsuranceName }
+        : {}),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...buildLastHealthInsuranceDiscussionStatePatch(),
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'complete_cost_total',
+      skipHumanization: true,
+    }
   );
 }
 
@@ -10360,14 +10555,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     messageLooksLikeAnyPriceQuestion(rawText) ||
     messageExplicitlyAsksPrivateConsultationPrice(rawText);
   const asksTotalAmount =
-    normalized.includes('total') ||
-    normalized.includes('valor final') ||
-    normalized.includes('cuanto seria mi total') ||
-    normalized.includes('cuanto sería mi total') ||
-    normalized.includes('cuanto seria el total') ||
-    normalized.includes('cuanto sería el total') ||
-    normalized.includes('total final') ||
-    normalized.includes('precio final') ||
+    messageAsksCompleteOrTotalCost(rawText) ||
     messageAsksApproximateConsultationCost(rawText) ||
     messageLooksLikeFamilyConsultationCostEstimateInquiry(rawText);
 
@@ -10422,6 +10610,14 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
     if (!lastSede) {
       return `Antes de pasarte el valor final, ¿desde qué ciudad te consultás? ${buildAskSedeMessage()}`;
     }
+    if (asksTotalAmount && (studyTypeFromMessage || studyTypeFromState)) {
+      return buildCompleteCostTotalReply(
+        lastSede,
+        isPrivatePayForStudyPrice ? null : inferredHealthInsuranceName,
+        studyType,
+        rawText
+      );
+    }
     if (INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(inferredHealthInsuranceName)) {
       const studyWithArticle = buildStudyTypeWithArticle(studyType);
       const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
@@ -10436,14 +10632,19 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
           : null;
       if (plusFormatted) {
         if (asksTotalAmount) {
-          return `En ${lastSede.displayName}, con ${inferredHealthInsuranceName}, ${studyType} suma $${formattedAmount} del estudio y hay plus de $${plusFormatted}. El total exacto depende del valor de la consulta.`;
+          return buildCompleteCostTotalReply(
+            lastSede,
+            inferredHealthInsuranceName,
+            studyType,
+            rawText
+          );
         }
         return `Con ${inferredHealthInsuranceName}, plus de $${plusFormatted} + ${studyType} sería $${formattedAmount} del estudio.`;
       }
     }
     if (plusRule && plusRule.isAccepted && !plusRule.hasPlus) {
       if (asksTotalAmount) {
-        return `En ${lastSede.displayName}, con ${inferredHealthInsuranceName}, ${studyType} suma $${formattedAmount} sobre la consulta y no tiene plus.`;
+        return buildCompleteCostTotalReply(lastSede, inferredHealthInsuranceName, studyType, rawText);
       }
       return `Con ${inferredHealthInsuranceName}, sin plus. ${studyType} sería $${formattedAmount} del estudio.`;
     }
@@ -10451,7 +10652,7 @@ async function buildStudiesInformationReply(priorState, rawText = '', options = 
       return `Con ${inferredHealthInsuranceName} no trabajamos en ${lastSede.displayName}. Si querés hacerlo particular, ${studyType} sería $${formattedAmount} del estudio más la consulta.`;
     }
     if (asksTotalAmount) {
-      return `En ${lastSede.displayName}, con ${inferredHealthInsuranceName}, el total sería valor de la consulta + $${formattedAmount} del ${studyType}. Si tu plan tiene plus, se suma a ese total.`;
+      return buildCompleteCostTotalReply(lastSede, inferredHealthInsuranceName, studyType, rawText);
     }
     return `Con ${inferredHealthInsuranceName}, ${studyType} sería $${formattedAmount} del estudio.`;
   }
@@ -12176,6 +12377,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
