@@ -1099,6 +1099,103 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   );
 }
 
+function messageAsksWhyChooseDoctorOrTrustQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (textMatchesMedicalEmergency(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+
+  const asksWhyChooseDoctor =
+    (normalized.includes('por que') || normalized.includes('porque')) &&
+    (normalized.includes('atender') ||
+      normalized.includes('elegir') ||
+      normalized.includes('ir con') ||
+      normalized.includes('consultar con') ||
+      normalized.includes('ven con') ||
+      normalized.includes('el dr') ||
+      normalized.includes('el doctor') ||
+      normalized.includes('liber'));
+
+  const mentionsFailedPriorCare =
+    normalized.includes('ya fui') ||
+    normalized.includes('ya consult') ||
+    normalized.includes('ninguno me solucion') ||
+    normalized.includes('nadie me solucion') ||
+    normalized.includes('no me solucion') ||
+    normalized.includes('no me ayud') ||
+    normalized.includes('probe varios') ||
+    normalized.includes('probé varios') ||
+    normalized.includes('varios alerg') ||
+    normalized.includes('tres alerg') ||
+    normalized.includes('otros medic') ||
+    normalized.includes('otros alerg');
+
+  const asksReputationOrExperience =
+    normalized.includes('por que elegir') ||
+    normalized.includes('que experiencia') ||
+    normalized.includes('qué experiencia') ||
+    normalized.includes('es bueno') ||
+    normalized.includes('me recomendas') ||
+    normalized.includes('me recomendás') ||
+    normalized.includes('vale la pena') ||
+    normalized.includes('confiar');
+
+  if (asksWhyChooseDoctor) return true;
+  if (
+    mentionsFailedPriorCare &&
+    (normalized.includes('alerg') || normalized.includes('dr') || normalized.includes('doctor'))
+  ) {
+    return true;
+  }
+  if (
+    asksReputationOrExperience &&
+    (normalized.includes('dr') || normalized.includes('doctor') || normalized.includes('liber'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function buildDoctorTrustAndExperienceReply(rawText) {
+  const normalized = normalizeForMatch(rawText);
+  const mentionsPriorFailures =
+    normalized.includes('ya fui') ||
+    normalized.includes('ninguno me solucion') ||
+    normalized.includes('no me solucion') ||
+    normalized.includes('no me ayud') ||
+    normalized.includes('tres alerg') ||
+    normalized.includes('varios alerg') ||
+    normalized.includes('probe varios') ||
+    normalized.includes('probé varios');
+
+  if (mentionsPriorFailures) {
+    return 'Entiendo lo frustrante que es haber ido a varios alergistas sin mejora. El Dr. Liber Acosta es alergista e inmunólogo con más de 20 años en el NEA y en el turno evalúa tu caso a fondo para armar un plan personalizado.';
+  }
+  return 'El Dr. Liber Acosta es alergista e inmunólogo con más de 20 años de experiencia en el NEA; en la consulta evalúa cada caso en profundidad según estudios y síntomas.';
+}
+
+async function tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksWhyChooseDoctorOrTrustQuestion(bodyText)) return false;
+  return sendFinalizedPatientTextReply(
+    from,
+    buildDoctorTrustAndExperienceReply(bodyText),
+    priorState,
+    profileDisplayName,
+    {
+      lastDoctorTrustInquiryAtMs: Date.now(),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'doctor_trust',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
 function messageLooksLikePatientDissatisfactionByRules(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (textMatchesMedicalEmergency(rawText)) return false;
@@ -2696,6 +2793,12 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
     replyContextInstructions.push(
       'Contexto: el paciente solo dijo "dale", "ok" o "gracias" sin pedir turno.',
       'Respuesta breve y cálida. NO repitas el link de agenda ni vuelvas a explicar cómo reservar.'
+    );
+  }
+  if (options.replyContext === 'doctor_trust') {
+    replyContextInstructions.push(
+      'Contexto: el paciente pregunta por qué atenderse con el Dr. o expresa frustración con otros alergistas.',
+      'Validá la emoción primero si corresponde. Mencioná la experiencia del Dr. (20+ años, alergia e inmunología). NO pidas sede ni ofrezcas link de turno en esta respuesta.'
     );
   }
   const systemPrompt = [
@@ -5018,6 +5121,7 @@ async function tryHandlePrivatePriceWithPatientContext(from, bodyText, priorStat
 }
 
 async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
+  if (messageAsksWhyChooseDoctorOrTrustQuestion(userMessage)) return false;
   const apiKey = getOpenAiApiKey();
   if (apiKey) {
     const modelName = getOpenAiModelName();
@@ -5028,6 +5132,7 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
       'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "para mañana hay turno", "hay turno", "me gustaría sacar turno", typos como "urno".',
       'NO si pide que VOS/la asistente agende por él ("agendame vos", "podés agendarme", "me lo reservás vos"): eso NO es pedido de link propio.',
       'NO ejemplos: pregunta de PRECIO/COSTO de consulta ("qué costo tiene la consulta", "precio consulta particular", "cuánto sale la consulta"), obra social, dirección, preparación de estudios o qué traer, sin pedir turno.',
+      'NO si pregunta POR QUÉ atenderse/elegir al Dr., experiencia del médico o frustración con otros alergistas sin pedir turno explícito.',
       'IMPORTANTE: "consulta" en una pregunta de precio NO es pedido de turno.',
       'Si el contexto ya tiene sede (Corrientes/Resistencia) y el paciente pregunta por turno o disponibilidad, respondé YES.',
     ].join('\n');
@@ -5065,7 +5170,8 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
           if (
             messageLooksLikeBookingIntent(userMessage) &&
             !messageLooksLikeAssistedBookingRequest(userMessage) &&
-            !messageLooksLikePrivatePriceQuestion(userMessage)
+            !messageLooksLikePrivatePriceQuestion(userMessage) &&
+            !messageAsksWhyChooseDoctorOrTrustQuestion(userMessage)
           ) {
             return true;
           }
@@ -5176,6 +5282,7 @@ function conversationLooksLikePatientDissatisfactionContext(priorState) {
 }
 
 async function tryResolvePatientDissatisfactionWithOpenAi(userMessage, options = {}) {
+  if (messageAsksWhyChooseDoctorOrTrustQuestion(userMessage)) return false;
   const rulesMatch = messageLooksLikePatientDissatisfactionByRules(userMessage);
   if (options.rulesOnly) return rulesMatch;
 
@@ -6841,6 +6948,7 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
 }
 
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
+  if (messageAsksWhyChooseDoctorOrTrustQuestion(bodyText)) return false;
   if (messageLooksLikeSpirometryOnlyInquiry(bodyText)) return false;
   if (
     conversationLooksLikeOngoingBookingLinkGuidance(priorState) &&
@@ -8448,6 +8556,7 @@ function priorStateHasKnownBookingSede(priorState) {
 
 function messageLooksLikeBookingIntent(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksWhyChooseDoctorOrTrustQuestion(rawText)) return false;
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   // Common intent words
@@ -12392,6 +12501,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleBookingLinkUsageDifficulty(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandlePatientDissatisfactionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
