@@ -7603,6 +7603,7 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
         ? `Perfecto, para el ${extractWeekdayNameFromText(bodyText)} en ${lastSede.displayName}. Por acá no agendamos por este chat.`
         : null);
     return deliverBookingLinkReply(from, lastSede, mergedState, profileDisplayName, {
+      userMessage: bodyText,
       primaryPrefix: slotPrefix || undefined,
       conversationStatePatch: {
         ...(buildLastSedeStatePatch(lastSede) || {}),
