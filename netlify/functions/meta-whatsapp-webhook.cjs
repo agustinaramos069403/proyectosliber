@@ -372,6 +372,59 @@ function buildReferralOnlySedeBookingReply(sedeEntry) {
   return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede al ${phoneNumber}. Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
 }
 
+function stateHasRecentReferralSedeBookingContext(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (!isReferralOnlySedeEntry(lastSede)) return false;
+  const lastSedeAt = Number(priorState.lastSedeAtMs);
+  if (!Number.isFinite(lastSedeAt) || Date.now() - lastSedeAt > SEDE_SELECTION_WINDOW_MS) return false;
+  const referralPhone = resolveReferralPhoneNumberForSedeEntry(lastSede);
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (referralPhone && lastBotReplyText.includes(referralPhone)) return true;
+  return (
+    stateHasPendingBookingIntent(priorState) ||
+    stateHasRecentBookingConversationContext(priorState)
+  );
+}
+
+function resolveReferralSedeForConversationFollowUp(priorState, bodyText) {
+  const sedeFromMessage = findSedeFromText(bodyText);
+  if (sedeFromMessage && isReferralOnlySedeEntry(sedeFromMessage)) return sedeFromMessage;
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (!isReferralOnlySedeEntry(lastSede)) return null;
+  if (!stateHasRecentReferralSedeBookingContext(priorState)) return null;
+  if (
+    !messageLooksLikeSpecificSlotBookingRequest(bodyText) &&
+    !messageLooksLikeBookingIntent(bodyText) &&
+    !messageLooksLikeRealtimeAvailabilityQuestion(bodyText) &&
+    !messageLooksLikeTreatmentAppointmentRequest(bodyText)
+  ) {
+    return null;
+  }
+  return lastSede;
+}
+
+function buildReferralOnlySedeSlotFollowUpReply(sedeEntry, rawText = '') {
+  const phoneReply = buildReferralOnlySedeBookingReply(sedeEntry);
+  if (!rawText || !messageLooksLikeSpecificSlotBookingRequest(rawText)) return phoneReply;
+  const relativeDayLabel = extractRelativeDayLabelFromText(rawText);
+  const weekdayName = extractWeekdayNameFromText(rawText);
+  const includesTime = messageIncludesSpecificAppointmentTime(rawText);
+  const cityLabel = sedeEntry.displayName;
+  let prefix = `Entiendo que te gustaría turno en ${cityLabel}`;
+  if (relativeDayLabel) {
+    prefix = `Entiendo que te gustaría para ${relativeDayLabel} en ${cityLabel}`;
+  } else if (weekdayName) {
+    prefix = `Entiendo que te gustaría el ${weekdayName} en ${cityLabel}`;
+  }
+  if (includesTime) {
+    prefix += ' a esa hora';
+  }
+  prefix += '. Por acá no confirmamos horarios puntuales ni agendamos.';
+  return `${prefix} ${phoneReply}`;
+}
+
 function resolveClinicAssistancePhoneNumberForSedeEntry(sedeEntry) {
   if (!sedeEntry) return CORRIENTES_ASSISTANCE_PHONE_NUMBER;
   if (isReferralOnlySedeEntry(sedeEntry)) {
@@ -1609,9 +1662,11 @@ function buildClearedStaleBookingLinkMemoryStatePatch() {
   };
 }
 
-async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName) {
+async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName, bodyText = '') {
   if (!sedeEntry) return false;
-  const reply = buildReferralOnlySedeBookingReply(sedeEntry);
+  const reply = bodyText
+    ? buildReferralOnlySedeSlotFollowUpReply(sedeEntry, bodyText)
+    : buildReferralOnlySedeBookingReply(sedeEntry);
   const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
   await setConversationState(
     from,
@@ -1628,6 +1683,16 @@ async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, pro
 }
 
 async function tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName) {
+  const referralFollowUpSede = resolveReferralSedeForConversationFollowUp(priorState, bodyText);
+  if (referralFollowUpSede) {
+    return sendReferralOnlySedeBookingReply(
+      from,
+      referralFollowUpSede,
+      priorState,
+      profileDisplayName,
+      bodyText
+    );
+  }
   const sedeFromMessage = findSedeFromText(bodyText);
   const lastSede = resolveLastSedeEntryFromState(priorState);
   const sedeEntry =
@@ -1639,7 +1704,7 @@ async function tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorStat
         : null;
   if (!sedeEntry) return false;
   if (!messageLooksLikeReferralOnlySedeBookingIntent(bodyText, priorState)) return false;
-  return sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName);
+  return sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName, bodyText);
 }
 
 function messageMentionsOutOfCoverageCity(rawText) {
@@ -5463,6 +5528,12 @@ async function tryResolveRequiresHealthInsuranceBeforeConsultationPriceWithOpenA
 async function shouldHandleAsConsultationPriceQuestion(bodyText, priorState, profileDisplayName, options = {}) {
   if (shouldAskHealthInsuranceBeforeConsultationPrice(priorState)) return true;
   if (stateHasPendingConsultationPriceIntent(priorState)) return true;
+  if (
+    messageAsksGenericConsultationPrice(bodyText) &&
+    !messageExplicitlyAsksPrivateConsultationPrice(bodyText)
+  ) {
+    return true;
+  }
   if (!options.rulesOnly && getOpenAiApiKey()) {
     const openAiDecision = await tryResolveConsultationPriceIntentWithOpenAi(bodyText, {
       priorState,
@@ -5471,7 +5542,6 @@ async function shouldHandleAsConsultationPriceQuestion(bodyText, priorState, pro
     if (openAiDecision === true && !messageExplicitlyAsksPrivateConsultationPrice(bodyText)) return true;
     if (openAiDecision === false) return false;
   }
-  if (messageAsksGenericConsultationPrice(bodyText)) return true;
   return false;
 }
 
@@ -7481,6 +7551,16 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
   );
   const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
   if (!lastSede) {
+    const referralSede = resolveReferralSedeForConversationFollowUp(mergedState, bodyText);
+    if (referralSede) {
+      return sendReferralOnlySedeBookingReply(
+        from,
+        referralSede,
+        mergedState,
+        profileDisplayName,
+        bodyText
+      );
+    }
     await setConversationState(
       from,
       mergeConversationStatePreservingGreeting(mergedState, mergedState || {}, buildFreshBookingWithoutSedeStatePatch(bodyText))
@@ -7600,6 +7680,17 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
   const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
   if (lastSede) {
     return sendBookingFlowReplyForSede(from, bodyText, mergedState, profileDisplayName, lastSede);
+  }
+
+  const referralSede = resolveReferralSedeForConversationFollowUp(mergedState, bodyText);
+  if (referralSede) {
+    return sendReferralOnlySedeBookingReply(
+      from,
+      referralSede,
+      mergedState,
+      profileDisplayName,
+      bodyText
+    );
   }
 
   await setConversationState(
@@ -13293,6 +13384,21 @@ exports.handler = async (event) => {
             await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
             continue;
           }
+          if (
+            messageAsksGenericConsultationPrice(bodyText) &&
+            !messageExplicitlyAsksPrivateConsultationPrice(bodyText)
+          ) {
+            if (
+              await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
+                rulesOnly: true,
+              })
+            ) {
+              continue;
+            }
+          }
+          if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleHealthInsuranceSedeFollowUpWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -13368,9 +13474,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
