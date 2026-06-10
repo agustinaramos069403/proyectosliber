@@ -6102,7 +6102,10 @@ async function deliverBookingLinkReply(from, entry, priorState, profileDisplayNa
     return sendReferralOnlySedeBookingReply(from, entry, priorState, profileDisplayName);
   }
   const userMessage = typeof options.userMessage === 'string' ? options.userMessage : '';
-  if (!options.forceResend && hasBookingLinkInStateForSede(priorState, entry)) {
+  if (
+    !mustDeliverFullBookingLinkUrl(priorState, userMessage, entry, options) &&
+    hasBookingLinkInStateForSede(priorState, entry)
+  ) {
     const primaryPrefix =
       typeof options.primaryPrefix === 'string' && options.primaryPrefix.trim().length > 0
         ? options.primaryPrefix.trim()
@@ -6158,6 +6161,8 @@ async function sendBookingLinkForSedeEntry(from, priorState, profileDisplayName,
     return true;
   }
   return deliverBookingLinkReply(from, entry, priorState, profileDisplayName, {
+    userMessage: bodyText,
+    forceResend: mustDeliverFullBookingLinkUrl(priorState, bodyText, entry),
     conversationStatePatch: {
       ...buildClearedAwaitingLinkConfirmationStatePatch(),
       ...buildClearedPendingBookingIntentPatch(),
@@ -7057,11 +7062,18 @@ async function tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, p
   if (!shouldSendLink) return false;
 
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
-  const lastSede =
+  let lastSede =
     patientContext.sedeEntry || resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState);
+  if (!lastSede && messageExplicitlyRequestsBookingLink(bodyText)) {
+    lastSede =
+      resolveKnownSedeForConversationContext(priorState) || resolveLastSedeEntryFromState(priorState);
+    if (isReferralOnlySedeEntry(lastSede)) {
+      lastSede = null;
+    }
+  }
   if (!lastSede) return false;
 
-  return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede);
+  return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
 }
 
 function isLastBotReplyWithinBookingLinkRememberWindow(priorState) {
@@ -10989,11 +11001,18 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('pasame link') ||
     normalized.includes('mandame link') ||
     normalized.includes('enviame link') ||
+    normalized.includes('pasar link') ||
+    normalized.includes('pasar el link') ||
+    normalized.includes('mandar link') ||
+    normalized.includes('mandar el link') ||
     normalized.includes('link para agendar') ||
     normalized.includes('link para reserv') ||
+    normalized.includes('link para los turnos') ||
+    normalized.includes('link para turnos') ||
     normalized.includes('link de agenda') ||
     normalized.includes('link de turno') ||
-    normalized.includes('link del turno')
+    normalized.includes('link del turno') ||
+    normalized.includes('link de los turnos')
   ) {
     return true;
   }
@@ -11009,12 +11028,18 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('me pasás') ||
     normalized.includes('me podes pasar') ||
     normalized.includes('me podés pasar') ||
+    normalized.includes('me podes mandar') ||
+    normalized.includes('me podés mandar') ||
     normalized.includes('me lo podes pasar') ||
     normalized.includes('me lo podés pasar') ||
+    normalized.includes('me lo podes mandar') ||
+    normalized.includes('me lo podés mandar') ||
     normalized.includes('me lo pasas') ||
     normalized.includes('me lo pasás') ||
     normalized.includes('podes pasar el link') ||
     normalized.includes('podés pasar el link') ||
+    normalized.includes('podes pasar link') ||
+    normalized.includes('podés pasar link') ||
     normalized.includes('podes pasarme') ||
     normalized.includes('podés pasarme') ||
     normalized.includes('me mandas') ||
@@ -11026,6 +11051,12 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('dale el link') ||
     normalized.includes('necesito el link')
   );
+}
+
+function mustDeliverFullBookingLinkUrl(priorState, userMessage, entry, options = {}) {
+  if (Boolean(options && options.forceResend)) return true;
+  if (messageExplicitlyRequestsBookingLink(userMessage)) return true;
+  return shouldResendFullBookingLinkUrl(priorState, userMessage, entry);
 }
 
 function shouldResendFullBookingLinkUrl(priorState, userMessage, entry) {
@@ -14643,6 +14674,8 @@ async function deliverBookingLinkReminderReply(
       userMessage: bodyText,
       replyContext: options.replyContext || 'booking_link_reminder',
       conversationContext: buildIntentRoutingOpenAiContext(priorState),
+      skipHumanization:
+        messageExplicitlyRequestsBookingLink(bodyText) || /https?:\/\/\S+/i.test(String(rulesReply || '')),
     }
   );
 }
@@ -14767,6 +14800,7 @@ function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
 }
 
 async function tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName) {
+  if (messageExplicitlyRequestsBookingLink(bodyText)) return false;
   if (!messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState)) return false;
   const lastSede =
     resolveActiveBookingSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
@@ -17670,6 +17704,8 @@ exports.handler = async (event) => {
             }
             if (messageExplicitlyRequestsBookingLink(bodyText) && lastSede) {
               await deliverBookingLinkReply(from, lastSede, priorState, profileDisplayName, {
+                userMessage: bodyText,
+                forceResend: true,
                 conversationStatePatch: {
                   ...(buildLastSedeStatePatch(lastSede) || {}),
                 },
@@ -17724,6 +17760,8 @@ exports.handler = async (event) => {
             // If the user explicitly asks for the booking link and we already know the sede, send it directly.
             if (messageExplicitlyRequestsBookingLink(bodyText)) {
               await deliverBookingLinkReply(from, sede, priorState, profileDisplayName, {
+                userMessage: bodyText,
+                forceResend: true,
                 conversationStatePatch: {
                   ...(lastSedePatch || {}),
                 },

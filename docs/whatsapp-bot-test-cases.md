@@ -353,6 +353,9 @@
 - Tras charla de ayer (o más de 1 h sin link en el chat), usuario: **“Me podés pasar el link”** / “No tengo el link, mandamelo nuevamente”
   - **Sí** enviar la URL completa de la agenda (Corrientes/Resistencia según sede en contexto).
   - **No** responder solo “con el link que ya te pasé” sin pegar el link.
+- **“Me podés pasar el link para los turnos”** / **“Me podés pasar link nuevamente”** (con sede Corrientes en contexto)
+  - **Sí** pegar la URL de agenda de Corrientes.
+  - **No** humanizar a “con el link que ya te compartí…” sin URL.
 - Si el link se envió hace menos de 1 h y el usuario no lo pide de nuevo, puede usarse recordatorio corto sin repetir la URL.
 
 ## Link de agenda — no repetir en la misma hora
