@@ -98,6 +98,16 @@
   - NO ofrecer link de agenda ni confirmar horarios nuevos por chat
   - Derivar al teléfono de sede guardada en contexto (Corrientes `3795063578` / Resistencia `3624571222`); si no hay sede, dar ambos números
   - Respuesta tipo: cambios los gestiona el equipo + teléfono de sede + pueden ayudar con nuevo horario
+- Confirmar turno ya reservado:
+  - “Ya saqué turno, ¿me lo confirmás?”, “quiero confirmar mi reserva”
+  - NO confirmar horario/día por chat ni decir “te esperamos” como cierre genérico
+  - Derivar al teléfono de sede; el equipo tiene acceso a la agenda
+- Otras provincias:
+  - NO solo “no atendemos”; ofrecer modalidad virtual + preguntar si quiere link online (`awaiting_virtual_visit_confirmation`)
+- Consulta virtual:
+  - Confirmar que hay modalidad virtual + “¿Querés que te comparta el link para agendar?” (no “¿Te sirve?”)
+- Derivación / receta:
+  - “No necesitás derivación ni receta.” sin cierre mecánico “¿Te sirve?”
 
 ## Link — problemas técnicos / disponibilidad / lista de espera
 - Problema técnico con el link (IA + contexto de link enviado):
