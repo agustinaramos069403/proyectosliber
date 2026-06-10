@@ -309,6 +309,8 @@ const MEDICATION_ALLERGY_STUDY_MESSAGE =
 const SEDE_LOCATION_ONLY_BY_ENV_KEY = {
   CALENDLY_CORRIENTES: 'Clínica del Pilar: San Martín 555.',
   CALENDLY_RESISTENCIA: 'Resistencia (Instituto Modelo de Medicina Infantil): F. Ameghino 678.',
+  REFERRAL_FORMOSA: 'Instituto Modelo de Gastroenterología: Maipú 1580, Formosa Capital.',
+  REFERRAL_SAENZ_PENA: 'Instituto Privado Santa María (Clínica Santa María): Chacabuco 634, Presidencia Roque Sáenz Peña.',
 };
 
 const SEDE_CLINIC_HOURS_BY_ENV_KEY = {
@@ -333,6 +335,11 @@ const KNOWN_CLINIC_ADDRESS_NORMALIZED_FRAGMENTS = [
   'ameghino 678',
   'instituto modelo de medicina infantil',
   'f ameghino 678',
+  'maipu 1580',
+  'instituto modelo de gastroenterologia',
+  'chacabuco 634',
+  'clinica santa maria',
+  'instituto privado santa maria',
 ];
 
 const CORRIENTES_ASSISTANCE_PHONE_NUMBER = '3795063578';
@@ -360,9 +367,9 @@ function buildReferralOnlySedeBookingReply(sedeEntry) {
   const cityLabel = sedeEntry && sedeEntry.displayName ? sedeEntry.displayName : 'esa sede';
   const phoneNumber = resolveReferralPhoneNumberForSedeEntry(sedeEntry);
   if (!phoneNumber) {
-    return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede. Por esta línea solo agendamos online en Corrientes y Resistencia.`;
+    return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede. Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
   }
-  return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede al ${phoneNumber}. Por esta línea de WhatsApp solo agendamos online en Corrientes y Resistencia.`;
+  return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede al ${phoneNumber}. Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
 }
 
 function resolveClinicAssistancePhoneNumberForSedeEntry(sedeEntry) {
@@ -2727,23 +2734,33 @@ function buildFriendlyAcknowledgeSentence() {
 }
 
 function buildAskSedeBridgeMessage() {
-  return 'Dale, te ayudo. Para darte la info correcta, ¿para qué sede es?';
+  return '¿Para qué sede necesitás la info?';
+}
+
+function buildAskSedeBridgeMessageForBooking() {
+  return 'Por acá no agendamos turnos por chat: en Corrientes y Resistencia reservás con el link de agenda. ¿Para qué sede es?';
 }
 
 function buildSedeNumberedOptionsSuffix() {
   return 'Podés escribir 1 para Corrientes, 2 para Resistencia, o el nombre de tu ciudad (Formosa o Sáenz Peña) 😊';
 }
 
-function buildConsolidatedAskSedePrompt(prefaceText = null) {
+function resolveAskSedeBridgeMessage(options = {}) {
+  if (options.intent === 'booking') return buildAskSedeBridgeMessageForBooking();
+  return buildAskSedeBridgeMessage();
+}
+
+function buildConsolidatedAskSedePrompt(prefaceText = null, options = {}) {
   const preface =
     typeof prefaceText === 'string' && prefaceText.trim().length > 0 ? prefaceText.trim() : null;
+  const bridgeMessage = resolveAskSedeBridgeMessage(options);
   if (preface && assistantReplyAsksForSedeCity(preface)) {
     return `${preface} ${buildSedeNumberedOptionsSuffix()}`.trim();
   }
   if (preface) {
-    return `${preface} ${buildAskSedeBridgeMessage()} ${buildSedeNumberedOptionsSuffix()}`.trim();
+    return `${preface} ${bridgeMessage} ${buildSedeNumberedOptionsSuffix()}`.trim();
   }
-  return `${buildAskSedeBridgeMessage()} ${buildSedeNumberedOptionsSuffix()}`.trim();
+  return `${bridgeMessage} ${buildSedeNumberedOptionsSuffix()}`.trim();
 }
 
 function buildAskSedeForHealthInsuranceMismatchMessage(lastSedeDisplayName, healthInsuranceName) {
@@ -3199,6 +3216,15 @@ function buildConsultationPriceAnsweredStatePatch() {
   };
 }
 
+function stateHasRecentConsultationPriceAnsweredContext(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const answeredAtMs = Number(priorState.consultationPriceAnsweredAtMs);
+  return (
+    Number.isFinite(answeredAtMs) &&
+    Date.now() - answeredAtMs <= CONSULTATION_PRICE_ANSWERED_WINDOW_MS
+  );
+}
+
 function buildMicroCommitmentMessageWithState(priorState, forceOffer = false) {
   if (!forceOffer && !shouldOfferBookingLink(priorState)) {
     return '¿En qué más te puedo ayudar?';
@@ -3323,6 +3349,9 @@ function stateHasRecentBookingConversationContext(priorState) {
     normalized.includes('podés escribir 1') ||
     normalized.includes('podes escribir 1') ||
     normalized.includes('dale, te ayudo') ||
+    normalized.includes('no agendamos turnos por chat') ||
+    normalized.includes('solo se reserva con el link') ||
+    normalized.includes('reservas con el link de agenda') ||
     normalized.includes('link para reservar') ||
     normalized.includes('link para ver horarios') ||
     normalized.includes('sacar turno') ||
@@ -3556,9 +3585,10 @@ function buildGenericBookingPolicyReplyForSede(sede, priorState = null) {
   }
   const linkUrl = getAgendaUrl(sede);
   if (linkUrl) {
-    return `Perfecto, ${sede.displayName}. Te dejo el link para que veas días y horarios disponibles y reserves tu turno:\n${linkUrl}`;
+    return `En ${sede.displayName} los turnos se reservan solo con el link de agenda (por acá no agendamos por chat). Elegí día y horario acá:\n${linkUrl}`;
   }
-  return `Perfecto, ${sede.displayName}. Por acá no agendamos por WhatsApp; escribinos y te ayudamos a coordinar.`;
+  const assistancePhone = resolveClinicAssistancePhoneNumberForSedeEntry(sede);
+  return `En ${sede.displayName} los turnos se reservan solo con el link de agenda online. Si necesitás ayuda con el link, escribinos al ${assistancePhone}.`;
 }
 
 function conversationAlreadySharedBookingLink(priorState) {
@@ -7202,6 +7232,8 @@ async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDi
   const hasConversationContext =
     stateHasRecentScheduleDiscussionContext(priorState) ||
     stateHasRecentBookingConversationContext(priorState) ||
+    stateHasRecentConsultationPriceAnsweredContext(priorState) ||
+    priorStateHasRecentKnownSede(priorState) ||
     stateHasPendingBookingIntent(priorState) ||
     stateLooksLikeAwaitingLinkConfirmation(priorState) ||
     Boolean(resolveConfirmedSedeEntryForBookingFlow('', priorState)) ||
@@ -8046,6 +8078,14 @@ function resolveSedeEntryFromState(state) {
   return null;
 }
 
+function priorStateHasRecentKnownSede(priorState, windowMs = SEDE_SELECTION_WINDOW_MS) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (!lastSede) return false;
+  const lastSedeAtMs = Number(priorState.lastSedeAtMs);
+  return Number.isFinite(lastSedeAtMs) && Date.now() - lastSedeAtMs <= windowMs;
+}
+
 function userMessageRequiresFreshSedeForBooking(bodyText, priorState = null) {
   if (!bodyText || typeof bodyText !== 'string') return false;
   if (findSedeFromText(bodyText)) return false;
@@ -8058,6 +8098,7 @@ function userMessageRequiresFreshSedeForBooking(bodyText, priorState = null) {
   ) {
     return false;
   }
+  if (priorStateHasRecentKnownSede(priorState)) return false;
   return (
     messageLooksLikeBookingIntent(bodyText) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
@@ -8085,7 +8126,9 @@ function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
   const activeAwaitingLinkSede = resolveSedeEntryFromState(priorState);
   if (activeAwaitingLinkSede) return activeAwaitingLinkSede;
 
-  if (userMessageRequiresFreshSedeForBooking(bodyText, priorState)) return null;
+  if (userMessageRequiresFreshSedeForBooking(bodyText, priorState) && !priorStateHasRecentKnownSede(priorState)) {
+    return null;
+  }
 
   if (stateHasPendingBookingIntent(priorState)) {
     const pendingAtMs = Number(priorState.pendingBookingIntentAtMs);
@@ -9392,8 +9435,24 @@ function appendAskSedeIfMissing(priorState, messageText) {
   return `${messageText} ${buildAskSedeMessage()}`.trim();
 }
 
-async function sendAskSedeTwoStep(toPhoneId, profileDisplayName, priorState, prefaceText = null) {
-  const askSedePrompt = buildConsolidatedAskSedePrompt(prefaceText);
+function resolveAskSedePromptIntent(priorState, options = {}) {
+  if (options.intent === 'booking' || options.intent === 'general') return options.intent;
+  if (
+    stateHasPendingBookingIntent(priorState) ||
+    stateHasPendingBookingDetails(priorState) ||
+    (priorState &&
+      typeof priorState.lastPendingBookingRequestText === 'string' &&
+      priorState.lastPendingBookingRequestText.trim().length > 0)
+  ) {
+    return 'booking';
+  }
+  return 'general';
+}
+
+async function sendAskSedeTwoStep(toPhoneId, profileDisplayName, priorState, prefaceText = null, options = {}) {
+  const askSedePrompt = buildConsolidatedAskSedePrompt(prefaceText, {
+    intent: resolveAskSedePromptIntent(priorState, options),
+  });
   const firstWrapped = buildAutoReplyWithGreetingIfNeeded(askSedePrompt, profileDisplayName, priorState);
   const afterFirstState = mergeConversationStatePreservingGreeting(
     priorState,
@@ -13723,8 +13782,9 @@ exports.handler = async (event) => {
             else if (messageAsksAboutOtherProvinces(bodyText)) reply = OTHER_PROVINCES_MESSAGE;
             else if (messageAsksAboutVirtualVisit(bodyText)) reply = VIRTUAL_VISITS_MESSAGE;
             else if (messageAsksForMapsLocation(bodyText)) reply = buildSedeMapsLocationReply(priorState, findSedeFromText(bodyText));
-            else if (messageAsksAboutSedeAddressOrHowToArrive(bodyText))
+            else if (messageAsksAboutSedeAddressOrHowToArrive(bodyText)) {
               reply = buildSedeAddressReply(priorState, sedeMentionedInMessage);
+            }
             else if (messageAsksAboutStudyFasting(bodyText)) reply = STUDY_FASTING_MESSAGE;
             else if (messageAsksAboutStudyMedicationPreparation(bodyText))
               reply = STUDY_PREPARATION_MEDICATION_MESSAGE;
@@ -13764,6 +13824,11 @@ exports.handler = async (event) => {
             const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
             const nextStatePatch = { ...(wrapped.nextStatePatch || {}), lastSeenAtMs: Date.now(), lastBotReplyAtMs: Date.now() };
             const shouldAwaitVirtualVisitConfirmation = messageAsksAboutVirtualVisit(bodyText);
+            const addressSedeForState =
+              sedeMentionedInMessage ||
+              (messageAsksAboutSedeAddressOrHowToArrive(bodyText)
+                ? resolveLastSedeEntryFromState(priorState)
+                : null);
             await setConversationState(
               from,
               mergeConversationStatePreservingGreeting(
@@ -13775,7 +13840,10 @@ exports.handler = async (event) => {
                     }
                   : priorState || {},
                 {
-                  ...(sedeMentionedInMessage ? buildLastSedeStatePatch(sedeMentionedInMessage) : null),
+                  ...(addressSedeForState ? buildLastSedeStatePatch(addressSedeForState) : null),
+                  ...(messageAsksAboutSedeAddressOrHowToArrive(bodyText)
+                    ? buildLastScheduleDiscussedStatePatch()
+                    : null),
                   ...nextStatePatch,
                 }
               )
