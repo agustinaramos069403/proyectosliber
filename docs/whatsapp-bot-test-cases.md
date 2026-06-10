@@ -53,6 +53,21 @@
 - Con sede ya informada (ej. Corrientes tras precio consulta): responder dirección de esa sede sin pedir ciudad de nuevo
 - IA clasifica ADDRESS vs BOOKING cuando la frase es ambigua
 
+## Horarios especiales / disponibilidad / embarazo
+- Fines de semana y feriados:
+  - “¿Atiende los sábados?”, “¿y los domingos?”, “¿atiende feriados?”
+  - Respuesta: NO atiende sábados, domingos ni feriados; orientar a agenda online o teléfono de sede según contexto.
+- Demora / cupo en agenda:
+  - “¿Cuánto tiempo tengo que esperar para un turno?”, “¿Hay turnos disponibles esta semana?”
+  - Respuesta: por chat no se confirma demora ni cupo; disponibilidad en el link; a veces se liberan turnos por cancelaciones.
+  - Con sede Corrientes/Resistencia: puede ofrecer link (NO afirmar que hay turno).
+- Sin turno / walk-in:
+  - “¿Puedo ir sin turno?”
+  - Respuesta: NO, consultas con turno previo (link o teléfono de sede según corresponda).
+- Embarazo:
+  - “Estoy embarazada, ¿puedo hacerme el test de alergia?”, “¿el Dr. atiende embarazadas?”
+  - Respuesta empática: sí atiende embarazadas; estudios pueden requerir evaluación previa; NO dar indicaciones médicas concretas.
+
 ## Turnos / reservas / link
 - Flujo con contexto (IA + estado):
   - “quiero un turno” → sede → **NO** “¿en qué te puedo ayudar?”; ofrecer link o “¿te lo mando?”

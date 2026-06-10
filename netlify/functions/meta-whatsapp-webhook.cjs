@@ -3717,6 +3717,30 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'No asumas Resistencia. Mantené la pregunta clara y breve.'
     );
   }
+  if (options.replyContext === 'weekend_holiday_schedule') {
+    replyContextInstructions.push(
+      'Contexto: pregunta si atiende sábados, domingos o feriados.',
+      'Mantené que NO hay atención esos días. No inventes horarios de fin de semana.'
+    );
+  }
+  if (options.replyContext === 'appointment_wait_time') {
+    replyContextInstructions.push(
+      'Contexto: pregunta cuánto demora un turno o si hay disponibilidad esta semana.',
+      'Mantené: por chat no se confirma cupo ni tiempos de espera; la agenda online muestra disponibilidad y a veces se liberan turnos.'
+    );
+  }
+  if (options.replyContext === 'walk_in_without_appointment') {
+    replyContextInstructions.push(
+      'Contexto: pregunta si puede ir sin turno.',
+      'Mantené: consultas solo con turno previo (link en Corrientes/Resistencia o teléfono en Formosa/Sáenz Peña).'
+    );
+  }
+  if (options.replyContext === 'pregnancy_clinical_inquiry') {
+    replyContextInstructions.push(
+      'Contexto: paciente embarazada pregunta por consulta o estudios (test de alergia, etc.).',
+      'Mantené: sí atiende embarazadas; estudios pueden requerir evaluación previa. No des diagnósticos ni indicaciones médicas concretas.'
+    );
+  }
   const systemPrompt = [
     'Sos la voz humana de WhatsApp de la asistente del Dr. Liber Acosta (alergia e inmunología), en español rioplatense.',
     'Recibís un borrador factual generado por reglas. Reescribilo para que suene natural, cálido y fluido, como una recepcionista real (estilo bot de n8n), NO como call center ni robot.',
@@ -8013,6 +8037,8 @@ async function sendScheduleQuestionReply(from, bodyText, priorState, profileDisp
 }
 
 async function tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName) {
+  if (messageAsksAboutWeekendOrHolidaySchedule(bodyText)) return false;
+  if (messageAsksAboutAppointmentWaitTimeOrAgendaLoad(bodyText)) return false;
   if (messageLooksLikeHealthInsurancePlusQuestion(bodyText)) return false;
   if (messageStatesHealthInsuranceMembership(bodyText)) return false;
   if (await shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName)) {
@@ -8087,6 +8113,7 @@ async function tryResolvePreferredDayBookingWithOpenAi(userMessage, options = {}
 }
 
 async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName) {
+  if (messageAsksAboutWeekendOrHolidaySchedule(bodyText)) return false;
   const weekdayName = extractWeekdayNameFromText(bodyText);
   const relativeDayLabel = extractRelativeDayLabelFromText(bodyText);
   if (!weekdayName && !relativeDayLabel) return false;
@@ -8610,6 +8637,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     return true;
   }
   if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleSpecialPatientGuidanceInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
@@ -10115,6 +10145,8 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
 
 function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutAppointmentWaitTimeOrAgendaLoad(rawText)) return false;
+  if (messageAsksAboutWeekendOrHolidaySchedule(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   const mentionsTomorrow =
     normalized.includes('manana') ||
@@ -10149,6 +10181,245 @@ function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
   ) {
     return true;
   }
+  return false;
+}
+
+function messageAsksAboutWeekendOrHolidaySchedule(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const mentionsWeekendOrHoliday =
+    normalized.includes('sabado') ||
+    normalized.includes('domingo') ||
+    normalized.includes('fin de semana') ||
+    normalized.includes('fines de semana') ||
+    normalized.includes('feriado') ||
+    normalized.includes('feriados');
+  if (!mentionsWeekendOrHoliday) return false;
+  const asksAttendance =
+    normalized.includes('atiende') ||
+    normalized.includes('atienden') ||
+    normalized.includes('abre') ||
+    normalized.includes('abierto') ||
+    normalized.includes('horario') ||
+    normalized.includes('hay turno') ||
+    normalized.includes('hay turnos') ||
+    normalized.includes('consulta') ||
+    normalized.includes('atencion');
+  return asksAttendance || /\b(sabado|domingo|feriado)\b/.test(normalized);
+}
+
+function messageAsksAboutAppointmentWaitTimeOrAgendaLoad(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const asksLeadTime =
+    (normalized.includes('cuanto tiempo') &&
+      (normalized.includes('esperar') ||
+        normalized.includes('demora') ||
+        normalized.includes('tardo') ||
+        normalized.includes('demoran'))) ||
+    normalized.includes('cuanto demora') ||
+    normalized.includes('cuanto tardo') ||
+    normalized.includes('cuanto hay que esperar') ||
+    normalized.includes('demora para') ||
+    normalized.includes('demoran para') ||
+    normalized.includes('cuando hay turno') ||
+    normalized.includes('cuando hay turnos') ||
+    normalized.includes('para cuando hay') ||
+    normalized.includes('agenda llena') ||
+    normalized.includes('agenda cargada') ||
+    normalized.includes('muy cargada') ||
+    normalized.includes('tardan en dar');
+  const asksWeeklyAvailability =
+    normalized.includes('hay turnos disponibles esta semana') ||
+    normalized.includes('hay turno esta semana') ||
+    normalized.includes('hay turnos esta semana') ||
+    normalized.includes('hay disponibilidad esta semana') ||
+    normalized.includes('tienen turnos esta semana') ||
+    normalized.includes('hay para esta semana');
+  return asksLeadTime || asksWeeklyAvailability;
+}
+
+function messageAsksAboutWalkInWithoutAppointment(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  if (messageAsksAboutAppointmentWaitTimeOrAgendaLoad(rawText)) return false;
+  return (
+    normalized.includes('puedo ir sin turno') ||
+    normalized.includes('puedo ir sin cita') ||
+    normalized.includes('ir sin turno') ||
+    normalized.includes('ir sin cita') ||
+    normalized.includes('sin turno puedo') ||
+    normalized.includes('sin cita puedo') ||
+    normalized.includes('atender sin turno') ||
+    normalized.includes('atencion sin turno') ||
+    normalized.includes('atencion espontanea') ||
+    normalized.includes('llego directo') ||
+    normalized.includes('puedo pasar sin turno') ||
+    normalized.includes('puedo pasar sin cita')
+  );
+}
+
+function messageLooksLikePregnancyClinicalInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const mentionsPregnancy =
+    normalized.includes('embarazada') ||
+    normalized.includes('embarazo') ||
+    normalized.includes('gestante');
+  if (!mentionsPregnancy) return false;
+  return (
+    normalized.includes('test') ||
+    normalized.includes('prick') ||
+    normalized.includes('alergia') ||
+    normalized.includes('espirometria') ||
+    normalized.includes('atiende') ||
+    normalized.includes('atienden') ||
+    normalized.includes('puedo') ||
+    normalized.includes('puede') ||
+    normalized.includes('consulta') ||
+    normalized.includes('estudio') ||
+    normalized.includes('hacerme')
+  );
+}
+
+function buildWeekendOrHolidayScheduleReply(priorState) {
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  let reply = 'El Dr. no atiende sábados, domingos ni feriados.';
+  if (lastSede && isReferralOnlySedeEntry(lastSede)) {
+    const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
+    reply += ` En ${lastSede.displayName} consultá horarios y turnos comunicándote al ${phoneNumber}.`;
+    return reply;
+  }
+  if (lastSede) {
+    reply += ` Los días de consulta en ${lastSede.displayName} se ven en la agenda online.`;
+    return appendBookingLinkOfferIfAllowed(priorState, reply);
+  }
+  reply +=
+    ' Los días de consulta según sede se ven en la agenda online (Corrientes y Resistencia) o por teléfono en Formosa y Sáenz Peña.';
+  return reply;
+}
+
+function buildAppointmentWaitTimeOrAgendaLoadReply(priorState, lastSede) {
+  if (lastSede && isReferralOnlySedeEntry(lastSede)) {
+    const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
+    return `Por acá no podemos decir cuánto demora ni si hay cupo. Para saber disponibilidad en ${lastSede.displayName}, comunicate al ${phoneNumber}.`;
+  }
+  return 'Por acá no podemos decir cuánto demora ni si hay cupo esta semana. La disponibilidad actualizada está en el link de agenda; a veces se liberan turnos por cancelaciones.';
+}
+
+function buildWalkInWithoutAppointmentReply(priorState, lastSede) {
+  if (lastSede && isReferralOnlySedeEntry(lastSede)) {
+    const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
+    return `No, las consultas son con turno previo. En ${lastSede.displayName} coordiná al ${phoneNumber}.`;
+  }
+  if (lastSede) {
+    const reply = `No, las consultas son con turno previo. En ${lastSede.displayName} reservás con el link de agenda online.`;
+    return appendBookingLinkOfferIfAllowed(priorState, reply);
+  }
+  return 'No, las consultas son con turno previo. En Corrientes y Resistencia reservás con el link de agenda; en Formosa y Sáenz Peña comunicate con el teléfono de la sede.';
+}
+
+function buildPregnancyClinicalInquiryReply(rawText) {
+  const normalized = normalizeForMatch(rawText);
+  const mentionsStudy =
+    normalized.includes('test') ||
+    normalized.includes('prick') ||
+    normalized.includes('alergia') ||
+    normalized.includes('espirometria');
+  if (mentionsStudy) {
+    return 'El Dr. atiende embarazadas; algunos estudios de alergia pueden tener indicaciones especiales en el embarazo. Lo ideal es una consulta de evaluación para indicarte qué conviene en tu caso.';
+  }
+  return 'Sí, el Dr. atiende embarazadas. Lo ideal es una consulta de evaluación para orientarte según tu embarazo y tus síntomas.';
+}
+
+async function tryHandleSpecialPatientGuidanceInquiry(from, bodyText, priorState, profileDisplayName) {
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const statePatch = {
+    ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
+    bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+  };
+
+  if (messageAsksAboutWeekendOrHolidaySchedule(bodyText)) {
+    return sendFinalizedPatientTextReply(
+      from,
+      buildWeekendOrHolidayScheduleReply(priorState),
+      priorState,
+      profileDisplayName,
+      statePatch,
+      {
+        userMessage: bodyText,
+        replyContext: 'weekend_holiday_schedule',
+      }
+    );
+  }
+
+  if (messageLooksLikePregnancyClinicalInquiry(bodyText)) {
+    return sendFinalizedPatientTextReply(
+      from,
+      buildPregnancyClinicalInquiryReply(bodyText),
+      priorState,
+      profileDisplayName,
+      statePatch,
+      {
+        userMessage: bodyText,
+        replyContext: 'pregnancy_clinical_inquiry',
+        suppressBookingLinkOffer: true,
+      }
+    );
+  }
+
+  if (messageAsksAboutWalkInWithoutAppointment(bodyText)) {
+    return sendFinalizedPatientTextReply(
+      from,
+      buildWalkInWithoutAppointmentReply(priorState, lastSede),
+      priorState,
+      profileDisplayName,
+      statePatch,
+      {
+        userMessage: bodyText,
+        replyContext: 'walk_in_without_appointment',
+      }
+    );
+  }
+
+  if (messageAsksAboutAppointmentWaitTimeOrAgendaLoad(bodyText)) {
+    let replyText = buildAppointmentWaitTimeOrAgendaLoadReply(priorState, lastSede);
+    if (!lastSede || !isReferralOnlySedeEntry(lastSede)) {
+      replyText = appendBookingLinkOfferIfAllowed(priorState, replyText);
+    }
+    return sendFinalizedPatientTextReply(
+      from,
+      replyText,
+      priorState,
+      profileDisplayName,
+      {
+        ...statePatch,
+        ...buildLastScheduleDiscussedStatePatch(),
+        ...buildPendingBookingIntentStatePatch(),
+      },
+      {
+        userMessage: bodyText,
+        replyContext: 'appointment_wait_time',
+      }
+    );
+  }
+
   return false;
 }
 
@@ -12623,6 +12894,10 @@ function messageShouldSkipOpenAiAssistantFallback(rawText, priorState) {
   if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) return true;
   if (messageLooksLikeRichPatientIntakeInquiry(rawText)) return true;
   if (messageLooksLikeComplexClinicalInquiry(rawText)) return true;
+  if (messageAsksAboutWeekendOrHolidaySchedule(rawText)) return true;
+  if (messageAsksAboutAppointmentWaitTimeOrAgendaLoad(rawText)) return true;
+  if (messageAsksAboutWalkInWithoutAppointment(rawText)) return true;
+  if (messageLooksLikePregnancyClinicalInquiry(rawText)) return true;
   if (textMatchesMedicalEmergency(rawText)) return true;
   if (messageLooksLikeAnyPriceQuestion(rawText) && findSedeFromText(rawText)) return true;
   if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return true;
@@ -15350,6 +15625,9 @@ exports.handler = async (event) => {
           if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleSpecialPatientGuidanceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -15804,6 +16082,9 @@ exports.handler = async (event) => {
               rulesOnly: rulesOnlyFallback,
             })
           ) {
+            continue;
+          }
+          if (await tryHandleSpecialPatientGuidanceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
