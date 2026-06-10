@@ -280,6 +280,8 @@ const STUDY_TYPE_PATCH_TEST = 'test del parche';
 const INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION = ['OSDE', 'Sancor', 'Isunne'];
 const ALLERGY_TEST_REQUIRES_EVALUATION_PRICE_MESSAGE =
   'Los tests de alergia pueden ser a medicamentos, alimentos o aeroalérgenos, y no todos tienen el mismo valor. Primero hace falta una consulta de evaluación; ahí el Dr. te indica cuál corresponde y el costo según tu caso.';
+const ALLERGY_TEST_CONSULTATION_FIRST_AVAILABILITY_MESSAGE =
+  'Los tests de alergia no tienen un valor único por acá: primero hace falta la consulta de evaluación y ahí el Dr. define si corresponde hacer algún test y cuál. A veces se lee "test" y se asume que sí o sí se hace, pero no siempre es necesario; eso se ve en consulta. La espirometría, si la necesitás sola, sí tiene valor particular que te podemos informar cuando lo indiques.';
 const SPIROMETRY_FOLLOW_UP_PRICE_NOTE =
   'Si ya te atendiste por asma y volvés solo por control con espirometría, puede haber un valor distinto; eso te lo confirman en la clínica.';
 
@@ -3865,6 +3867,13 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'Mantené: sí atiende embarazadas; estudios pueden requerir evaluación previa. No des diagnósticos ni indicaciones médicas concretas.'
     );
   }
+  if (options.replyContext === 'generic_test_consultation_first') {
+    replyContextInstructions.push(
+      'Contexto: paciente pregunta si hacen tests/estudios de forma genérica (ej. "hacen test").',
+      'Mantené: sí se realizan estudios; tests de alergia requieren consulta previa sin dar precio fijo; aclarar que no siempre hace falta test; espirometría sola sí tiene valor conocido.',
+      'No ofrezcas link de agenda ni digas que no podés agendar por el paciente.'
+    );
+  }
   const systemPrompt = [
     'Sos la voz humana de WhatsApp de la asistente del Dr. Liber Acosta (alergia e inmunología), en español rioplatense.',
     'Recibís un borrador factual generado por reglas. Reescribilo para que suene natural, cálido y fluido, como una recepcionista real (estilo bot de n8n), NO como call center ni robot.',
@@ -6544,6 +6553,7 @@ async function tryResolveAssistedBookingRequestWithOpenAi(userMessage, options =
 }
 
 async function tryHandleAssistedBookingRequest(from, bodyText, priorState, profileDisplayName, options = {}) {
+  if (messageLooksLikeStudyAvailabilityInquiry(bodyText)) return false;
   if (
     (conversationRecentlyAskedSedeSelection(priorState) || stateLooksLikeAwaitingSedeSelection(priorState)) &&
     !messageLooksLikeAssistedBookingRequest(bodyText)
@@ -6918,6 +6928,9 @@ function conversationLooksLikeOngoingBookingLinkGuidance(priorState) {
     lastBotReplyText.includes('te acompano')
   ) {
     return true;
+  }
+  if (!wasBookingLinkSentRecently(priorState) && !isLastBotReplyWithinBookingLinkRememberWindow(priorState)) {
+    return false;
   }
   return Boolean(
     resolveLastSedeEntryFromState(priorState) &&
@@ -7514,6 +7527,7 @@ async function tryHandleWhereToBookQuestion(from, bodyText, priorState, profileD
 }
 
 async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDisplayName, lastSede) {
+  if (messageLooksLikeStudyAvailabilityInquiry(bodyText)) return false;
   const bookingSede =
     resolvePatientConfirmedSedeEntryFromState(priorState) || lastSede || resolveLastSedeEntryFromState(priorState);
   if (isReferralOnlySedeEntry(bookingSede)) {
@@ -10745,8 +10759,44 @@ function messageLooksLikeBookingIntent(rawText) {
   return false;
 }
 
+function messageMentionsBookingLinkOrAgenda(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('link') ||
+    normalized.includes('enlace') ||
+    normalized.includes('agenda') ||
+    normalized.includes('agendar') ||
+    normalized.includes('reservar') ||
+    normalized.includes('turno')
+  );
+}
+
+function messageSaysUserLostOrNeedsBookingLinkResent(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!messageMentionsBookingLinkOrAgenda(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('no tengo el link') ||
+    normalized.includes('no tengo link') ||
+    normalized.includes('no lo tengo') ||
+    normalized.includes('no lo encuentro') ||
+    normalized.includes('perdi el link') ||
+    normalized.includes('perdí el link') ||
+    normalized.includes('nuevamente') ||
+    normalized.includes('otra vez') ||
+    normalized.includes('de nuevo') ||
+    normalized.includes('reenvi') ||
+    normalized.includes('volver a mandar') ||
+    normalized.includes('volver a enviar') ||
+    normalized.includes('mandar de nuevo') ||
+    normalized.includes('enviar de nuevo')
+  );
+}
+
 function messageExplicitlyRequestsBookingLink(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageSaysUserLostOrNeedsBookingLinkResent(rawText)) return true;
   const normalized = normalizeForMatch(rawText);
   if (
     normalized.includes('pasame link') ||
@@ -10760,14 +10810,7 @@ function messageExplicitlyRequestsBookingLink(rawText) {
   ) {
     return true;
   }
-  const mentionsLink =
-    normalized.includes('link') ||
-    normalized.includes('enlace') ||
-    normalized.includes('agenda') ||
-    normalized.includes('agendar') ||
-    normalized.includes('reservar') ||
-    normalized.includes('turno');
-  if (!mentionsLink) return false;
+  if (!messageMentionsBookingLinkOrAgenda(rawText)) return false;
   return (
     normalized.includes('pasame') ||
     normalized.includes('pasalo') ||
@@ -10777,6 +10820,16 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('enviamelo') ||
     normalized.includes('me pasas') ||
     normalized.includes('me pasás') ||
+    normalized.includes('me podes pasar') ||
+    normalized.includes('me podés pasar') ||
+    normalized.includes('me lo podes pasar') ||
+    normalized.includes('me lo podés pasar') ||
+    normalized.includes('me lo pasas') ||
+    normalized.includes('me lo pasás') ||
+    normalized.includes('podes pasar el link') ||
+    normalized.includes('podés pasar el link') ||
+    normalized.includes('podes pasarme') ||
+    normalized.includes('podés pasarme') ||
     normalized.includes('me mandas') ||
     normalized.includes('me mandás') ||
     normalized.includes('quiero el link') ||
@@ -10786,6 +10839,13 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('dale el link') ||
     normalized.includes('necesito el link')
   );
+}
+
+function shouldResendFullBookingLinkUrl(priorState, userMessage, entry) {
+  if (messageExplicitlyRequestsBookingLink(userMessage)) return true;
+  if (!wasBookingLinkSentRecently(priorState)) return true;
+  if (!hasBookingLinkInStateForSede(priorState, entry)) return true;
+  return false;
 }
 
 function messageAsksIfDoctorTreatsChildren(rawText) {
@@ -10820,6 +10880,23 @@ function messageMentionsSpirometryStudy(rawText) {
   return normalizedTextContainsApproxWord(normalized, 'espirometria', 3);
 }
 
+function messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageMentionsSpirometryStudy(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  if (!normalized) return false;
+  if (normalized.includes('covid') || normalized.includes('pcr') || normalized.includes('antigeno')) {
+    return false;
+  }
+  return /\btests?\b/.test(normalized);
+}
+
+function messageLooksLikeStudyAvailabilityInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutStudyPrice(rawText) || messageLooksLikeAnyPriceQuestion(rawText)) return false;
+  return messageAsksWhetherDoctorPerformsStudy(rawText);
+}
+
 function messageAsksAboutStudiesOrTests(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -10829,6 +10906,7 @@ function messageAsksAboutStudiesOrTests(rawText) {
     normalized.includes('prick') ||
     normalized.includes('test de alerg') ||
     normalized.includes('test alerg') ||
+    messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) ||
     messageMentionsSpirometryStudy(rawText) ||
     normalized.includes('laboratorio') ||
     normalized.includes('sangre') ||
@@ -11369,9 +11447,14 @@ function buildConditionTreatmentReply(priorState, rawText) {
 function getStudyTypeFromText(rawText) {
   if (messageMentionsSpirometryStudy(rawText)) return STUDY_TYPE_SPIROMETRY;
   const normalized = normalizeForMatch(rawText);
-  if (normalized.includes('test de alerg') || normalized.includes('prick')) return STUDY_TYPE_ALLERGY_TEST;
+  if (normalized.includes('test de alerg') || normalized.includes('test alerg') || normalized.includes('prick')) {
+    return STUDY_TYPE_ALLERGY_TEST;
+  }
   if (normalized.includes('test del parche') || normalized.includes('patch') || normalized.includes('parche')) {
     return STUDY_TYPE_PATCH_TEST;
+  }
+  if (messageLooksLikeBareAllergyOrGenericTestInquiry(rawText)) {
+    return STUDY_TYPE_ALLERGY_TEST;
   }
   return null;
 }
@@ -11605,9 +11688,13 @@ function messageAsksWhetherDoctorPerformsStudy(rawText) {
   const mentionsStudy =
     messageMentionsSpirometryStudy(rawText) ||
     normalized.includes('test de alerg') ||
+    normalized.includes('test alerg') ||
     normalized.includes('prick') ||
     normalized.includes('test del parche') ||
-    normalized.includes('parche');
+    normalized.includes('parche') ||
+    messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) ||
+    normalized.includes('estudio') ||
+    normalized.includes('estudios');
   if (!mentionsStudy) return false;
   if (messageAsksWhatStudiesDoctorDoes(rawText)) return true;
   return (
@@ -11669,12 +11756,59 @@ function flattenStudiesReplyPayload(studiesReply) {
   return parts.join(' ');
 }
 
+function buildGenericAllergyTestAvailabilitySplitReply(priorState, rawText, context = {}) {
+  const sedeForReply = context.lastSede || resolveKnownSedeForConversationContext(priorState);
+  const cityClause = sedeForReply ? ` en ${sedeForReply.displayName}` : '';
+  return {
+    primaryReply: `Sí, el Dr. realiza tests de alergia (prick test), espirometría y otros estudios según el caso${cityClause}.`,
+    followUpReply: ALLERGY_TEST_CONSULTATION_FIRST_AVAILABILITY_MESSAGE,
+  };
+}
+
+async function tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeStudyAvailabilityInquiry(bodyText)) return false;
+  const lastSede = resolveKnownSedeForConversationContext(priorState);
+  const studyType = await resolveStudyTypeFromMessage(bodyText, priorState, { profileDisplayName });
+  const shouldUseGenericAllergyReply =
+    !isSpirometryStudyType(studyType) ||
+    messageLooksLikeBareAllergyOrGenericTestInquiry(bodyText);
+  const studiesReply = shouldUseGenericAllergyReply
+    ? buildGenericAllergyTestAvailabilitySplitReply(priorState, bodyText, { lastSede })
+    : await buildStudyAvailabilitySplitReply(studyType, priorState, bodyText, { lastSede });
+  return deliverStudiesInformationReply(
+    from,
+    studiesReply,
+    priorState,
+    profileDisplayName,
+    {
+      ...(studyType ? { lastStudyType: studyType } : { lastStudyType: STUDY_TYPE_ALLERGY_TEST }),
+      lastStudyPriceContextAtMs: Date.now(),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'generic_test_consultation_first',
+    }
+  );
+}
+
 async function buildStudyAvailabilitySplitReply(studyType, priorState, rawText, context = {}) {
   const knownHealthInsuranceName =
     resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText) ||
     resolveActiveHealthInsuranceNameFromState(priorState);
   const sedeForReply = context.lastSede || resolveKnownSedeForConversationContext(priorState);
   const primaryReply = buildStudyAvailabilityPrimaryReply(studyType, priorState, { sedeEntry: sedeForReply });
+  if (
+    (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) &&
+    messageAsksWhetherDoctorPerformsStudy(rawText) &&
+    !messageAsksAboutStudyPrice(rawText) &&
+    !messageLooksLikeAnyPriceQuestion(rawText)
+  ) {
+    return {
+      primaryReply,
+      followUpReply: ALLERGY_TEST_CONSULTATION_FIRST_AVAILABILITY_MESSAGE,
+    };
+  }
   if (!knownHealthInsuranceName && !sedeForReply) {
     return {
       primaryReply,
@@ -14221,11 +14355,20 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
   }
   const acknowledgmentPrefix =
     typeof options.acknowledgmentPrefix === 'string' ? options.acknowledgmentPrefix.trim() : '';
+  if (shouldResendFullBookingLinkUrl(priorState, userMessage, entry)) {
+    const fullLinkMessage = buildLinkMessage(entry);
+    if (acknowledgmentPrefix) {
+      return combineSlotAcknowledgmentWithLinkReminder(acknowledgmentPrefix, fullLinkMessage);
+    }
+    return fullLinkMessage;
+  }
+
   const cityName = entry.displayName;
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
   const linkAlreadyShared =
-    conversationLooksLikeOngoingBookingLinkGuidance(priorState) ||
-    hasBookingLinkInStateForSede(priorState, entry);
+    wasBookingLinkSentRecently(priorState) &&
+    (hasBookingLinkInStateForSede(priorState, entry) ||
+      conversationLooksLikeOngoingBookingLinkGuidance(priorState));
   const directReminderLine = linkAlreadyShared
     ? `Con el link que ya te pasé podés ver horarios y reservar tu turno en ${cityName}.`
     : linkUrl
@@ -14252,10 +14395,6 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
     return acknowledgmentPrefix ? reminderWithOptionalPrefix : null;
   }
 
-  if (messageExplicitlyRequestsBookingLink(userMessage)) {
-    return reminderWithOptionalPrefix;
-  }
-
   return reminderWithOptionalPrefix;
 }
 
@@ -14276,6 +14415,9 @@ async function deliverBookingLinkReminderReply(
     return sendReferralOnlySedeBookingReply(from, bookingSede, priorState, profileDisplayName, bodyText);
   }
   lastSede = bookingSede;
+  if (shouldResendFullBookingLinkUrl(priorState, bodyText, lastSede)) {
+    return sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, lastSede, bodyText);
+  }
   const rulesReply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede, {
     userMessage: bodyText,
     acknowledgmentPrefix: options.acknowledgmentPrefix,
@@ -16124,6 +16266,9 @@ exports.handler = async (event) => {
               continue;
             }
           }
+          if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -16170,6 +16315,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName)) {

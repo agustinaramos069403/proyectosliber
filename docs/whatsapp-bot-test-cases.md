@@ -329,8 +329,19 @@
   - Si menciona control/seguimiento de asma: aclarar que puede haber otro valor en clínica.
 - “¿Cuánto sale el prick test?” / “test de alergia” (sin turno ni consulta en el mismo mensaje)
   - **No** dar precio fijo; indicar que hay distintos tipos (medicamentos, alimentos, aeroalérgenos) y que primero va **consulta de evaluación**.
+- Tras charla de agenda/link, usuario: **“Hacen test”** / “¿Hacen tests?” / “¿Realizan estudios?”
+  - **No** responder con “no puedo agendar por vos con el link”.
+  - Sí: confirma que el Dr. realiza tests de alergia, espirometría y otros según el caso (con sede si está en contexto).
+  - Aclara: tests de alergia **sin valor fijo** por chat → primero **consulta de evaluación** (no siempre hace falta test).
+  - Espirometría sola: sí tiene valor particular conocido si lo piden después.
 - “Soy de Corrientes, IOSCOR, turno + prick test, ¿cuánto me sale todo?”
   - Sigue el flujo de **costo total** (plus + estudio según reglas), no solo plus ni precio fijo de alergia.
+
+## Link de agenda — pedido explícito y reenvío
+- Tras charla de ayer (o más de 1 h sin link en el chat), usuario: **“Me podés pasar el link”** / “No tengo el link, mandamelo nuevamente”
+  - **Sí** enviar la URL completa de la agenda (Corrientes/Resistencia según sede en contexto).
+  - **No** responder solo “con el link que ya te pasé” sin pegar el link.
+- Si el link se envió hace menos de 1 h y el usuario no lo pide de nuevo, puede usarse recordatorio corto sin repetir la URL.
 
 ## Link de agenda — no repetir en la misma hora
 - Tras enviar link de Resistencia (p. ej. confirmación de consulta virtual), usuario: “martes 10am”
