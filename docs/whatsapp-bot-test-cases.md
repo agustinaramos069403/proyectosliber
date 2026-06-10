@@ -270,7 +270,8 @@
 - “Sáenz Peña”
   - Cobertura OSDE en Sáenz Peña; **no** ofrecer link de agenda.
 - “para agendar turno?”
-  - Derivación telefónica Sáenz Peña (`36415314019`); **no** “link que ya te pasé” ni link de Resistencia.
+  - Derivación telefónica Sáenz Peña (`36415314019`); **no** volver a preguntar sede ni “Por acá no agendamos… ¿Para qué sede es?”.
+  - **No** “link que ya te pasé” ni link de Resistencia/Corrientes.
   - Aunque el paciente tenga un link viejo de Resistencia en sesión, la sede activa es Sáenz Peña.
 
 ## Formosa / Sáenz Peña (solo derivación telefónica, sin link)

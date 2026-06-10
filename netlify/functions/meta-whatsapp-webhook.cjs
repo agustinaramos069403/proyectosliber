@@ -392,7 +392,8 @@ function buildReferralOnlySedeBookingReply(sedeEntry) {
 
 function stateHasRecentReferralSedeBookingContext(priorState) {
   if (!priorState || typeof priorState !== 'object') return false;
-  const lastSede = resolveLastSedeEntryFromState(priorState);
+  const lastSede =
+    resolvePatientConfirmedSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (!isReferralOnlySedeEntry(lastSede)) return false;
   const lastSedeAt = Number(priorState.lastSedeAtMs);
   return Number.isFinite(lastSedeAt) && Date.now() - lastSedeAt <= SEDE_SELECTION_WINDOW_MS;
@@ -401,14 +402,17 @@ function stateHasRecentReferralSedeBookingContext(priorState) {
 function resolveReferralSedeForConversationFollowUp(priorState, bodyText) {
   const sedeFromMessage = findSedeFromText(bodyText);
   if (sedeFromMessage && isReferralOnlySedeEntry(sedeFromMessage)) return sedeFromMessage;
-  const lastSede = resolveLastSedeEntryFromState(priorState);
+  const lastSede =
+    resolvePatientConfirmedSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (!isReferralOnlySedeEntry(lastSede)) return null;
   if (!stateHasRecentReferralSedeBookingContext(priorState)) return null;
   if (
     !messageLooksLikeSpecificSlotBookingRequest(bodyText) &&
     !messageLooksLikeBookingIntent(bodyText) &&
     !messageLooksLikeRealtimeAvailabilityQuestion(bodyText) &&
-    !messageLooksLikeTreatmentAppointmentRequest(bodyText)
+    !messageLooksLikeTreatmentAppointmentRequest(bodyText) &&
+    !messageAsksHowBookingWorks(bodyText) &&
+    !messageAsksWhereOrHowToBook(bodyText)
   ) {
     return null;
   }
@@ -735,6 +739,25 @@ function stateLooksLikeAwaitingChacoSedeDisambiguation(priorState) {
   if (priorState.state !== 'awaiting_chaco_sede_disambiguation') return false;
   const askedAtMs = Number(priorState.awaitingChacoSedeDisambiguationAtMs);
   return Number.isFinite(askedAtMs) && Date.now() - askedAtMs <= SEDE_SELECTION_WINDOW_MS;
+}
+
+function conversationRecentlyAskedChacoSedeDisambiguation(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (!lastBotReplyText.includes('En Chaco el Dr. atiende en Resistencia y en Sáenz Peña')) {
+    return false;
+  }
+  const askedAtMs =
+    Number(priorState.awaitingChacoSedeDisambiguationAtMs) || Number(priorState.lastBotAskedSedeCityAtMs);
+  return Number.isFinite(askedAtMs) && Date.now() - askedAtMs <= SEDE_SELECTION_WINDOW_MS;
+}
+
+function messageLooksLikeChacoSedeDisambiguationAnswer(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const sedeEntry = findSedeFromText(rawText);
+  if (!sedeEntry) return false;
+  return sedeEntry.displayName === 'Resistencia' || sedeEntry.displayName === 'Sáenz Peña';
 }
 
 function buildAwaitingChacoSedeDisambiguationStatePatch() {
@@ -7747,6 +7770,13 @@ async function tryResolveHealthInsuranceSedeFollowUpWithOpenAi(userMessage, opti
 }
 
 async function shouldHandleAsHealthInsuranceSedeFollowUp(bodyText, priorState, profileDisplayName) {
+  if (stateLooksLikeAwaitingChacoSedeDisambiguation(priorState)) return false;
+  if (
+    conversationRecentlyAskedChacoSedeDisambiguation(priorState) &&
+    messageLooksLikeChacoSedeDisambiguationAnswer(bodyText)
+  ) {
+    return false;
+  }
   const healthInsuranceName = resolveActiveHealthInsuranceNameFromState(priorState);
   if (!healthInsuranceName) return false;
   if (!stateHasRecentHealthInsuranceDiscussionContext(priorState)) return false;
@@ -9168,6 +9198,25 @@ function shouldIgnoreStaleBookingLinkSedeForStateResolution(state) {
   );
 }
 
+function resolvePatientConfirmedSedeEntryFromState(state) {
+  if (!state || typeof state !== 'object') return null;
+  if (typeof state.lastSedeEnvKey === 'string' && state.lastSedeEnvKey.trim().length > 0) {
+    const entry = resolveSedeEntryByEnvKey(state.lastSedeEnvKey.trim());
+    if (entry) return entry;
+  }
+  if (typeof state.lastSedeDisplayName === 'string' && state.lastSedeDisplayName.trim().length > 0) {
+    const entry = SEDE_ENTRIES.find((item) => item.displayName === state.lastSedeDisplayName.trim());
+    if (entry) return entry;
+  }
+  return null;
+}
+
+function resolveActiveBookingSedeEntryFromState(state) {
+  const patientConfirmedSede = resolvePatientConfirmedSedeEntryFromState(state);
+  if (patientConfirmedSede) return patientConfirmedSede;
+  return resolveLastSedeEntryFromState(state);
+}
+
 function resolveLastSedeEntryFromState(state) {
   if (!state || typeof state !== 'object') return null;
   const candidateEnvKeys = [];
@@ -9283,12 +9332,12 @@ function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
   const lastSede = resolveLastSedeEntryFromState(priorState);
   if (!lastSede) return null;
 
-  if (isReferralOnlySedeEntry(lastSede) && !findSedeFromText(bodyText)) {
-    return null;
-  }
-
   if (messageAsksWhereOrHowToBook(bodyText) || messageAsksHowBookingWorks(bodyText)) {
     return lastSede;
+  }
+
+  if (isReferralOnlySedeEntry(lastSede) && !findSedeFromText(bodyText)) {
+    return null;
   }
 
   const lastSedeAt = Number(priorState.lastSedeAtMs);
@@ -13656,6 +13705,10 @@ function combineSlotAcknowledgmentWithLinkReminder(acknowledgmentPrefix, reminde
 }
 
 function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options = {}) {
+  const patientConfirmedSede = resolvePatientConfirmedSedeEntryFromState(priorState);
+  if (patientConfirmedSede && isReferralOnlySedeEntry(patientConfirmedSede)) {
+    return buildReferralOnlySedeBookingReply(patientConfirmedSede);
+  }
   if (isReferralOnlySedeEntry(entry)) {
     return buildReferralOnlySedeBookingReply(entry);
   }
@@ -15129,11 +15182,15 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+
           if (messageAsksHowBookingWorks(bodyText)) {
             const confirmedSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState);
             if (confirmedSede) {
               if (isReferralOnlySedeEntry(confirmedSede)) {
-                await sendReferralOnlySedeBookingReply(from, confirmedSede, priorState, profileDisplayName);
+                await sendReferralOnlySedeBookingReply(from, confirmedSede, priorState, profileDisplayName, bodyText);
                 continue;
               }
               const reply = buildGenericBookingPolicyReplyForSede(confirmedSede, priorState);
@@ -15151,6 +15208,11 @@ exports.handler = async (event) => {
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
+              continue;
+            }
+            const referralSede = resolveReferralSedeForConversationFollowUp(priorState, bodyText);
+            if (referralSede) {
+              await sendReferralOnlySedeBookingReply(from, referralSede, priorState, profileDisplayName, bodyText);
               continue;
             }
             const mergedState = mergeConversationStatePreservingGreeting(
