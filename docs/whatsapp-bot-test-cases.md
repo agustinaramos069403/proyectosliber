@@ -260,6 +260,15 @@
   - Mantener contexto Sáenz Peña; repetir teléfono + aclarar que no se confirman horarios por chat.
   - **No** volver a preguntar Corrientes/Resistencia.
 
+## Chaco → Sáenz Peña → turno (sin link de Resistencia)
+- “Soy de Chaco. ¿Atiende cerca? Tengo OSDE, necesito test de alergia y espirometría.”
+  - Preguntar Resistencia o Sáenz Peña.
+- “Sáenz Peña”
+  - Cobertura OSDE en Sáenz Peña; **no** ofrecer link de agenda.
+- “para agendar turno?”
+  - Derivación telefónica Sáenz Peña (`36415314019`); **no** “link que ya te pasé” ni link de Resistencia.
+  - Aunque el paciente tenga un link viejo de Resistencia en sesión, la sede activa es Sáenz Peña.
+
 ## Formosa / Sáenz Peña (solo derivación telefónica, sin link)
 - “Soy de Sáenz Peña y quiero atenderme la semana que viene.”
   - Respuesta: teléfono de la sede (`36415314019`); **no** ofrecer link ni “coordinar cita por acá”.

@@ -395,15 +395,7 @@ function stateHasRecentReferralSedeBookingContext(priorState) {
   const lastSede = resolveLastSedeEntryFromState(priorState);
   if (!isReferralOnlySedeEntry(lastSede)) return false;
   const lastSedeAt = Number(priorState.lastSedeAtMs);
-  if (!Number.isFinite(lastSedeAt) || Date.now() - lastSedeAt > SEDE_SELECTION_WINDOW_MS) return false;
-  const referralPhone = resolveReferralPhoneNumberForSedeEntry(lastSede);
-  const lastBotReplyText =
-    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
-  if (referralPhone && lastBotReplyText.includes(referralPhone)) return true;
-  return (
-    stateHasPendingBookingIntent(priorState) ||
-    stateHasRecentBookingConversationContext(priorState)
-  );
+  return Number.isFinite(lastSedeAt) && Date.now() - lastSedeAt <= SEDE_SELECTION_WINDOW_MS;
 }
 
 function resolveReferralSedeForConversationFollowUp(priorState, bodyText) {
@@ -2133,10 +2125,14 @@ async function tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorStat
   const sedeEntry =
     sedeFromMessage && isReferralOnlySedeEntry(sedeFromMessage)
       ? sedeFromMessage
-      : messageConfirmsReferralSedeBookingFollowUp(bodyText, priorState) &&
-          isReferralOnlySedeEntry(lastSede)
+      : isReferralOnlySedeEntry(lastSede) &&
+          priorStateHasRecentKnownSede(priorState) &&
+          messageLooksLikeReferralOnlySedeBookingIntent(bodyText, priorState)
         ? lastSede
-        : null;
+        : messageConfirmsReferralSedeBookingFollowUp(bodyText, priorState) &&
+            isReferralOnlySedeEntry(lastSede)
+          ? lastSede
+          : null;
   if (!sedeEntry) return false;
   if (!messageLooksLikeReferralOnlySedeBookingIntent(bodyText, priorState)) return false;
   return sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName, bodyText);
@@ -7284,9 +7280,18 @@ async function sendAssistedBookingRequiredReply(from, bodyText, priorState, prof
 }
 
 async function tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName) {
-  if (!messageAsksWhereOrHowToBook(bodyText) && !messageAsksExplicitlyHowToBookTurn(bodyText)) return false;
+  if (
+    !messageAsksWhereOrHowToBook(bodyText) &&
+    !messageAsksExplicitlyHowToBookTurn(bodyText) &&
+    !messageAsksHowBookingWorks(bodyText)
+  ) {
+    return false;
+  }
   const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   if (!lastSede) return false;
+  if (isReferralOnlySedeEntry(lastSede)) {
+    return sendReferralOnlySedeBookingReply(from, lastSede, priorState, profileDisplayName, bodyText);
+  }
   if (
     wasBookingLinkSentRecently(priorState) ||
     hasBookingLinkInStateForSede(priorState, lastSede) ||
@@ -9100,12 +9105,46 @@ function stateLooksLikeAwaitingLinkConfirmation(state) {
 
 function buildLastSedeStatePatch(entry) {
   if (!entry) return null;
-  return {
+  const patch = {
     lastSedeEnvKey: entry.envKey,
     lastSedeDisplayName: entry.displayName,
     lastSedeOptionNumber: entry.optionNumber,
     lastSedeAtMs: Date.now(),
   };
+  if (isReferralOnlySedeEntry(entry)) {
+    return {
+      ...patch,
+      ...buildClearedStaleBookingLinkMemoryStatePatch(),
+    };
+  }
+  return patch;
+}
+
+function resolveSedeEntryByEnvKey(envKey) {
+  if (!envKey || typeof envKey !== 'string') return null;
+  const normalizedEnvKey = envKey.trim();
+  if (!normalizedEnvKey) return null;
+  return SEDE_ENTRIES.find((entry) => entry.envKey === normalizedEnvKey) || null;
+}
+
+function shouldIgnoreStaleBookingLinkSedeForStateResolution(state) {
+  if (!state || typeof state !== 'object') return false;
+  const primaryEnvKey =
+    typeof state.lastSedeEnvKey === 'string' && state.lastSedeEnvKey.trim().length > 0
+      ? state.lastSedeEnvKey.trim()
+      : typeof state.sedeEnvKey === 'string' && state.sedeEnvKey.trim().length > 0
+        ? state.sedeEnvKey.trim()
+        : null;
+  if (!primaryEnvKey) return false;
+  const primarySede = resolveSedeEntryByEnvKey(primaryEnvKey);
+  if (primarySede && isReferralOnlySedeEntry(primarySede)) return true;
+  const lastSedeAtMs = Number(state.lastSedeAtMs);
+  const lastBookingLinkSentAtMs = Number(state.lastBookingLinkSentAtMs);
+  return (
+    Number.isFinite(lastSedeAtMs) &&
+    Number.isFinite(lastBookingLinkSentAtMs) &&
+    lastSedeAtMs > lastBookingLinkSentAtMs
+  );
 }
 
 function resolveLastSedeEntryFromState(state) {
@@ -9117,16 +9156,25 @@ function resolveLastSedeEntryFromState(state) {
   if (typeof state.sedeEnvKey === 'string' && state.sedeEnvKey.trim().length > 0) {
     candidateEnvKeys.push(state.sedeEnvKey.trim());
   }
-  if (typeof state.lastBookingLinkSedeEnvKey === 'string' && state.lastBookingLinkSedeEnvKey.trim().length > 0) {
+  if (
+    !shouldIgnoreStaleBookingLinkSedeForStateResolution(state) &&
+    typeof state.lastBookingLinkSedeEnvKey === 'string' &&
+    state.lastBookingLinkSedeEnvKey.trim().length > 0
+  ) {
     candidateEnvKeys.push(state.lastBookingLinkSedeEnvKey.trim());
   }
-  for (const entry of SEDE_ENTRIES) {
-    if (entry.envKey && candidateEnvKeys.includes(entry.envKey)) return entry;
+  for (const envKey of candidateEnvKeys) {
+    const entry = resolveSedeEntryByEnvKey(envKey);
+    if (entry) return entry;
   }
   const displayNameCandidates = [
     typeof state.lastSedeDisplayName === 'string' ? state.lastSedeDisplayName.trim() : '',
     typeof state.sedeDisplayName === 'string' ? state.sedeDisplayName.trim() : '',
-    typeof state.lastBookingLinkSedeDisplayName === 'string' ? state.lastBookingLinkSedeDisplayName.trim() : '',
+    shouldIgnoreStaleBookingLinkSedeForStateResolution(state)
+      ? ''
+      : typeof state.lastBookingLinkSedeDisplayName === 'string'
+        ? state.lastBookingLinkSedeDisplayName.trim()
+        : '',
   ].filter(Boolean);
   for (const displayName of displayNameCandidates) {
     const byDisplayName = SEDE_ENTRIES.find((entry) => entry.displayName === displayName);
@@ -9218,13 +9266,16 @@ function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
     return null;
   }
 
-  if (messageAsksWhereOrHowToBook(bodyText)) {
+  if (messageAsksWhereOrHowToBook(bodyText) || messageAsksHowBookingWorks(bodyText)) {
     return lastSede;
   }
 
   const lastSedeAt = Number(priorState.lastSedeAtMs);
   if (Number.isFinite(lastSedeAt) && Date.now() - lastSedeAt <= SEDE_SELECTION_WINDOW_MS) {
-    return lastSede;
+    if (!isReferralOnlySedeEntry(lastSede)) {
+      return lastSede;
+    }
+    return null;
   }
   return null;
 }
@@ -10048,6 +10099,7 @@ function messageAsksHowBookingWorks(rawText) {
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  if (normalized.includes('para agendar')) return true;
   if (
     messageLooksLikeBookingIntent(rawText) &&
     !messageAsksExplicitlyHowToBookTurn(rawText) &&
