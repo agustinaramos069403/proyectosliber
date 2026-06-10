@@ -93,6 +93,11 @@
   - Tras precio/plus (“Con IOSCOR, plus de $35.000…”) → “Muy caro”, “estoy enojado”, “qué bronca”
   - NO repetir el mismo monto; IA genera respuesta empática breve (fallback sin OpenAI si no hay key)
   - Turno con día y hora (“martes 17hs”): explicar que por acá no se confirman horarios puntuales + link
+- Reprogramar / cancelar turno existente:
+  - “Tengo turno el jueves pero quiero cambiarlo para otro día”, “quiero reprogramar mi turno”, “cancelar mi turno”
+  - NO ofrecer link de agenda ni confirmar horarios nuevos por chat
+  - Derivar al teléfono de sede guardada en contexto (Corrientes `3795063578` / Resistencia `3624571222`); si no hay sede, dar ambos números
+  - Respuesta tipo: cambios los gestiona el equipo + teléfono de sede + pueden ayudar con nuevo horario
 
 ## Link — problemas técnicos / disponibilidad / lista de espera
 - Problema técnico con el link (IA + contexto de link enviado):
