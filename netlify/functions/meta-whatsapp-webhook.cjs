@@ -13892,7 +13892,8 @@ function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
   if (messageRequestsPersonalBookingAssistance(rawText)) return false;
   if (conversationExpectsStudyPriceOrTypeAnswer(priorState)) return false;
   if (!priorState || typeof priorState !== 'object') return false;
-  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const lastSede =
+    resolveActiveBookingSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   if (!lastSede) return false;
   if (isReferralOnlySedeEntry(lastSede)) return false;
   const linkWasShared =
