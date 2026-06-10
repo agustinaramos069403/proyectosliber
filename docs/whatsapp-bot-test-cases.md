@@ -337,6 +337,18 @@
 - “Soy de Corrientes, IOSCOR, turno + prick test, ¿cuánto me sale todo?”
   - Sigue el flujo de **costo total** (plus + estudio según reglas), no solo plus ni precio fijo de alergia.
 
+## Anti-bucle Sáenz Peña — no quedar “tildado”
+- Tras contexto viejo o respuesta errónea de Sáenz Peña, usuario: **“Hacen test?”** / **“HACEM TEST?”** / **“Soy de corrientes”** / **“No soy de tesis”**
+  - **No** repetir siempre el teléfono `36415314019`.
+  - “Hacen/Hacem test” → estudios + consulta previa (sin precio fijo de alergia).
+  - “Soy de corrientes” → confirmar Corrientes y limpiar sede referral vieja.
+  - “No soy de tesis/resistencia” → pedir disculpas y repreguntar ciudad.
+
+## Sede / sucursal — presencia en una ciudad
+- “Hola, ¿me podés decir si tiene sucursal en Corrientes?” / “¿Atiende en Corrientes?”
+  - **Sí**: confirmar que el Dr. atiende en Corrientes y ofrecer ayuda (`¿En qué te puedo ayudar?`).
+  - **No** responder solo con teléfono de Sáenz Peña ni mezclar sedes por contexto viejo de otra charla.
+
 ## Link de agenda — pedido explícito y reenvío
 - Tras charla de ayer (o más de 1 h sin link en el chat), usuario: **“Me podés pasar el link”** / “No tengo el link, mandamelo nuevamente”
   - **Sí** enviar la URL completa de la agenda (Corrientes/Resistencia según sede en contexto).

@@ -415,6 +415,12 @@ function extractReferralSedeFromRecentConversation(priorState) {
   const lastBotReplyText =
     typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
   if (!lastBotReplyText) return null;
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  const hasRecentBotReply =
+    Number.isFinite(lastBotReplyAtMs) && Date.now() - lastBotReplyAtMs <= SEDE_SELECTION_WINDOW_MS;
+  if (!hasRecentBotReply && !stateHasRecentReferralSedeBookingContext(priorState)) {
+    return null;
+  }
   for (const entry of SEDE_ENTRIES) {
     if (!isReferralOnlySedeEntry(entry)) continue;
     if (lastBotReplyText.includes(entry.displayName)) {
@@ -422,6 +428,58 @@ function extractReferralSedeFromRecentConversation(priorState) {
     }
   }
   return null;
+}
+
+function messageShouldBypassReferralSedeRouting(rawText, priorState = null) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeStudyAvailabilityInquiry(rawText)) return true;
+  if (messageAsksAboutStudiesOrTests(rawText)) return true;
+  if (messageLooksLikeVagueOrMisspelledStudyMention(rawText)) return true;
+  if (messageAsksWhetherDoctorHasBranchInCity(rawText)) return true;
+  if (messageLooksLikeSedeCityDeclaration(rawText)) return true;
+  if (messageLooksLikeWrongSedeAssumptionCorrection(rawText)) return true;
+  const sedeFromMessage = findSedeFromText(rawText);
+  if (sedeFromMessage && !isReferralOnlySedeEntry(sedeFromMessage)) return true;
+  return false;
+}
+
+function messageLooksLikeSedeCityCorrection(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const declaresCity =
+    normalized.includes('soy de') ||
+    normalized.includes('vivo en') ||
+    normalized.startsWith('de ') ||
+    normalized.includes(' soy de ');
+  const deniesCity =
+    normalized.includes('no soy de') ||
+    normalized.includes('no vivo en') ||
+    (normalized.includes('no soy') && normalized.includes(' de '));
+  if (!declaresCity && !deniesCity) return false;
+  return Boolean(findSedeFromText(rawText));
+}
+
+function messageLooksLikeSedeCityDeclaration(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return messageLooksLikeSedeOnlyAnswer(rawText) || messageLooksLikeSedeCityCorrection(rawText);
+}
+
+function messageLooksLikeWrongSedeAssumptionCorrection(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (findSedeFromText(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  const deniesAssumedSede =
+    normalized.includes('no soy de') ||
+    normalized.includes('no vivo en') ||
+    (normalized.includes('no soy') && normalized.includes(' de '));
+  if (!deniesAssumedSede) return false;
+  return (
+    normalized.includes('tesis') ||
+    normalized.includes('resis') ||
+    normalized.includes('saenz') ||
+    normalized.includes('formosa') ||
+    normalized.includes('resistencia')
+  );
 }
 
 function messageAsksShortBookingFollowUp(rawText) {
@@ -440,11 +498,58 @@ function messageAsksShortBookingFollowUp(rawText) {
   );
 }
 
+function messageAsksWhetherDoctorHasBranchInCity(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutSedeAddressOrHowToArrive(rawText) || messageAsksForMapsLocation(rawText)) {
+    return false;
+  }
+  const normalized = normalizeForMatch(rawText);
+  const sedeFromMessage = findSedeFromText(rawText);
+  const hasPresenceQuestion =
+    normalized.includes('sucursal') ||
+    normalized.includes('consultorio') ||
+    (normalized.includes('sede') &&
+      (normalized.includes('tiene') || normalized.includes('tienen') || normalized.includes('hay'))) ||
+    normalized.includes('atiende en') ||
+    normalized.includes('atienden en') ||
+    normalized.includes('llega a') ||
+    normalized.includes('llegan a') ||
+    (/\batiende\b/.test(normalized) && Boolean(sedeFromMessage)) ||
+    (/\batienden\b/.test(normalized) && Boolean(sedeFromMessage));
+  if (!hasPresenceQuestion) {
+    if (
+      normalized.includes('donde atiende') ||
+      normalized.includes('dónde atiende') ||
+      normalized.includes('en que ciudades') ||
+      normalized.includes('en qué ciudades')
+    ) {
+      return true;
+    }
+    return false;
+  }
+  if (messageLooksLikeBookingIntent(rawText) && !normalized.includes('sucursal') && !normalized.includes('consultorio')) {
+    return false;
+  }
+  return Boolean(sedeFromMessage) || hasPresenceQuestion;
+}
+
 function resolveReferralSedeForConversationFollowUp(priorState, bodyText) {
+  if (messageAsksWhetherDoctorHasBranchInCity(bodyText)) return null;
   const sedeFromMessage = findSedeFromText(bodyText);
-  if (sedeFromMessage && isReferralOnlySedeEntry(sedeFromMessage)) return sedeFromMessage;
+  if (sedeFromMessage) {
+    if (isReferralOnlySedeEntry(sedeFromMessage)) return sedeFromMessage;
+    return null;
+  }
   const referralFromConversation = extractReferralSedeFromRecentConversation(priorState);
-  if (referralFromConversation) return referralFromConversation;
+  if (referralFromConversation) {
+    if (
+      !messageLooksLikeReferralOnlySedeBookingIntent(bodyText, priorState) &&
+      !messageConfirmsReferralSedeBookingFollowUp(bodyText, priorState)
+    ) {
+      return null;
+    }
+    return referralFromConversation;
+  }
   const lastSede =
     resolvePatientConfirmedSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (!isReferralOnlySedeEntry(lastSede)) return null;
@@ -2170,6 +2275,16 @@ function buildClearedStaleBookingLinkMemoryStatePatch() {
   };
 }
 
+function buildClearedStaleReferralRoutingStatePatch() {
+  return {
+    ...buildClearedStaleBookingLinkMemoryStatePatch(),
+    pendingBookingIntentAtMs: null,
+    lastPendingBookingRequestText: null,
+    pendingBookingWeekday: null,
+    bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+  };
+}
+
 async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName, bodyText = '') {
   if (!sedeEntry) return false;
   const reply = bodyText
@@ -2199,10 +2314,82 @@ async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, pro
   return true;
 }
 
+async function tryHandleSedePresenceInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksWhetherDoctorHasBranchInCity(bodyText)) return false;
+  const sedeEntry = findSedeFromText(bodyText) || (await resolveSedeFromTextWithOpenAi(bodyText));
+  const reply = sedeEntry
+    ? buildSedeConfirmedHelpMessage(sedeEntry)
+    : `Sí, el Dr. atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}. ¿Desde qué ciudad te consultás?`;
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  const staleReferralClearPatch =
+    sedeEntry && !isReferralOnlySedeEntry(sedeEntry) ? buildClearedStaleReferralRoutingStatePatch() : {};
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, {}, {
+      ...(wrapped.nextStatePatch || {}),
+      ...(sedeEntry ? buildLastSedeStatePatch(sedeEntry) || {} : {}),
+      ...staleReferralClearPatch,
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
+async function tryHandleWrongSedeAssumptionCorrection(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeWrongSedeAssumptionCorrection(bodyText)) return false;
+  const reply = `Disculpá la confusión. ¿Desde qué ciudad te consultás? Atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}.`;
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(
+      priorState,
+      buildAwaitingSedeSelectionStatePatch(),
+      {
+        ...(wrapped.nextStatePatch || {}),
+        ...buildClearedStaleReferralRoutingStatePatch(),
+        ...buildLastBotReplyStatePatch(wrapped.messageText),
+      }
+    )
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
+async function tryHandleSedeCityDeclaration(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeSedeCityDeclaration(bodyText)) return false;
+  const sedeEntry = findSedeFromText(bodyText) || (await resolveSedeFromTextWithOpenAi(bodyText));
+  if (!sedeEntry) return false;
+  const reply = buildSedeConfirmedHelpMessage(sedeEntry);
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  const staleReferralClearPatch = !isReferralOnlySedeEntry(sedeEntry)
+    ? buildClearedStaleReferralRoutingStatePatch()
+    : {};
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, {}, {
+      ...(wrapped.nextStatePatch || {}),
+      ...(buildLastSedeStatePatch(sedeEntry) || {}),
+      ...staleReferralClearPatch,
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 async function tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (messageShouldBypassReferralSedeRouting(bodyText, priorState)) return false;
   if (messageLooksLikeReferralSedePatientGuidanceInquiry(bodyText, priorState)) return false;
+  if (messageAsksWhetherDoctorHasBranchInCity(bodyText)) return false;
   const referralFollowUpSede = resolveReferralSedeForConversationFollowUp(priorState, bodyText);
   if (referralFollowUpSede) {
+    if (
+      !messageLooksLikeReferralOnlySedeBookingIntent(bodyText, priorState) &&
+      !messageConfirmsReferralSedeBookingFollowUp(bodyText, priorState)
+    ) {
+      return false;
+    }
     return sendReferralOnlySedeBookingReply(
       from,
       referralFollowUpSede,
@@ -10894,7 +11081,11 @@ function messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) {
 function messageLooksLikeStudyAvailabilityInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksAboutStudyPrice(rawText) || messageLooksLikeAnyPriceQuestion(rawText)) return false;
-  return messageAsksWhetherDoctorPerformsStudy(rawText);
+  if (messageAsksWhetherDoctorPerformsStudy(rawText)) return true;
+  if (!messageLooksLikeBareAllergyOrGenericTestInquiry(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  if (/\b(hacen|hacem|hace|hacemos|realizan|realiza)\b/.test(normalized)) return true;
+  return normalized.split(' ').filter(Boolean).length <= 5;
 }
 
 function messageAsksAboutStudiesOrTests(rawText) {
@@ -11698,8 +11889,9 @@ function messageAsksWhetherDoctorPerformsStudy(rawText) {
   if (!mentionsStudy) return false;
   if (messageAsksWhatStudiesDoctorDoes(rawText)) return true;
   return (
-    /\b(hacen|hace|realizan|realiza|pueden hacer|se hace)\b/.test(normalized) ||
+    /\b(hacen|hacem|hace|hacemos|realizan|realiza|pueden hacer|se hace)\b/.test(normalized) ||
     normalized.includes('hacen la') ||
+    normalized.includes('hacem la') ||
     normalized.includes('hace la') ||
     normalized.includes('realizan la') ||
     normalized.includes('realiza la')
@@ -15835,6 +16027,15 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (await tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleSedeCityDeclaration(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleWrongSedeAssumptionCorrection(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -16267,6 +16468,9 @@ exports.handler = async (event) => {
             }
           }
           if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleSedePresenceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -17203,7 +17407,12 @@ exports.handler = async (event) => {
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
             const pendingReferralSede = resolveSedeEntryFromState(priorState);
-            if (isReferralOnlySedeEntry(pendingReferralSede)) {
+            if (
+              isReferralOnlySedeEntry(pendingReferralSede) &&
+              !messageShouldBypassReferralSedeRouting(bodyText, priorState) &&
+              (messageLooksLikeReferralOnlySedeBookingIntent(bodyText, priorState) ||
+                messageConfirmsReferralSedeBookingFollowUp(bodyText, priorState))
+            ) {
               await sendReferralOnlySedeBookingReply(from, pendingReferralSede, priorState, profileDisplayName);
               continue;
             }
