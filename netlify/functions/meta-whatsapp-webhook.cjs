@@ -8031,6 +8031,34 @@ async function sendHealthInsurancePlusReplyForSedeEntry(
       }
     )
   );
+  if (isReferralOnlySedeEntry(sedeEntry)) {
+    const referralReply = buildReferralOnlySedeBookingReply(sedeEntry);
+    const referralState = mergeConversationStatePreservingGreeting(
+      mergedState,
+      {},
+      {
+        ...(wrapped.nextStatePatch || {}),
+        ...(buildLastSedeStatePatch(sedeEntry) || {}),
+        healthInsuranceName,
+        lastHealthInsuranceName: healthInsuranceName,
+        ...buildLastHealthInsuranceDiscussionStatePatch(),
+        ...buildLastBotReplyStatePatch(`${wrapped.messageText} ${referralReply}`),
+        bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      }
+    );
+    await setConversationState(from, referralState);
+    await sendWhatsAppText(from, wrapped.messageText);
+    const referralWrapped = buildAutoReplyWithGreetingIfNeeded(referralReply, profileDisplayName, referralState);
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(referralState, {}, {
+        ...(referralWrapped.nextStatePatch || {}),
+        ...buildLastBotReplyStatePatch(`${wrapped.messageText} ${referralWrapped.messageText}`),
+      })
+    );
+    await sendWhatsAppText(from, referralWrapped.messageText, { skipDelay: true });
+    return true;
+  }
   await sendWhatsAppText(from, wrapped.messageText);
   return true;
 }
