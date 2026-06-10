@@ -253,6 +253,37 @@
 - Mismo criterio para Formosa (`3704445096`).
 - Si hubo link de Corrientes/Resistencia hace más de 1 h, no recordarlo al hablar de Formosa/Sáenz Peña.
 
+## Contexto de obra social — no volver a preguntar
+- “Soy de Formosa, tengo Swiss Medical, necesito espirometría… ¿cuánto sale?” → derivación telefónica Formosa.
+- Follow-up: “pero me decís precio de consulta?”
+  - **No** “¿qué obra social/prepaga tenés?”; usar Swiss Medical del mensaje anterior y responder plus/cobertura en Formosa.
+
+## Confianza / enfoque del Dr. (no confundir con estudios)
+- “Hace 15 años que me atiendo con alergistas… prick test, patch test… Nada funcionó. ¿El Dr. hace algo diferente?”
+  - Respuesta empática sobre experiencia y enfoque del Dr.; **no** “realiza test de alergia en Formosa” ni pedir obra social.
+
+## Mensaje rico (precio total + estudio + turno + disponibilidad)
+- “Soy de Corrientes, tengo IOSCOR, quiero turno… prick test, ¿cuánto me sale todo? ¿Hay algo libre el lunes después de las 17?”
+  - Total aproximado (plus + estudio según reglas), tono humano con IA, y orientación sobre agenda para disponibilidad; **no** solo una línea de plus.
+
+## Formosa / Sáenz Peña — mensaje rico (estudio + Sancor + qué conviene)
+- “Soy de Formosa. No sé si usar mi obra social o pagar particular. Tengo Sancor. Quiero hacerme un prick test… ¿Qué me conviene?”
+  - **Varios mensajes** (humanizados con IA), en este orden:
+    1. Sí, el Dr. realiza el test de alergia en Formosa + evaluación previa.
+    2. Cobertura/plus de Sancor en Formosa (desde sheets).
+    3. Orientación obra social vs particular según el caso.
+    4. Teléfono `3704445096` para turnos en Formosa.
+  - **No** solo el teléfono en un único mensaje.
+
+## Estudios — typos con IA y política de precios
+- “¿Cuánto sale la eperitometria?” / “espirimetria” / typos similares
+  - IA detecta espirometría; si es **solo** el estudio: **$40.000** (particular / sin consulta en Corrientes).
+  - Si menciona control/seguimiento de asma: aclarar que puede haber otro valor en clínica.
+- “¿Cuánto sale el prick test?” / “test de alergia” (sin turno ni consulta en el mismo mensaje)
+  - **No** dar precio fijo; indicar que hay distintos tipos (medicamentos, alimentos, aeroalérgenos) y que primero va **consulta de evaluación**.
+- “Soy de Corrientes, IOSCOR, turno + prick test, ¿cuánto me sale todo?”
+  - Sigue el flujo de **costo total** (plus + estudio según reglas), no solo plus ni precio fijo de alergia.
+
 ## Link de agenda — no repetir en la misma hora
 - Tras enviar link de Resistencia (p. ej. confirmación de consulta virtual), usuario: “martes 10am”
   - Respuesta: recordatorio corto (“Perfecto, el martes… Con el link que ya te pasé…”); **no** volver a pegar la URL ni “Cualquier duda que te surja, avisame.”
