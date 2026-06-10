@@ -343,3 +343,10 @@
 - Staleness: ignorar mensajes muy viejos o fuera de orden (timestamp vs `lastInboundMessageAtMs`)
 - Rate limiting por usuario: cooldown corto para mensajes de bajo signal (evitar spam)
 
+## Memoria de conversación — reinicio por inactividad
+- Usuario eligió sede/OS ayer y hoy escribe de nuevo (sin mensajes en **4 h** por defecto)
+  - El estado guardado (sede, link, obra social, etc.) se **borra**; la charla arranca de cero con saludo si corresponde.
+- Usuario mantiene charla activa cada pocas horas pero lleva más de **24 h** desde el primer mensaje de la sesión
+  - También se reinicia (tope máximo de sesión), aunque haya actividad reciente.
+- Variables de entorno (opcionales): `CONVERSATION_INACTIVITY_RESET_HOURS` (default 4), `CONVERSATION_MAX_AGE_HOURS` (default 24), `CONVERSATION_STATE_TTL_SECONDS` (TTL en Redis; default alineado a inactividad).
+

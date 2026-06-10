@@ -27,7 +27,9 @@ const GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
 let cachedGoogleSheetsData = null;
 let cachedGoogleSheetsDataExpiresAtMs = 0;
 
-const DEFAULT_CONVERSATION_STATE_TTL_SECONDS = 30 * 60;
+const DEFAULT_CONVERSATION_INACTIVITY_RESET_MS = 4 * 60 * 60 * 1000;
+const DEFAULT_CONVERSATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_CONVERSATION_STATE_TTL_SECONDS = 24 * 60 * 60;
 const conversationStateByPhoneNumber = new Map();
 
 const PRIVATE_PRICE_CITY_KEY_BY_DISPLAY_NAME = {
@@ -399,9 +401,48 @@ function stateHasRecentReferralSedeBookingContext(priorState) {
   return Number.isFinite(lastSedeAt) && Date.now() - lastSedeAt <= SEDE_SELECTION_WINDOW_MS;
 }
 
+function extractReferralSedeFromRecentConversation(priorState) {
+  if (!priorState || typeof priorState !== 'object') return null;
+  const patientSede = resolvePatientConfirmedSedeEntryFromState(priorState);
+  if (patientSede && isReferralOnlySedeEntry(patientSede)) {
+    const lastSedeAtMs = Number(priorState.lastSedeAtMs);
+    if (Number.isFinite(lastSedeAtMs) && Date.now() - lastSedeAtMs <= SEDE_SELECTION_WINDOW_MS) {
+      return patientSede;
+    }
+  }
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (!lastBotReplyText) return null;
+  for (const entry of SEDE_ENTRIES) {
+    if (!isReferralOnlySedeEntry(entry)) continue;
+    if (lastBotReplyText.includes(entry.displayName)) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+function messageAsksShortBookingFollowUp(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized === 'para agendar turno' ||
+    normalized === 'para agendar' ||
+    normalized.includes('para agendar turno') ||
+    normalized.includes('y para agendar') ||
+    (normalized.includes('para agendar') && normalized.includes('turno'))
+  );
+}
+
 function resolveReferralSedeForConversationFollowUp(priorState, bodyText) {
   const sedeFromMessage = findSedeFromText(bodyText);
   if (sedeFromMessage && isReferralOnlySedeEntry(sedeFromMessage)) return sedeFromMessage;
+  const referralFromConversation = extractReferralSedeFromRecentConversation(priorState);
+  if (referralFromConversation) return referralFromConversation;
   const lastSede =
     resolvePatientConfirmedSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState);
   if (!isReferralOnlySedeEntry(lastSede)) return null;
@@ -742,10 +783,14 @@ function stateLooksLikeAwaitingChacoSedeDisambiguation(priorState) {
 }
 
 function conversationRecentlyAskedChacoSedeDisambiguation(priorState) {
+  if (stateLooksLikeAwaitingChacoSedeDisambiguation(priorState)) return true;
   if (!priorState || typeof priorState !== 'object') return false;
   const lastBotReplyText =
     typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
-  if (!lastBotReplyText.includes('En Chaco el Dr. atiende en Resistencia y en Sáenz Peña')) {
+  if (
+    !lastBotReplyText.includes('En Chaco el Dr. atiende en Resistencia y en Sáenz Peña') &&
+    !lastBotReplyText.includes('Resistencia y en Sáenz Peña')
+  ) {
     return false;
   }
   const askedAtMs =
@@ -2108,6 +2153,7 @@ function messageLooksLikeReferralOnlySedeBookingIntent(rawText, priorState = nul
     messageLooksLikeAssistedBookingRequest(rawText) ||
     messageAsksWhereOrHowToBook(rawText) ||
     messageAsksExplicitlyHowToBookTurn(rawText) ||
+    messageAsksShortBookingFollowUp(rawText) ||
     messageConfirmsReferralSedeBookingFollowUp(rawText, priorState)
   );
 }
@@ -2741,13 +2787,74 @@ function parseCsvToRows(csvText) {
   return lines.map(parseCsvLine);
 }
 
+function getConversationInactivityResetMs() {
+  const rawHours = process.env.CONVERSATION_INACTIVITY_RESET_HOURS;
+  const parsedHours = rawHours != null ? Number(String(rawHours).trim()) : NaN;
+  if (Number.isFinite(parsedHours) && parsedHours > 0) {
+    return Math.min(parsedHours, 24) * 60 * 60 * 1000;
+  }
+  const rawMilliseconds = process.env.CONVERSATION_INACTIVITY_RESET_MS;
+  const parsedMilliseconds = rawMilliseconds != null ? Number(String(rawMilliseconds).trim()) : NaN;
+  if (Number.isFinite(parsedMilliseconds) && parsedMilliseconds > 0) {
+    return Math.min(parsedMilliseconds, DEFAULT_CONVERSATION_MAX_AGE_MS);
+  }
+  return DEFAULT_CONVERSATION_INACTIVITY_RESET_MS;
+}
+
+function getConversationMaxAgeMs() {
+  const rawHours = process.env.CONVERSATION_MAX_AGE_HOURS;
+  const parsedHours = rawHours != null ? Number(String(rawHours).trim()) : NaN;
+  if (Number.isFinite(parsedHours) && parsedHours > 0) {
+    return Math.min(parsedHours, 168) * 60 * 60 * 1000;
+  }
+  const rawMilliseconds = process.env.CONVERSATION_MAX_AGE_MS;
+  const parsedMilliseconds = rawMilliseconds != null ? Number(String(rawMilliseconds).trim()) : NaN;
+  if (Number.isFinite(parsedMilliseconds) && parsedMilliseconds > 0) {
+    return parsedMilliseconds;
+  }
+  return DEFAULT_CONVERSATION_MAX_AGE_MS;
+}
+
 function getConversationStateTtlSeconds() {
+  const inactivitySeconds = Math.ceil(getConversationInactivityResetMs() / 1000);
   const raw = process.env.CONVERSATION_STATE_TTL_SECONDS;
   const parsed = raw != null ? Number(String(raw).trim()) : NaN;
   if (Number.isFinite(parsed) && parsed > 0) {
-    return Math.min(parsed, 24 * 60 * 60);
+    return Math.min(parsed, MAX_CONVERSATION_STATE_TTL_SECONDS);
   }
-  return DEFAULT_CONVERSATION_STATE_TTL_SECONDS;
+  return Math.min(inactivitySeconds, MAX_CONVERSATION_STATE_TTL_SECONDS);
+}
+
+function resolveConversationLastActivityAtMs(state) {
+  if (!state || typeof state !== 'object') return null;
+  const activityCandidates = [
+    Number(state.lastInboundMessageAtMs),
+    Number(state.lastSeenAtMs),
+    Number(state.lastBotReplyAtMs),
+  ].filter((candidate) => Number.isFinite(candidate) && candidate > 0);
+  if (activityCandidates.length === 0) return null;
+  return Math.max(...activityCandidates);
+}
+
+function isConversationStateExpired(state) {
+  if (!state || typeof state !== 'object') return false;
+  const nowMilliseconds = Date.now();
+  const lastActivityAtMs = resolveConversationLastActivityAtMs(state);
+  if (
+    lastActivityAtMs &&
+    nowMilliseconds - lastActivityAtMs > getConversationInactivityResetMs()
+  ) {
+    return true;
+  }
+  const sessionStartedAtMs = Number(state.sessionStartedAtMs);
+  if (
+    Number.isFinite(sessionStartedAtMs) &&
+    sessionStartedAtMs > 0 &&
+    nowMilliseconds - sessionStartedAtMs > getConversationMaxAgeMs()
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function getUpstashRedisRestUrl() {
@@ -2823,6 +2930,7 @@ async function fetchUpstashJson(pathname) {
 }
 
 async function getConversationState(fromPhoneId) {
+  let loadedState = null;
   if (isUpstashConfigured()) {
     const storageKey = buildConversationStateStorageKey(fromPhoneId);
     if (!storageKey) return null;
@@ -2830,25 +2938,41 @@ async function getConversationState(fromPhoneId) {
     const value = data?.result;
     if (typeof value !== 'string' || value.trim().length === 0) return null;
     const parsed = tryParseJson(value);
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    loadedState = parsed && typeof parsed === 'object' ? parsed : null;
+  } else {
+    const key = getConversationStateKey(fromPhoneId);
+    if (!key) return null;
+    const entry = conversationStateByPhoneNumber.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAtMs) {
+      conversationStateByPhoneNumber.delete(key);
+      return null;
+    }
+    loadedState = entry.state;
   }
-  const key = getConversationStateKey(fromPhoneId);
-  if (!key) return null;
-  const entry = conversationStateByPhoneNumber.get(key);
-  if (!entry) return null;
-  if (Date.now() > entry.expiresAtMs) {
-    conversationStateByPhoneNumber.delete(key);
+  if (loadedState && isConversationStateExpired(loadedState)) {
+    console.log(
+      'meta-whatsapp-webhook: conversation state expired by inactivity',
+      getConversationStateKey(fromPhoneId)
+    );
+    await clearConversationState(fromPhoneId);
     return null;
   }
-  return entry.state;
+  return loadedState;
 }
 
 async function setConversationState(fromPhoneId, state) {
+  const normalizedState = state && typeof state === 'object' ? { ...state } : {};
+  const nowMilliseconds = Date.now();
+  const sessionStartedAtMs = Number(normalizedState.sessionStartedAtMs);
+  if (!Number.isFinite(sessionStartedAtMs) || sessionStartedAtMs <= 0) {
+    normalizedState.sessionStartedAtMs = nowMilliseconds;
+  }
   if (isUpstashConfigured()) {
     const storageKey = buildConversationStateStorageKey(fromPhoneId);
     if (!storageKey) return;
     const ttlSeconds = getConversationStateTtlSeconds();
-    const payload = JSON.stringify(state);
+    const payload = JSON.stringify(normalizedState);
     await fetchUpstashJson(
       `set/${encodeURIComponent(storageKey)}/${encodeURIComponent(payload)}?EX=${ttlSeconds}`
     );
@@ -2857,8 +2981,8 @@ async function setConversationState(fromPhoneId, state) {
   const key = getConversationStateKey(fromPhoneId);
   if (!key) return;
   conversationStateByPhoneNumber.set(key, {
-    state,
-    expiresAtMs: Date.now() + getConversationStateTtlSeconds() * 1000,
+    state: normalizedState,
+    expiresAtMs: nowMilliseconds + getConversationStateTtlSeconds() * 1000,
   });
 }
 
@@ -5032,9 +5156,25 @@ function mergeConversationStatePreservingGreeting(priorState, nextState, patch) 
               : null,
         }
       : null;
+  const explicitlyClearsBookingLinkMemory =
+    (patch &&
+      typeof patch === 'object' &&
+      Object.prototype.hasOwnProperty.call(patch, 'lastBookingLinkUrl') &&
+      patch.lastBookingLinkUrl == null) ||
+    (nextState &&
+      typeof nextState === 'object' &&
+      Object.prototype.hasOwnProperty.call(nextState, 'lastBookingLinkUrl') &&
+      nextState.lastBookingLinkUrl == null);
+  if (explicitlyClearsBookingLinkMemory) {
+    merged.lastBookingLinkUrl = null;
+    merged.lastBookingLinkSentAtMs = null;
+    merged.lastBookingLinkSedeEnvKey = null;
+    merged.lastBookingLinkSedeDisplayName = null;
+  }
   if (
     priorBookingLinkContext &&
     priorBookingLinkContext.lastBookingLinkUrl &&
+    !explicitlyClearsBookingLinkMemory &&
     !Object.prototype.hasOwnProperty.call(merged, 'lastBookingLinkUrl')
   ) {
     merged.lastBookingLinkUrl = priorBookingLinkContext.lastBookingLinkUrl;
@@ -6738,6 +6878,7 @@ function isLastBotReplyWithinBookingLinkRememberWindow(priorState) {
 
 function priorStateLooksLikeRecentBookingLinkContext(priorState) {
   if (!priorState || typeof priorState !== 'object') return false;
+  if (extractReferralSedeFromRecentConversation(priorState)) return false;
   if (
     wasBookingLinkSentRecently(priorState) &&
     typeof priorState.lastBookingLinkUrl === 'string' &&
@@ -6762,6 +6903,7 @@ function priorStateLooksLikeRecentBookingLinkContext(priorState) {
 }
 
 function conversationLooksLikeOngoingBookingLinkGuidance(priorState) {
+  if (extractReferralSedeFromRecentConversation(priorState)) return false;
   if (isReferralOnlySedeEntry(resolveLastSedeEntryFromState(priorState))) return false;
   if (priorStateLooksLikeRecentBookingLinkContext(priorState)) return true;
   if (!priorState || typeof priorState !== 'object') return false;
@@ -7799,6 +7941,7 @@ async function tryResolveHealthInsuranceSedeFollowUpWithOpenAi(userMessage, opti
 
 async function shouldHandleAsHealthInsuranceSedeFollowUp(bodyText, priorState, profileDisplayName) {
   if (stateLooksLikeAwaitingChacoSedeDisambiguation(priorState)) return false;
+  if (messageLooksLikeChacoSedeDisambiguationAnswer(bodyText)) return false;
   if (
     conversationRecentlyAskedChacoSedeDisambiguation(priorState) &&
     messageLooksLikeChacoSedeDisambiguationAnswer(bodyText)
