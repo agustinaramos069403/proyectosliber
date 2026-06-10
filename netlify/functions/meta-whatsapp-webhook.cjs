@@ -833,7 +833,9 @@ function messageHasClinicalAdministrativeQuestions(rawText) {
     normalized.includes('ayunas') ||
     normalized.includes('la hacen') ||
     normalized.includes('hacen la') ||
-    messageAsksWhetherDoctorPerformsStudy(rawText)
+    normalized.includes('hacen espirometr') ||
+    normalized.includes('realizan la') ||
+    normalized.includes('realiza la')
   );
 }
 
@@ -852,7 +854,9 @@ function messageLooksLikeComplexClinicalInquiry(rawText) {
     normalized.includes('ayunas'),
     normalized.includes('la hacen'),
     normalized.includes('hacen espirometr'),
-    messageAsksWhetherDoctorPerformsStudy(rawText),
+    normalized.includes('realizan la') ||
+      normalized.includes('realiza la') ||
+      normalized.includes('hacen la'),
   ].filter(Boolean).length;
   const questionCount = (String(rawText).match(/\?/g) || []).length;
   return (administrativeSignals >= 1 && clinicalStudySignals >= 1) || questionCount >= 3;
@@ -889,9 +893,8 @@ function shouldSkipMedicalEmergencyDetectionForMessage(rawText) {
   return false;
 }
 
-function textMatchesMedicalEmergency(rawText) {
+function rawTextMatchesCriticalEmergencyPhrases(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (shouldSkipMedicalEmergencyDetectionForMessage(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   for (const phrase of CRITICAL_EMERGENCY_NORMALIZED_SUBSTRINGS) {
     if (phrase === 'no puedo respirar') {
@@ -906,6 +909,12 @@ function textMatchesMedicalEmergency(rawText) {
     if (normalized.includes(phrase)) return true;
   }
   return false;
+}
+
+function textMatchesMedicalEmergency(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (shouldSkipMedicalEmergencyDetectionForMessage(rawText)) return false;
+  return rawTextMatchesCriticalEmergencyPhrases(rawText);
 }
 
 function messageLooksLikeAmbiguousUrgency(rawText) {
@@ -1292,7 +1301,7 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
 
 function messageAsksWhyChooseDoctorOrTrustQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (textMatchesMedicalEmergency(rawText)) return false;
+  if (rawTextMatchesCriticalEmergencyPhrases(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
