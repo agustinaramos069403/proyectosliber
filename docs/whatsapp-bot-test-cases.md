@@ -16,6 +16,10 @@
   - Tras “¿Desde qué ciudad consultás?”: “de resis” / “resis” → “Sí, el Dr. atiende en Resistencia. ¿En qué te puedo ayudar?” (NO mensaje genérico de estudios ni link)
   - Tras redirección desde BS AS: “resis” → confirmar sede y preguntar en qué ayudar (NO arrastrar contexto viejo de precio de estudio)
   - Si la IA pide ciudad, guardar `awaiting_sede_selection` para interpretar la respuesta
+- Chaco ambiguo (Resistencia vs Sáenz Peña):
+  - “Soy de Chaco, tengo OSDE, necesito test de alergia” → preguntar Resistencia o Sáenz Peña (guardar OSDE en estado)
+  - “Sáenz Peña” → confirmar sede + cobertura OSDE + aclarar que turnos en Sáenz Peña son por teléfono de la sede (NO link de Resistencia)
+  - “para agendar turno?” con sede Sáenz Peña en contexto → teléfono de Sáenz Peña + “por acá solo se agenda online en Corrientes y Resistencia”
 - Sedes fuera de cobertura (Formosa, Sáenz Peña, etc.):
   - Respuesta: solo atiende en Corrientes y Resistencia; pedir cuál de esas dos
 - Ciudades fuera de cobertura (Buenos Aires / CABA / etc.):
