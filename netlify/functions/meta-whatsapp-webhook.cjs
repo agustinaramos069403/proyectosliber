@@ -1349,7 +1349,23 @@ function messageAsksToConfirmExistingBooking(rawText) {
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return false;
+  const asksConfirmationStatus =
+    normalized.includes('quedo confirmado') ||
+    normalized.includes('quedó confirmado') ||
+    normalized.includes('esta confirmado') ||
+    normalized.includes('está confirmado') ||
+    normalized.includes('esta confirmada') ||
+    normalized.includes('está confirmada') ||
+    normalized.includes('se confirma') ||
+    normalized.includes('si se confirmo') ||
+    normalized.includes('si se confirmó') ||
+    normalized.includes('saber si se confirma') ||
+    normalized.includes('saber si quedo') ||
+    normalized.includes('saber si quedó') ||
+    normalized.includes('ya esta confirmado') ||
+    normalized.includes('ya está confirmado');
   const asksConfirmation =
+    asksConfirmationStatus ||
     normalized.includes('me lo confirm') ||
     normalized.includes('me la confirm') ||
     normalized.includes('me confirm') ||
@@ -1373,6 +1389,8 @@ function messageAsksToConfirmExistingBooking(rawText) {
     normalized.includes('ya agendé') ||
     normalized.includes('ya reserve') ||
     normalized.includes('ya reservé') ||
+    normalized.includes('ya guarde') ||
+    normalized.includes('ya guardé') ||
     normalized.includes('ya tengo turno') ||
     normalized.includes('sacado turno') ||
     normalized.includes('reserve desde') ||
@@ -1380,9 +1398,11 @@ function messageAsksToConfirmExistingBooking(rawText) {
     normalized.includes('desde la agenda') ||
     normalized.includes('desde el link') ||
     normalized.includes('desde calendly');
+  if (asksConfirmationStatus) return true;
   if (asksConfirmation && (hasBookedContext || normalized.includes('turno') || normalized.includes('reserva'))) {
     return true;
   }
+  if (hasBookedContext && normalized.includes('confirm')) return true;
   return (
     normalized.includes('confirmar turno') ||
     normalized.includes('confirmacion turno') ||
@@ -5509,6 +5529,7 @@ function formatArsAmount(amount) {
 
 function messageConfirmsLinkSend(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksToConfirmExistingBooking(rawText)) return false;
   if (messageRequestsPersonalBookingAssistance(rawText)) return false;
   if (messageClearlyRejectsLinkSend(rawText)) return false;
   if (messageLooksLikeAnyPriceQuestion(rawText)) return false;
@@ -13639,6 +13660,9 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
     return buildReferralOnlySedeBookingReply(entry);
   }
   const userMessage = typeof options.userMessage === 'string' ? options.userMessage : '';
+  if (messageAsksToConfirmExistingBooking(userMessage)) {
+    return buildConfirmExistingBookingReply(priorState, userMessage);
+  }
   const acknowledgmentPrefix =
     typeof options.acknowledgmentPrefix === 'string' ? options.acknowledgmentPrefix.trim() : '';
   const cityName = entry.displayName;
@@ -13687,6 +13711,9 @@ async function deliverBookingLinkReminderReply(
   lastSede,
   options = {}
 ) {
+  if (messageAsksToConfirmExistingBooking(bodyText)) {
+    return tryHandleConfirmExistingBookingInquiry(from, bodyText, priorState, profileDisplayName);
+  }
   if (isReferralOnlySedeEntry(lastSede)) {
     return sendReferralOnlySedeBookingReply(from, lastSede, priorState, profileDisplayName);
   }
@@ -13808,6 +13835,7 @@ async function tryHandleBookingPersonalAssistanceRequest(from, bodyText, priorSt
 
 function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksToConfirmExistingBooking(rawText)) return false;
   if (messageRequestsPersonalBookingAssistance(rawText)) return false;
   if (conversationExpectsStudyPriceOrTypeAnswer(priorState)) return false;
   if (!priorState || typeof priorState !== 'object') return false;
@@ -14188,8 +14216,8 @@ function buildConfirmExistingBookingReply(priorState, rawText) {
     resolveLastSedeEntryFromState(priorState) ||
     resolveSedeEntryFromState(priorState);
   const intro =
-    'Si ya reservaste tu turno desde la agenda, para verificar o confirmar la reserva comunicate por favor con nuestro equipo al:';
-  const closing = 'Ellos tienen acceso a la agenda y pueden confirmarte la información.';
+    'Por este chat no confirmamos turnos. Si ya reservaste desde la agenda, para verificar o confirmar tu reserva comunicate con el equipo de la sede al:';
+  const closing = 'Ellos tienen acceso a la agenda y pueden confirmarte si quedó todo bien.';
   if (lastSede) {
     const phoneNumber = resolveClinicAssistancePhoneNumberForSedeEntry(lastSede);
     return `${intro}\n${phoneNumber} (${lastSede.displayName})\n\n${closing}`;
@@ -16667,6 +16695,7 @@ exports.handler = async (event) => {
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
             wasBookingLinkSentRecently(priorState) &&
             messageIsAcknowledgement(bodyText) &&
+            !messageAsksToConfirmExistingBooking(bodyText) &&
             !messageExplicitlyRequestsBookingLink(bodyText) &&
             !messageAsksWhereOrHowToBook(bodyText) &&
             !messageAsksExplicitlyHowToBookTurn(bodyText)
@@ -16687,6 +16716,7 @@ exports.handler = async (event) => {
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
             wasBookingLinkSentRecently(priorState) &&
+            !messageAsksToConfirmExistingBooking(bodyText) &&
             (messageConfirmsLinkSend(bodyText) ||
               messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState))
           ) {

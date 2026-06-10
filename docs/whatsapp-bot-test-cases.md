@@ -71,6 +71,10 @@
   - “sí”, “dale”, “ok”, “por favor”, “listo”
   - Después de ofrecer el link: “por favor quiero agendar” → enviar link directo (no repetir la pregunta)
   - Variaciones naturales: “bueno dale”, “me interesa”, “avancemos”, “joya pasame”
+- Confirmación de turno ya reservado (tras usar el link):
+  - “Ya está! Ya quedó confirmado?”, “Si ya guardé quería saber si se confirma?”
+  - Respuesta: aclarar que por chat no se confirman turnos + teléfono de la sede (Corrientes `3795063578`, Resistencia `3624571222`).
+  - **No** repetir “Con el link que ya te pasé…” ni volver a ofrecer la agenda.
 - Rechazo de link:
   - “no”, “no por ahora”, “más tarde”, “no quiero”
   - Negación con “quiero” adentro: “no no quiero” (NO debe ganar)
