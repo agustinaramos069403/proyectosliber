@@ -223,6 +223,18 @@
 - Imagen/documento (posible credencial)
 - Respuesta: “no envíes datos sensibles por este chat” + pedir solo ciudad/OS sin números
 
+## Precio consulta + ciudad + obra social en un solo mensaje
+- “Hola, soy de Formosa y tengo IOSCOR. ¿Cuánto sale la consulta?”
+  - Respuesta: plus/cobertura de IOSCOR en Formosa (desde sheets), tono humano; **no** “¿En qué te puedo ayudar?”.
+- Mismo criterio: “soy de Corrientes con OSDE, cuánto sale la consulta”, “de Resistencia tengo Sancor, precio de la consulta”.
+
+## Disponibilidad / turno con día u hora (Corrientes o Resistencia)
+- Tras hablar de Formosa (solo precio/derivación), usuario: “¿Tenés algo mañana a las 18?”
+  - **No** derivar a Formosa; preguntar sede online (Corrientes/Resistencia) o usar sede ya elegida si es link.
+- “bueno un turno para ctes mañana 17hs”
+  - Respuesta: tono humano + **URL real** de agenda de Corrientes; **no** texto “[link de agenda]” ni placeholder.
+  - Debe reconocer cambio de sede (ctes) aunque el contexto previo fuera Formosa.
+
 ## Formosa / Sáenz Peña (solo derivación telefónica, sin link)
 - “Soy de Sáenz Peña y quiero atenderme la semana que viene.”
   - Respuesta: teléfono de la sede (`36415314019`); **no** ofrecer link ni “coordinar cita por acá”.

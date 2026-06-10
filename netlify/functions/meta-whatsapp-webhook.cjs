@@ -709,13 +709,24 @@ function findSedeFromText(rawText) {
 
 function messageLooksLikePossibleSedeTypoAnswer(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (findSedeFromText(rawText)) return true;
+  if (
+    messageLooksLikeAnyPriceQuestion(rawText) ||
+    messageMatchesStudiesTopic(rawText) ||
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageLooksLikeBookingIntent(rawText) ||
+    messageExplicitlyRequestsBookingLink(rawText) ||
+    messageAsksGenericConsultationPrice(rawText)
+  ) {
+    return false;
+  }
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return false;
   const wordCount = normalized.split(' ').filter(Boolean).length;
+  const sedeFromText = findSedeFromText(rawText);
+  if (sedeFromText && wordCount <= 5) return true;
   if (wordCount > 3) return false;
   return (
     normalizedTextContainsApproxWord(normalized, 'resistencia', 2) ||
@@ -1622,7 +1633,8 @@ async function tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorStat
   const sedeEntry =
     sedeFromMessage && isReferralOnlySedeEntry(sedeFromMessage)
       ? sedeFromMessage
-      : isReferralOnlySedeEntry(lastSede)
+      : messageConfirmsReferralSedeBookingFollowUp(bodyText, priorState) &&
+          isReferralOnlySedeEntry(lastSede)
         ? lastSede
         : null;
   if (!sedeEntry) return false;
@@ -3091,6 +3103,12 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'NUNCA inventes calles, números ni horarios. Mantené exactas las direcciones y horarios del borrador.'
     );
   }
+  if (options.replyContext === 'booking_policy') {
+    replyContextInstructions.push(
+      'Contexto: el paciente quiere turno con día u horario preferido.',
+      'Mantené el tono cálido. NUNCA uses placeholders como [link de agenda]; si el borrador trae una URL https, conservala exacta en el texto.'
+    );
+  }
   const systemPrompt = [
     'Sos la voz humana de WhatsApp de la asistente del Dr. Liber Acosta (alergia e inmunología), en español rioplatense.',
     'Recibís un borrador factual generado por reglas. Reescribilo para que suene natural, cálido y fluido, como una recepcionista real (estilo bot de n8n), NO como call center ni robot.',
@@ -3494,6 +3512,62 @@ function extractWeekdayNameFromText(rawText) {
   return null;
 }
 
+function extractRelativeDayLabelFromText(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('pasado manana') || normalized.includes('pasado mañana')) return 'pasado mañana';
+  if (normalized.includes('manana') || normalized.includes('mañana')) return 'mañana';
+  if (normalized.includes('hoy')) return 'hoy';
+  return null;
+}
+
+function messageLooksLikeSpecificSlotBookingRequest(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return Boolean(
+    messageIncludesSpecificAppointmentTime(rawText) ||
+    extractRelativeDayLabelFromText(rawText) ||
+    extractWeekdayNameFromText(rawText)
+  );
+}
+
+function buildPreferredSlotBookingAcknowledgementPrefix(sede, rawText) {
+  if (!sede || !rawText) return null;
+  const weekdayName = extractWeekdayNameFromText(rawText);
+  const relativeDayLabel = extractRelativeDayLabelFromText(rawText);
+  const includesTime = messageIncludesSpecificAppointmentTime(rawText);
+  const dayPart = weekdayName ? `el ${weekdayName}` : relativeDayLabel ? `para ${relativeDayLabel}` : '';
+  if (dayPart && includesTime) {
+    return `Entiendo que te gustaría turno ${dayPart} a esa hora en ${sede.displayName}. Por acá no confirmamos horarios puntuales ni disponibilidad.`;
+  }
+  if (dayPart) {
+    return `Perfecto, ${dayPart} en ${sede.displayName}. Por acá no agendamos por este chat.`;
+  }
+  if (includesTime) {
+    return `Entiendo que querés un horario puntual en ${sede.displayName}. Por acá no confirmamos disponibilidad.`;
+  }
+  return null;
+}
+
+function ensureReplyIncludesAgendaLink(replyText, linkUrl) {
+  if (!replyText || typeof replyText !== 'string') return replyText;
+  if (!linkUrl || typeof linkUrl !== 'string' || linkUrl.trim().length === 0) return replyText.trim();
+  const trimmedReply = replyText.trim();
+  if (trimmedReply.includes(linkUrl)) return trimmedReply;
+  if (/https?:\/\/\S+/i.test(trimmedReply)) return trimmedReply;
+  return `${trimmedReply}\n${linkUrl}`;
+}
+
+function replyTextContainsPlaceholderAgendaLink(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  const normalized = normalizeForMatch(replyText);
+  return (
+    normalized.includes('[link de agenda]') ||
+    normalized.includes('link de agenda]') ||
+    normalized.includes('siguiente link') ||
+    normalized.includes('este link para ver')
+  );
+}
+
 function messageLooksLikePreferredDayForBooking(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const weekdayName = extractWeekdayNameFromText(rawText);
@@ -3672,40 +3746,21 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
     priorState.pendingBookingWeekday.trim().length > 0
       ? priorState.pendingBookingWeekday.trim()
       : null);
+  const relativeDayLabel = extractRelativeDayLabelFromText(requestText);
   const includesTime =
     messageIncludesSpecificAppointmentTime(requestText) ||
     Boolean(priorState && priorState.pendingBookingIncludesTime);
   const linkUrl = getAgendaUrl(sede);
 
-  if (!weekdayName && !includesTime) {
+  if (!weekdayName && !includesTime && !relativeDayLabel) {
     return buildGenericBookingPolicyReplyForSede(sede, priorState);
   }
 
-  const openAiReply = await fetchOpenAiBookingPolicyReply(requestText || currentMessage, {
-    priorState,
-    profileDisplayName: options.profileDisplayName,
-    sede,
-    weekdayName,
-    includesTime,
-    linkUrl,
-  });
-  if (openAiReply) {
-    const processed = processAssistantReplyForPatient(openAiReply, {
-      priorState,
-      bodyText: requestText || currentMessage,
-    });
-    const mayIncludeLink =
-      linkUrl &&
-      !assistantReplyAsksForSedeCity(processed) &&
-      !shouldWithholdBookingLinkUntilSedeConfirmed(priorState, currentMessage, sede);
-    if (mayIncludeLink && !processed.includes(linkUrl)) {
-      return `${processed}\n${linkUrl}`;
-    }
-    return stripAgendaLinksFromReplyText(processed);
-  }
-
+  const rulesPrefix = buildPreferredSlotBookingAcknowledgementPrefix(sede, requestText || currentMessage);
   const replyParts = [];
-  if (weekdayName && includesTime) {
+  if (rulesPrefix) {
+    replyParts.push(rulesPrefix);
+  } else if (weekdayName && includesTime) {
     replyParts.push(
       `Entiendo que querés turno el ${weekdayName} a esa hora en ${sede.displayName}. Por acá no agendamos ni confirmamos horarios puntuales.`
     );
@@ -3713,13 +3768,34 @@ async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage =
     replyParts.push(
       `Perfecto, para el ${weekdayName} en ${sede.displayName}. Por acá no agendamos por este chat.`
     );
-  } else {
-    return buildGenericBookingPolicyReplyForSede(sede, priorState);
+  } else if (relativeDayLabel) {
+    replyParts.push(
+      `Perfecto, para ${relativeDayLabel} en ${sede.displayName}. Por acá no agendamos por este chat.`
+    );
+  } else if (includesTime) {
+    replyParts.push(
+      `Entiendo que querés un horario puntual en ${sede.displayName}. Por acá no confirmamos disponibilidad.`
+    );
   }
   if (linkUrl) {
-    replyParts.push(`Podés ver días y horarios disponibles y reservar acá:\n${linkUrl}`);
+    replyParts.push(`Revisá día y horario disponibles y reservá acá:\n${linkUrl}`);
+  } else {
+    replyParts.push(buildBookingPersonalAssistanceMessage(priorState, sede));
   }
-  return replyParts.join('\n');
+  let rulesReply = replyParts.join('\n');
+  if (getOpenAiApiKey() && isOpenAiReplyHumanizationEnabled()) {
+    const humanized = await tryHumanizePatientReplyWithOpenAi(rulesReply, {
+      priorState,
+      profileDisplayName: options.profileDisplayName,
+      userMessage: requestText || currentMessage,
+      replyContext: 'booking_policy',
+      conversationContext: priorState ? buildIntentRoutingOpenAiContext(priorState) : '',
+    });
+    if (humanized.reply && humanizedReplyPreservesCriticalFacts(rulesReply, humanized.reply)) {
+      rulesReply = humanized.reply;
+    }
+  }
+  return ensureReplyIncludesAgendaLink(rulesReply, linkUrl);
 }
 
 function buildPreservedIntentSessionPatch(priorState) {
@@ -3887,6 +3963,16 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
   if (messageLooksLikeSedeAddressInquiry(bodyText)) {
     return buildSedeAddressReply(priorState, sede);
   }
+  if (messageAsksGenericConsultationPrice(bodyText)) {
+    const healthInsuranceName =
+      resolveActiveHealthInsuranceNameFromState(priorState) ||
+      tryExtractHealthInsuranceName(bodyText) ||
+      (await resolveHealthInsuranceNameFromMessage(bodyText, priorState));
+    if (healthInsuranceName) {
+      return buildConsultationPriceReplyForSedeAndHealthInsurance(sede, healthInsuranceName, priorState);
+    }
+    return buildAskHealthInsuranceForConsultationPriceMessage();
+  }
   if (shouldAskHealthInsuranceBeforeConsultationPrice(priorState)) {
     return buildAskHealthInsuranceForConsultationPriceMessage();
   }
@@ -3968,6 +4054,15 @@ async function buildReplyAfterSedeSelection(sede, priorState, bodyText = '') {
 
 async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName) {
   if (
+    messageAsksGenericConsultationPrice(bodyText) ||
+    messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText) ||
+    (messageLooksLikeAnyPriceQuestion(bodyText) &&
+      findSedeFromText(bodyText) &&
+      messageLooksLikeHealthInsurancePlusQuestion(bodyText))
+  ) {
+    return false;
+  }
+  if (
     messageLooksLikeAlternateSedeFollowUp(bodyText) &&
     stateHasRecentHealthInsuranceDiscussionContext(priorState) &&
     resolveActiveHealthInsuranceNameFromState(priorState)
@@ -4022,14 +4117,25 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
 
   const bookingRequestText = resolvePendingBookingRequestText(priorState, bodyText);
   const reply = await buildReplyAfterSedeSelection(sede, priorState, bodyText);
+  const answeredConsultationPriceInMessage = messageAsksGenericConsultationPrice(bodyText);
+  const healthInsuranceNameForPrice =
+    answeredConsultationPriceInMessage
+      ? resolveActiveHealthInsuranceNameFromState(priorState) ||
+        tryExtractHealthInsuranceName(bodyText) ||
+        (await resolveHealthInsuranceNameFromMessage(bodyText, priorState, { profileDisplayName }))
+      : null;
   const finalizedReply = await finalizePatientReplyText(reply, {
     priorState,
     profileDisplayName,
     userMessage: bodyText,
-    replyContext: 'sede_selection',
+    replyContext: answeredConsultationPriceInMessage ? 'consultation_price' : 'sede_selection',
+    suppressBookingLinkOffer: answeredConsultationPriceInMessage,
+    conversationContext: buildIntentRoutingOpenAiContext(priorState),
   });
   const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedReply, profileDisplayName, priorState);
-  const continuesConsultationPriceFlow = shouldAskHealthInsuranceBeforeConsultationPrice(priorState);
+  const continuesConsultationPriceFlow =
+    shouldAskHealthInsuranceBeforeConsultationPrice(priorState) ||
+    (answeredConsultationPriceInMessage && !healthInsuranceNameForPrice);
   const continuesPrivatePriceFlow =
     stateHasPendingPrivatePriceIntent(priorState) &&
     stateExplicitlyRequestedPrivateConsultationPrice(priorState);
@@ -4063,6 +4169,19 @@ async function tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileD
       {
         ...(wrapped.nextStatePatch || {}),
         ...(buildLastSedeStatePatch(sede) || {}),
+        ...(healthInsuranceNameForPrice
+          ? {
+              healthInsuranceName: healthInsuranceNameForPrice,
+              lastHealthInsuranceName: healthInsuranceNameForPrice,
+              ...buildLastHealthInsuranceDiscussionStatePatch(),
+            }
+          : {}),
+        ...(answeredConsultationPriceInMessage && healthInsuranceNameForPrice
+          ? {
+              ...buildClearedPendingConsultationPriceIntentPatch(),
+              ...buildConsultationPriceAnsweredStatePatch(),
+            }
+          : {}),
         ...(continuesPrivatePriceFlow ? buildClearedPendingPrivatePriceIntentPatch() : {}),
         ...(continuesBookingFlow ? buildClearedPendingBookingIntentPatch() : buildClearedStudyPricingContextPatch()),
         ...bookingFlowStatePatch,
@@ -6632,6 +6751,23 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
       },
     });
   }
+  if (
+    getAgendaUrl(lastSede) &&
+    (messageLooksLikeBookingIntent(bodyText) || messageLooksLikeSpecificSlotBookingRequest(bodyText)) &&
+    messageLooksLikeSpecificSlotBookingRequest(bodyText)
+  ) {
+    const slotPrefix = buildPreferredSlotBookingAcknowledgementPrefix(lastSede, bodyText);
+    return deliverBookingLinkReply(from, lastSede, priorState, profileDisplayName, {
+      primaryPrefix: slotPrefix || undefined,
+      conversationStatePatch: {
+        ...(buildLastSedeStatePatch(lastSede) || {}),
+        ...buildClearedAwaitingLinkConfirmationStatePatch(),
+        ...buildClearedPendingBookingIntentPatch(),
+        ...buildClearedPendingBookingDetailsPatch(),
+        ...buildLastScheduleDiscussedStatePatch(),
+      },
+    });
+  }
   const policyReply = await buildBookingPolicyReplyForSede(lastSede, priorState, bodyText, {
     profileDisplayName,
   });
@@ -7296,7 +7432,8 @@ async function tryResolvePreferredDayBookingWithOpenAi(userMessage, options = {}
 
 async function shouldHandleAsPreferredDayBooking(bodyText, priorState, profileDisplayName) {
   const weekdayName = extractWeekdayNameFromText(bodyText);
-  if (!weekdayName) return false;
+  const relativeDayLabel = extractRelativeDayLabelFromText(bodyText);
+  if (!weekdayName && !relativeDayLabel) return false;
   if (
     messageLooksLikeBookingIntent(bodyText) &&
     !messageLooksLikePreferredDayForBooking(bodyText) &&
@@ -7365,7 +7502,23 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
     });
     return true;
   }
-  const weekdayName = extractWeekdayNameFromText(bodyText);
+  if (getAgendaUrl(lastSede)) {
+    const slotPrefix =
+      buildPreferredSlotBookingAcknowledgementPrefix(lastSede, bodyText) ||
+      (extractWeekdayNameFromText(bodyText)
+        ? `Perfecto, para el ${extractWeekdayNameFromText(bodyText)} en ${lastSede.displayName}. Por acá no agendamos por este chat.`
+        : null);
+    return deliverBookingLinkReply(from, lastSede, mergedState, profileDisplayName, {
+      primaryPrefix: slotPrefix || undefined,
+      conversationStatePatch: {
+        ...(buildLastSedeStatePatch(lastSede) || {}),
+        ...buildClearedAwaitingLinkConfirmationStatePatch(),
+        ...buildClearedPendingBookingIntentPatch(),
+        ...buildClearedPendingBookingDetailsPatch(),
+        ...buildLastScheduleDiscussedStatePatch(),
+      },
+    });
+  }
   const reply = await buildBookingPolicyReplyForSede(lastSede, mergedState, bodyText, {
     profileDisplayName,
   });
@@ -7644,6 +7797,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'HEALTH_INSURANCE') {
+    if (messageAsksGenericConsultationPrice(bodyText) || messageLooksLikeAnyPriceQuestion(bodyText)) {
+      return sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
+    }
     return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
 
@@ -8242,6 +8398,10 @@ function resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState) {
 
   const lastSede = resolveLastSedeEntryFromState(priorState);
   if (!lastSede) return null;
+
+  if (isReferralOnlySedeEntry(lastSede) && !findSedeFromText(bodyText)) {
+    return null;
+  }
 
   if (messageAsksWhereOrHowToBook(bodyText)) {
     return lastSede;
@@ -8955,7 +9115,14 @@ function messageLooksLikeScheduleAvailabilityQuestion(rawText) {
 function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  return (
+  const mentionsTomorrow =
+    normalized.includes('manana') ||
+    normalized.includes('mañana') ||
+    Boolean(extractRelativeDayLabelFromText(rawText));
+  const asksAvailability =
+    normalized.includes('tenes algo') ||
+    normalized.includes('tenés algo') ||
+    normalized.includes('tienes algo') ||
     normalized.includes('tenes turnos') ||
     normalized.includes('tenés turnos') ||
     normalized.includes('tienes turnos') ||
@@ -8969,8 +9136,19 @@ function messageLooksLikeRealtimeAvailabilityQuestion(rawText) {
     normalized.includes('hay disponibilidad') ||
     normalized.includes('tienen disponibilidad') ||
     normalized.includes('tienen para esta semana') ||
-    normalized.includes('hay para esta semana')
-  );
+    normalized.includes('hay para esta semana');
+  if (asksAvailability) return true;
+  if (
+    mentionsTomorrow &&
+    (normalized.includes('tenes') ||
+      normalized.includes('tenés') ||
+      normalized.includes('tienes') ||
+      normalized.includes('hay') ||
+      messageIncludesSpecificAppointmentTime(rawText))
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function messageContainsExplicitHowBookingQuestion(normalized) {
@@ -13163,6 +13341,23 @@ exports.handler = async (event) => {
           if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (
+            await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
+              rulesOnly: isOpenAiCentralRoutingEnabled(),
+            })
+          ) {
+            continue;
+          }
+          if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (
+            await tryHandleHealthInsurancePlusWithOpenAi(from, bodyText, priorState, profileDisplayName, {
+              rulesOnly: isOpenAiCentralRoutingEnabled(),
+            })
+          ) {
+            continue;
+          }
           if (await tryHandleSedeSelectionAnswer(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -13173,16 +13368,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (
-            await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
-              rulesOnly: isOpenAiCentralRoutingEnabled(),
-            })
-          ) {
-            continue;
-          }
-          if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -13433,7 +13618,10 @@ exports.handler = async (event) => {
 
           if (messageLooksLikeRealtimeAvailabilityQuestion(bodyText)) {
             const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
-            const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(priorState);
+            let lastSede = patientContext.sedeEntry || resolveConfirmedSedeEntryForBookingFlow(bodyText, priorState);
+            if (lastSede && isReferralOnlySedeEntry(lastSede) && !findSedeFromText(bodyText)) {
+              lastSede = null;
+            }
             if (!lastSede) {
               const wrapped = buildAutoReplyWithGreetingIfNeeded(
                 `Sí, hay turnos disponibles 😊 ¿En qué ciudad te gustaría atenderte? Atiende en ${ACTIVE_SEDE_CITIES_LIST_MESSAGE}.`,
@@ -14618,6 +14806,47 @@ exports.handler = async (event) => {
                 )
               );
               await sendWhatsAppText(from, wrapped.messageText);
+            } else if (messageAsksGenericConsultationPrice(bodyText)) {
+              const healthInsuranceName =
+                tryExtractHealthInsuranceName(bodyText) ||
+                resolveActiveHealthInsuranceNameFromState(priorState) ||
+                (await resolveHealthInsuranceNameFromMessage(bodyText, priorState, { profileDisplayName }));
+              if (healthInsuranceName) {
+                const rawReply = await buildConsultationPriceReplyForSedeAndHealthInsurance(
+                  sede,
+                  healthInsuranceName,
+                  priorState
+                );
+                const focusedReply = await tryResolveFocusedPatientReplyWithOpenAi(rawReply, {
+                  replyContext: 'consultation_price',
+                  suppressBookingLinkOffer: true,
+                  priorState,
+                  userMessage: bodyText,
+                  profileDisplayName,
+                  conversationContext: buildIntentRoutingOpenAiContext(priorState),
+                });
+                const wrapped = buildAutoReplyWithGreetingIfNeeded(focusedReply.reply, profileDisplayName, priorState);
+                await setConversationState(
+                  from,
+                  mergeConversationStatePreservingGreeting(
+                    priorState,
+                    {},
+                    {
+                      ...(wrapped.nextStatePatch || {}),
+                      ...(lastSedePatch || {}),
+                      healthInsuranceName,
+                      lastHealthInsuranceName: healthInsuranceName,
+                      ...buildLastHealthInsuranceDiscussionStatePatch(),
+                      ...buildClearedPendingConsultationPriceIntentPatch(),
+                      ...buildConsultationPriceAnsweredStatePatch(),
+                      ...buildLastBotReplyStatePatch(wrapped.messageText),
+                    }
+                  )
+                );
+                await sendWhatsAppText(from, wrapped.messageText);
+              } else {
+                await sendConsultationPriceQuestionReply(from, bodyText, priorState, profileDisplayName);
+              }
             } else {
               const reply = await buildReplyAfterSedeSelection(sede, priorState, bodyText);
               const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
