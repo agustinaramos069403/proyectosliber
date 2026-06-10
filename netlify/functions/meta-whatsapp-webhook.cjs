@@ -862,8 +862,37 @@ function messageLooksLikeComplexClinicalInquiry(rawText) {
   return (administrativeSignals >= 1 && clinicalStudySignals >= 1) || questionCount >= 3;
 }
 
+function messageDescribesAcuteSymptomWorsening(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const acuteTimeSignal =
+    /\bhace\s+(?:unas?\s+)?(?:dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez|\d{1,2})\s+horas?\b/.test(
+      normalized
+    ) ||
+    normalized.includes('hace un rato') ||
+    normalized.includes('hace poco') ||
+    normalized.includes('de repente') ||
+    normalized.includes('me puse peor') ||
+    normalized.includes('empeor') ||
+    normalized.includes('ahora me cuesta') ||
+    (normalized.includes('ahora') &&
+      (normalized.includes('respirar') ||
+        normalized.includes('garganta') ||
+        normalized.includes('hinch') ||
+        normalized.includes('ahogo')));
+  if (!acuteTimeSignal) return false;
+  return (
+    normalized.includes('respirar') ||
+    normalized.includes('garganta') ||
+    normalized.includes('hinch') ||
+    normalized.includes('ahogo') ||
+    normalized.includes('falta el aire')
+  );
+}
+
 function messageDescribesChronicOrQualifiedBreathingSymptom(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageDescribesAcuteSymptomWorsening(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (
     normalized.includes('no puedo respirar bien') ||
@@ -885,6 +914,7 @@ function messageDescribesChronicOrQualifiedBreathingSymptom(rawText) {
 
 function shouldSkipMedicalEmergencyDetectionForMessage(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageDescribesAcuteSymptomWorsening(rawText)) return false;
   if (messageLooksLikeComplexClinicalInquiry(rawText)) return true;
   if (messageDescribesChronicOrQualifiedBreathingSymptom(rawText)) return true;
   if (messageAlreadyStatesSymptomDuration(rawText) && messageHasClinicalAdministrativeQuestions(rawText)) {
@@ -3404,6 +3434,24 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'Tono cálido y claro; no suenes a menú de opciones ni robot.'
     );
   }
+  if (
+    options.replyContext === 'complex_clinical_inquiry' ||
+    options.replyContext === 'rich_patient_intake'
+  ) {
+    replyContextInstructions.push(
+      'Contexto: mensaje con varias preguntas (síntomas, estudio, precio, preparación, turnos).',
+      'Mantené EXACTOS todos los montos, plus, cobertura, teléfonos de sede y reglas de preparación del borrador.',
+      'Validá la molestia del paciente con naturalidad si el borrador lo hace; no prometas resultados ni confirmes horarios concretos.',
+      'No inventes ayuno ni preparación que no esté en el borrador.'
+    );
+  }
+  if (options.replyContext === 'combined_price_breakdown') {
+    replyContextInstructions.push(
+      'Contexto: el paciente pidió particular, obra social/prepaga y precio del estudio en el mismo mensaje.',
+      'Mantené EXACTOS los tres bloques de precio del borrador (consulta particular, plus/cobertura de la prepaga, valor del estudio con cobertura).',
+      'No omitas ningún monto ni confundas espirometría sola ($40.000) con el estudio en consulta ($30.000).'
+    );
+  }
   const systemPrompt = [
     'Sos la voz humana de WhatsApp de la asistente del Dr. Liber Acosta (alergia e inmunología), en español rioplatense.',
     'Recibís un borrador factual generado por reglas. Reescribilo para que suene natural, cálido y fluido, como una recepcionista real (estilo bot de n8n), NO como call center ni robot.',
@@ -5068,6 +5116,8 @@ function messageLooksLikeColloquialStudyPriceAffirmation(rawText) {
   }
   if (/^(eso|claro|exacto|obvio|tal cual)\b/.test(normalized)) return true;
   if (/^(si|dale)\b/.test(normalized) && normalized.split(' ').length <= 6) return true;
+  if (/^valor\b/.test(normalized) || normalized === 'valor') return true;
+  if (/^(el valor|pasame el valor|decime el valor|dame el valor)\b/.test(normalized)) return true;
   return false;
 }
 
@@ -8005,12 +8055,15 @@ function messageShouldSkipOpenAiCentralRouting(rawText, priorState) {
 
 function messageLooksLikeMultiIntentCandidate(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeComplexClinicalInquiry(rawText)) return true;
+  if (messageLooksLikeRichPatientIntakeInquiry(rawText)) return true;
   const signals = [
     messageLooksLikeHealthInsurancePlusQuestion(rawText),
     messageLooksLikePrivatePriceQuestion(rawText),
     messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText),
     messageMatchesStudiesTopic(rawText),
     messageAsksAboutConditionTreatment(rawText) || messageAsksAboutTreatmentCost(rawText),
+    messageMentionsChildPatientContext(rawText) || messageAsksIfDoctorTreatsChildren(rawText),
     messageAsksAboutSedeAddressOrHowToArrive(rawText),
     messageAsksAboutDocumentationOrRequirements(rawText) ||
       messageAsksAboutReferralOrPrescription(rawText) ||
@@ -8018,6 +8071,151 @@ function messageLooksLikeMultiIntentCandidate(rawText) {
       messageAsksAboutInvoice(rawText),
   ].filter(Boolean).length;
   return signals >= 2;
+}
+
+async function tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeMultiIntentCandidate(bodyText)) return false;
+  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+
+  const intents = (await decideIntentsWithOpenAi(bodyText)) || [];
+  const hasHealthInsurance = intents.includes('HEALTH_INSURANCE');
+  const hasPrivatePrice = intents.includes('PRIVATE_PRICE');
+  const hasStudyPrice = intents.includes('STUDY_PRICE') || messageAsksStudyProcedurePrice(bodyText);
+
+  if (hasHealthInsurance && hasPrivatePrice && hasStudyPrice) {
+    if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
+  }
+
+  if (hasHealthInsurance && hasPrivatePrice) {
+    const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+    const healthInsuranceName =
+      tryExtractHealthInsuranceName(bodyText) ||
+      (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)
+        ? await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText)
+        : null);
+    if (sedeFromMessage && healthInsuranceName) {
+      const healthInsuranceSummary = await buildHealthInsuranceSummary(sedeFromMessage, healthInsuranceName);
+      if (healthInsuranceSummary !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+        const privatePriceReply = await buildPrivatePriceReply(sedeFromMessage);
+        const combined = `${healthInsuranceSummary} ${privatePriceReply}`.trim();
+        const wrapped = buildAutoReplyWithGreetingIfNeeded(
+          appendBookingLinkOfferIfAllowed(priorState, combined),
+          profileDisplayName,
+          priorState
+        );
+        await setConversationState(
+          from,
+          mergeConversationStatePreservingGreeting(
+            priorState,
+            buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_health_insurance_plus', {
+              healthInsuranceName,
+            }),
+            {
+              ...(wrapped.nextStatePatch || {}),
+              ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
+            }
+          )
+        );
+        await sendWhatsAppText(from, wrapped.messageText);
+        return true;
+      }
+    }
+  }
+
+  const primaryIntent = intents.length > 0 ? intents[0] : null;
+  if (primaryIntent === 'HEALTH_INSURANCE') {
+    const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+    const healthInsuranceName =
+      tryExtractHealthInsuranceName(bodyText) ||
+      (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)
+        ? await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText)
+        : null);
+    if (sedeFromMessage && healthInsuranceName) {
+      const reply = await buildHealthInsurancePlusReplyOrAskCity(
+        sedeFromMessage,
+        healthInsuranceName,
+        priorState
+      );
+      if (reply !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+        const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+        await setConversationState(
+          from,
+          mergeConversationStatePreservingGreeting(
+            priorState,
+            buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_health_insurance_plus', {
+              healthInsuranceName,
+            }),
+            {
+              ...(wrapped.nextStatePatch || {}),
+              ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
+            }
+          )
+        );
+        await sendWhatsAppText(from, wrapped.messageText);
+        return true;
+      }
+    }
+  } else if (primaryIntent === 'PRIVATE_PRICE') {
+    const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
+    if (sedeFromMessage) {
+      const reply = await buildPrivatePriceReply(sedeFromMessage);
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(
+        appendBookingLinkOfferIfAllowed(priorState, reply),
+        profileDisplayName,
+        priorState
+      );
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(
+          priorState,
+          buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_private_price'),
+          { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sedeFromMessage) || {}) }
+        )
+      );
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
+    }
+  } else if (primaryIntent === 'BOOKING') {
+    if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
+      await sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
+      return true;
+    }
+    const lastSede = resolveLastSedeEntryFromState(priorState);
+    if (lastSede) {
+      if (stateHasRecentStudyPriceContext(priorState)) {
+        await deliverBookingLinkReply(from, lastSede, priorState, profileDisplayName, {
+          conversationStatePatch: {
+            ...(buildLastSedeStatePatch(lastSede) || {}),
+          },
+        });
+        return true;
+      }
+      const micro = buildMicroCommitmentMessageWithState(priorState, true);
+      const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
+      await setConversationState(
+        from,
+        mergeConversationStatePreservingGreeting(
+          priorState,
+          buildAwaitingLinkConfirmationState(lastSede, 'after_booking_intent'),
+          { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
+        )
+      );
+      await sendWhatsAppText(from, wrapped.messageText);
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
@@ -8113,6 +8311,15 @@ async function decidePrimaryIntentWithOpenAi(userMessage, options = {}) {
 async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDisplayName, primaryIntent) {
   if (!primaryIntent || primaryIntent === 'OTHER') return false;
   if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -9200,6 +9407,43 @@ async function tryHandleStudyPriceAffirmativeFollowUp(from, bodyText, priorState
     if (openAiAffirms === false) return false;
   }
   if (!wantsStudyPrice) return false;
+
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  const healthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(priorState, bodyText);
+  if (lastSede && healthInsuranceName) {
+    const studyType =
+      (await resolveStudyTypeFromMessage(bodyText, priorState, { profileDisplayName })) ||
+      (priorState &&
+      typeof priorState === 'object' &&
+      typeof priorState.lastStudyType === 'string' &&
+      priorState.lastStudyType.trim().length > 0
+        ? priorState.lastStudyType.trim()
+        : 'espirometría');
+    const replies = await buildTriplePriceBreakdownReplies(lastSede, healthInsuranceName, studyType);
+    if (replies.length > 0) {
+      return deliverSequentialPatientTextMessages(
+        from,
+        replies,
+        priorState,
+        profileDisplayName,
+        {
+          lastStudyType: studyType,
+          lastStudyPriceContextAtMs: Date.now(),
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+          ...buildAwaitingLinkConfirmationState(lastSede, 'after_combined_price_inquiry', {
+            healthInsuranceName,
+          }),
+        },
+        {
+          userMessage: bodyText,
+          replyContext: 'combined_price_breakdown',
+        }
+      );
+    }
+  }
 
   const priceHintText = buildStudyPriceHintFromConversation(bodyText, priorState);
   await sendStudyPriceInformationReply(from, priceHintText, priorState, profileDisplayName);
@@ -10440,6 +10684,7 @@ async function resolveStudyTypeFromMessage(rawText, priorState = null, options =
 
 function messageLooksLikeSpirometryPriceOnlyInquiry(rawText, studyType) {
   if (!isSpirometryStudyType(studyType)) return false;
+  if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) return false;
   if (!messageLooksLikeAnyPriceQuestion(rawText) && !messageAsksAboutStudyPrice(rawText)) return false;
   if (messageAsksCompleteOrTotalCost(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
@@ -10707,6 +10952,7 @@ function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
 }
 
 function messageLooksLikeSpirometryOnlyInquiry(rawText) {
+  if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) return false;
   if (!messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   return (
@@ -10798,6 +11044,43 @@ function messageAsksConsultationCostInText(rawText) {
   );
 }
 
+function buildChronicSymptomEmpathyReply(rawText) {
+  const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('congestion') ||
+    normalized.includes('congestionad') ||
+    normalized.includes('me despierto de noche')
+  ) {
+    return 'Llevar años congestionado/a y despertarte de noche por no respirar bien es agotador; entiendo que quieras resolverlo de una vez.';
+  }
+  if (messageDescribesChronicOrQualifiedBreathingSymptom(rawText)) {
+    return 'Entiendo que hace tiempo venís con molestias respiratorias; tiene sentido que quieras claridad antes de pedir el turno.';
+  }
+  return 'Entiendo que hace tiempo venís con estas molestias; tiene sentido que quieras resolver varias dudas de una vez.';
+}
+
+function buildPediatricCareConfirmationReply(rawText) {
+  const childAgeYears = extractChildAgeYearsFromMessage(rawText);
+  if (Number.isFinite(childAgeYears) && childAgeYears > 0) {
+    return `Sí, el Dr. atiende niños de ${childAgeYears} años, adolescentes y adultos.`;
+  }
+  return 'Sí, el Dr. atiende niños, adolescentes y adultos.';
+}
+
+function messageAsksWhetherDoctorPerformsStudyInMessage(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    messageAsksWhetherDoctorPerformsStudy(rawText) ||
+    normalized.includes('la hacen') ||
+    normalized.includes('lo hacen') ||
+    normalized.includes('hacen la') ||
+    normalized.includes('hacen espirometr') ||
+    normalized.includes('realizan la') ||
+    normalized.includes('realiza la')
+  );
+}
+
 function messageLooksLikeRichPatientIntakeInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const questionCount = (String(rawText).match(/\?/g) || []).length;
@@ -10806,12 +11089,17 @@ function messageLooksLikeRichPatientIntakeInquiry(rawText) {
     messageAsksAboutConditionTreatment(rawText) ||
       normalized.includes('rinitis') ||
       normalized.includes('asma') ||
+      normalized.includes('dermatitis') ||
       messageDescribesChronicOrQualifiedBreathingSymptom(rawText),
     messageLooksLikeAnyPriceQuestion(rawText),
     messageAsksAboutPaymentMethods(rawText),
     messageAsksAboutAfternoonAvailability(rawText) || messageLooksLikeRealtimeAvailabilityQuestion(rawText),
     messageMatchesStudiesTopic(rawText) || Boolean(getStudyTypeFromText(rawText)),
     messageLooksLikeBookingIntent(rawText),
+    messageMentionsChildPatientContext(rawText) || messageAsksIfDoctorTreatsChildren(rawText),
+    messageAsksAboutStudyPreparation(rawText) ||
+      messageAsksAboutStudyFasting(rawText) ||
+      messageAsksWhetherDoctorPerformsStudyInMessage(rawText),
   ].filter(Boolean).length;
   if (questionCount >= 3 && topicCount >= 3) return true;
   if (questionCount >= 2 && topicCount >= 3) return true;
@@ -10861,7 +11149,11 @@ async function deliverSequentialPatientTextMessages(
   return true;
 }
 
-async function buildRichPatientIntakeReplies(priorState, rawText, lastSede, healthInsuranceName) {
+async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, healthInsuranceName, options = {}) {
+  if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) {
+    return [];
+  }
+  const includeEmpathy = options.includeEmpathy !== false;
   const enrichedState = mergeConversationStatePreservingGreeting(
     priorState,
     priorState || {},
@@ -10869,17 +11161,49 @@ async function buildRichPatientIntakeReplies(priorState, rawText, lastSede, heal
   );
   const replies = [];
   const normalized = normalizeForMatch(rawText);
+
+  if (
+    includeEmpathy &&
+    (messageDescribesChronicOrQualifiedBreathingSymptom(rawText) ||
+      (messageAlreadyStatesSymptomDuration(rawText) && !messageDescribesAcuteSymptomWorsening(rawText)))
+  ) {
+    replies.push(buildChronicSymptomEmpathyReply(rawText));
+  }
+
+  if (messageMentionsChildPatientContext(rawText) || messageAsksIfDoctorTreatsChildren(rawText)) {
+    replies.push(buildPediatricCareConfirmationReply(rawText));
+  }
+
   if (
     messageAsksAboutConditionTreatment(rawText) ||
     normalized.includes('rinitis') ||
     normalized.includes('asma') ||
+    normalized.includes('dermatitis') ||
     normalized.includes('alerg')
   ) {
     replies.push(buildConditionTreatmentReply(enrichedState, rawText));
   }
+
   const studyType = await resolveStudyTypeFromMessage(rawText, priorState);
+  if (studyType && messageAsksWhetherDoctorPerformsStudyInMessage(rawText)) {
+    replies.push(
+      buildStudyAvailabilityPrimaryReply(studyType, enrichedState, { sedeEntry: lastSede })
+    );
+  }
+
   if (messageAsksCompleteOrTotalCost(rawText) && studyType && healthInsuranceName) {
     replies.push(await buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, rawText));
+  } else if (messageAsksCompleteOrTotalCost(rawText) && studyType && !healthInsuranceName) {
+    const privateEstimate = await estimatePrivateConsultationAndStudyTotal(lastSede, studyType);
+    if (privateEstimate) {
+      const studyWithArticle = buildStudyTypeWithArticle(studyType);
+      const consultationFormatted = formatArsAmount(privateEstimate.consultationAmountArs);
+      const studyFormatted = formatArsAmount(privateEstimate.studyAmountArs);
+      const totalFormatted = formatArsAmount(privateEstimate.totalAmountArs);
+      replies.push(
+        `En ${lastSede.displayName}, consulta particular $${consultationFormatted} + ${studyWithArticle} $${studyFormatted}. Total aproximado: $${totalFormatted}.`
+      );
+    }
   } else {
     if (healthInsuranceName) {
       replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
@@ -10906,21 +11230,121 @@ async function buildRichPatientIntakeReplies(priorState, rawText, lastSede, heal
         replies.push(await buildStudyPriceLineForKnownCoverage(studyType, studySede, healthInsuranceName));
       } else if (isSpirometryStudyType(studyType)) {
         replies.push(buildSpirometryStandalonePriceReply(priorState, rawText, lastSede));
-      } else {
+      } else if (messageLooksLikeAnyPriceQuestion(rawText)) {
         const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
         replies.push(`El ${studyType} en consulta particular sería $${formattedAmount} del estudio.`);
       }
     }
   }
+
+  if (
+    messageAsksAboutStudyPreparation(rawText, priorState) ||
+    (messageAsksAboutStudyFasting(rawText) && studyType)
+  ) {
+    replies.push(buildStudyPreparationReply(priorState, rawText));
+  }
+
   if (messageAsksAboutPaymentMethods(rawText)) {
     replies.push(PAYMENT_METHODS_MESSAGE);
   }
-  if (messageAsksAboutAfternoonAvailability(rawText) || messageLooksLikeRealtimeAvailabilityQuestion(rawText)) {
-    replies.push(
-      `Los turnos por la tarde los ves en la agenda al elegir día y horario. ${buildMicroCommitmentMessage()}`
-    );
+
+  if (
+    messageAsksAboutAfternoonAvailability(rawText) ||
+    messageLooksLikeRealtimeAvailabilityQuestion(rawText) ||
+    messageLooksLikeBookingIntent(rawText)
+  ) {
+    if (isReferralOnlySedeEntry(lastSede)) {
+      const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
+      if (phoneNumber) {
+        replies.push(
+          `Para fechas en ${lastSede.displayName} comunicate al ${phoneNumber}; el Dr. carga turnos con anticipación. Por este chat solo se agenda online en Corrientes y Resistencia.`
+        );
+      } else {
+        replies.push(buildReferralOnlySedeBookingReply(lastSede));
+      }
+    } else {
+      replies.push(
+        `Los turnos los ves en la agenda online al elegir día y horario. ${buildMicroCommitmentMessage()}`
+      );
+    }
   }
+
   return replies;
+}
+
+async function buildRichPatientIntakeReplies(priorState, rawText, lastSede, healthInsuranceName) {
+  return buildPatientOrchestratedReplies(priorState, rawText, lastSede, healthInsuranceName, {
+    includeEmpathy: true,
+  });
+}
+
+async function buildComplexClinicalInquiryReplies(priorState, rawText, lastSede, healthInsuranceName) {
+  return buildPatientOrchestratedReplies(priorState, rawText, lastSede, healthInsuranceName, {
+    includeEmpathy: true,
+  });
+}
+
+function buildComplexClinicalInquiryStatePatch(
+  patientContext,
+  lastSede,
+  healthInsuranceName,
+  studyType,
+  bodyText
+) {
+  return {
+    ...(patientContext.statePatch || {}),
+    ...(buildLastSedeStatePatch(lastSede) || {}),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
+    ...(studyType ? { lastStudyType: studyType, lastStudyPriceContextAtMs: Date.now() } : {}),
+    ...(isReferralOnlySedeEntry(lastSede)
+      ? buildClearedStaleBookingLinkMemoryStatePatch()
+      : buildAwaitingLinkConfirmationState(lastSede, 'after_complex_clinical_inquiry', {
+          healthInsuranceName: healthInsuranceName || undefined,
+        })),
+  };
+}
+
+async function tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikeComplexClinicalInquiry(bodyText)) return false;
+  if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText)) return false;
+  if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  if (!lastSede) return false;
+  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
+    profileDisplayName,
+  });
+  const replies = await buildComplexClinicalInquiryReplies(
+    mergedState,
+    bodyText,
+    lastSede,
+    healthInsuranceName
+  );
+  if (replies.length === 0) return false;
+  const studyType = await resolveStudyTypeFromMessage(bodyText, mergedState, { profileDisplayName });
+  const statePatch = buildComplexClinicalInquiryStatePatch(
+    patientContext,
+    lastSede,
+    healthInsuranceName,
+    studyType,
+    bodyText
+  );
+  return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch, {
+    userMessage: bodyText,
+    replyContext: 'complex_clinical_inquiry',
+    suppressBookingLinkOffer: isReferralOnlySedeEntry(lastSede),
+  });
 }
 
 function messageAsksAboutClinicHours(rawText) {
@@ -11411,13 +11835,25 @@ function messageAsksExplicitParticularConsultationPrice(rawText) {
 function messageAsksObraSocialOrCoveragePrice(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
+  const namedHealthInsurance = tryExtractHealthInsuranceName(rawText);
+  if (
+    namedHealthInsurance &&
+    messageLooksLikeAnyPriceQuestion(rawText) &&
+    (normalized.includes('cuanto sale con') ||
+      normalized.includes('cuanto cuesta con') ||
+      normalized.includes('con cobertura') ||
+      normalized.includes('con prepaga') ||
+      normalized.includes('obra social'))
+  ) {
+    return true;
+  }
   return (
     normalized.includes('obra social') ||
     normalized.includes('con cobertura') ||
     normalized.includes('con prepaga') ||
     normalized.includes('cuanto sale con') ||
     normalized.includes('precio con') ||
-    messageStatesHealthInsuranceMembership(rawText)
+    (messageStatesHealthInsuranceMembership(rawText) && messageLooksLikeAnyPriceQuestion(rawText))
   );
 }
 
@@ -11439,10 +11875,31 @@ function messageAsksStudyProcedurePrice(rawText) {
 
 function messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const namedHealthInsurance = tryExtractHealthInsuranceName(rawText);
+  const asksParticularPrice =
+    messageAsksExplicitParticularConsultationPrice(rawText) ||
+    (normalized.includes('particular') && messageLooksLikeAnyPriceQuestion(rawText));
+  const asksCoveragePrice =
+    messageAsksObraSocialOrCoveragePrice(rawText) ||
+    (Boolean(namedHealthInsurance) &&
+      (normalized.includes('cuanto sale con') ||
+        normalized.includes('cuanto cuesta con') ||
+        normalized.includes('con cobertura') ||
+        normalized.includes('con prepaga') ||
+        normalized.includes('obra social') ||
+        normalized.includes('con mi obra social')));
+  const asksStudyPrice = messageAsksStudyProcedurePrice(rawText);
+  if (asksParticularPrice && asksCoveragePrice && asksStudyPrice) {
+    return true;
+  }
+  const priceQuestionCount = (normalized.match(/cuanto\s+(sale|cuesta|esta)/g) || []).length;
   return (
-    messageAsksExplicitParticularConsultationPrice(rawText) &&
-    messageAsksObraSocialOrCoveragePrice(rawText) &&
-    messageAsksStudyProcedurePrice(rawText)
+    Boolean(namedHealthInsurance) &&
+    asksParticularPrice &&
+    asksStudyPrice &&
+    priceQuestionCount >= 2 &&
+    messageLooksLikeAnyPriceQuestion(rawText)
   );
 }
 
@@ -11630,6 +12087,19 @@ async function buildStudyPriceLineForKnownCoverage(studyType, sedeEntry, healthI
   return `Con ${canonicalHealthInsuranceName} en ${sedeEntry.displayName}, ${studyWithArticle} en consulta sería $${formattedAmount} del estudio.`;
 }
 
+async function buildTriplePriceBreakdownReplies(lastSede, healthInsuranceName, studyType) {
+  const replies = [];
+  const privatePriceReply = await buildPrivatePriceReply(lastSede);
+  if (privatePriceReply) replies.push(privatePriceReply);
+  const healthInsuranceSummary = await buildHealthInsuranceSummary(lastSede, healthInsuranceName);
+  if (healthInsuranceSummary && healthInsuranceSummary !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+    replies.push(healthInsuranceSummary);
+  }
+  const studyPriceReply = await buildStudyPriceLineForKnownCoverage(studyType, lastSede, healthInsuranceName);
+  if (studyPriceReply) replies.push(studyPriceReply);
+  return replies;
+}
+
 async function sendCombinedConsultationAndStudyPriceReply(
   from,
   bodyText,
@@ -11639,44 +12109,29 @@ async function sendCombinedConsultationAndStudyPriceReply(
   healthInsuranceName,
   patientContext
 ) {
-  const studyType = getStudyTypeFromText(bodyText) || 'espirometría';
-  const primaryReply = await buildPrivatePriceReply(lastSede);
-  const followUpReply = await buildHealthInsuranceSummary(lastSede, healthInsuranceName);
-  const thirdReply = await buildStudyPriceLineForKnownCoverage(studyType, lastSede, healthInsuranceName);
-  const wrappedPrimary = buildAutoReplyWithGreetingIfNeeded(primaryReply, profileDisplayName, priorState);
-  let nextState = mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+  const studyType =
+    (await resolveStudyTypeFromMessage(bodyText, priorState, { profileDisplayName })) ||
+    getStudyTypeFromText(bodyText) ||
+    'espirometría';
+  const replies = await buildTriplePriceBreakdownReplies(lastSede, healthInsuranceName, studyType);
+  if (replies.length === 0) return false;
+  const statePatch = {
     lastStudyType: studyType,
     lastStudyPriceContextAtMs: Date.now(),
     lastHealthInsuranceName: healthInsuranceName,
     healthInsuranceName,
     ...(patientContext.statePatch || {}),
     ...(buildLastSedeStatePatch(lastSede) || {}),
-    ...(wrappedPrimary.nextStatePatch || {}),
-    ...buildLastBotReplyStatePatch(wrappedPrimary.messageText),
     ...buildLastHealthInsuranceDiscussionStatePatch(),
-  });
-  await setConversationState(from, nextState);
-  await sendWhatsAppText(from, wrappedPrimary.messageText);
-  const wrappedFollowUp = buildAutoReplyWithGreetingIfNeeded(followUpReply, profileDisplayName, nextState);
-  let combinedLastReply = `${wrappedPrimary.messageText} ${wrappedFollowUp.messageText}`;
-  nextState = mergeConversationStatePreservingGreeting(nextState, {}, {
-    ...(wrappedFollowUp.nextStatePatch || {}),
-    ...buildLastBotReplyStatePatch(combinedLastReply),
-  });
-  await setConversationState(from, nextState);
-  await sendWhatsAppText(from, wrappedFollowUp.messageText, { skipDelay: true });
-  const wrappedThird = buildAutoReplyWithGreetingIfNeeded(thirdReply, profileDisplayName, nextState);
-  combinedLastReply = `${combinedLastReply} ${wrappedThird.messageText}`;
-  nextState = mergeConversationStatePreservingGreeting(nextState, {}, {
-    ...(wrappedThird.nextStatePatch || {}),
-    ...buildLastBotReplyStatePatch(combinedLastReply),
     ...buildAwaitingLinkConfirmationState(lastSede, 'after_combined_price_inquiry', {
       healthInsuranceName,
     }),
+  };
+  return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch, {
+    userMessage: bodyText,
+    replyContext: 'combined_price_breakdown',
+    suppressBookingLinkOffer: false,
   });
-  await setConversationState(from, nextState);
-  await sendWhatsAppText(from, wrappedThird.messageText, { skipDelay: true });
-  return true;
 }
 
 async function tryHandleCombinedConsultationAndStudyPriceInquiry(
@@ -13709,6 +14164,15 @@ exports.handler = async (event) => {
           if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleReferralSedePatientGuidanceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -14005,6 +14469,15 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -14519,145 +14992,6 @@ exports.handler = async (event) => {
             }
           }
 
-
-          if (messageLooksLikeMultiIntentCandidate(bodyText)) {
-            if (await tryHandleClinicInformationBundleInquiry(from, bodyText, priorState, profileDisplayName)) {
-              continue;
-            }
-            const intents = (await decideIntentsWithOpenAi(bodyText)) || [];
-            const hasHealthInsurance = intents.includes('HEALTH_INSURANCE');
-            const hasPrivatePrice = intents.includes('PRIVATE_PRICE');
-
-            const hasStudyPrice =
-              intents.includes('STUDY_PRICE') || messageAsksStudyProcedurePrice(bodyText);
-            if (hasHealthInsurance && hasPrivatePrice && hasStudyPrice) {
-              if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
-                continue;
-              }
-            }
-
-            if (hasHealthInsurance && hasPrivatePrice) {
-              const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
-              const healthInsuranceName =
-                tryExtractHealthInsuranceName(bodyText) ||
-                (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)
-                  ? await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText)
-                  : null);
-              if (sedeFromMessage && healthInsuranceName) {
-                const healthInsuranceSummary = await buildHealthInsuranceSummary(
-                  sedeFromMessage,
-                  healthInsuranceName
-                );
-                if (healthInsuranceSummary !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
-                  const privatePriceReply = await buildPrivatePriceReply(sedeFromMessage);
-                  const combined = `${healthInsuranceSummary} ${privatePriceReply}`.trim();
-                  const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                    appendBookingLinkOfferIfAllowed(priorState, combined),
-                    profileDisplayName,
-                    priorState
-                  );
-                  await setConversationState(
-                    from,
-                    mergeConversationStatePreservingGreeting(
-                      priorState,
-                      buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_health_insurance_plus', {
-                        healthInsuranceName,
-                      }),
-                      {
-                        ...(wrapped.nextStatePatch || {}),
-                        ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
-                      }
-                    )
-                  );
-                  await sendWhatsAppText(from, wrapped.messageText);
-                  continue;
-                }
-              }
-            }
-
-            const primaryIntent = intents.length > 0 ? intents[0] : null;
-            if (primaryIntent === 'HEALTH_INSURANCE') {
-              const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
-              const healthInsuranceName =
-                tryExtractHealthInsuranceName(bodyText) ||
-                (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)
-                  ? await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText)
-                  : null);
-              if (sedeFromMessage && healthInsuranceName) {
-                const reply = await buildHealthInsurancePlusReplyOrAskCity(
-                  sedeFromMessage,
-                  healthInsuranceName,
-                  priorState
-                );
-                if (reply !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
-                  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
-                  await setConversationState(
-                    from,
-                    mergeConversationStatePreservingGreeting(
-                      priorState,
-                      buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_health_insurance_plus', {
-                        healthInsuranceName,
-                      }),
-                      {
-                        ...(wrapped.nextStatePatch || {}),
-                        ...(buildLastSedeStatePatch(sedeFromMessage) || {}),
-                      }
-                    )
-                  );
-                  await sendWhatsAppText(from, wrapped.messageText);
-                  continue;
-                }
-              }
-            } else if (primaryIntent === 'PRIVATE_PRICE') {
-              const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
-              if (sedeFromMessage) {
-                const reply = await buildPrivatePriceReply(sedeFromMessage);
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(
-                  appendBookingLinkOfferIfAllowed(priorState, reply),
-                  profileDisplayName,
-                  priorState
-                );
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(
-                    priorState,
-                    buildAwaitingLinkConfirmationState(sedeFromMessage, 'after_private_price'),
-                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(sedeFromMessage) || {}) }
-                  )
-                );
-                await sendWhatsAppText(from, wrapped.messageText);
-                continue;
-              }
-            } else if (primaryIntent === 'BOOKING') {
-              if (await shouldHandleAsAddressQuestion(bodyText, priorState, profileDisplayName)) {
-                await sendAddressQuestionReply(from, bodyText, priorState, profileDisplayName);
-                continue;
-              }
-              const lastSede = resolveLastSedeEntryFromState(priorState);
-              if (lastSede) {
-                if (stateHasRecentStudyPriceContext(priorState)) {
-                  await deliverBookingLinkReply(from, lastSede, priorState, profileDisplayName, {
-                    conversationStatePatch: {
-                      ...(buildLastSedeStatePatch(lastSede) || {}),
-                    },
-                  });
-                  continue;
-                }
-                const micro = buildMicroCommitmentMessageWithState(priorState, true);
-                const wrapped = buildAutoReplyWithGreetingIfNeeded(micro, profileDisplayName, priorState);
-                await setConversationState(
-                  from,
-                  mergeConversationStatePreservingGreeting(
-                    priorState,
-                    buildAwaitingLinkConfirmationState(lastSede, 'after_booking_intent'),
-                    { ...(wrapped.nextStatePatch || {}), ...(buildLastSedeStatePatch(lastSede) || {}) }
-                  )
-                );
-                await sendWhatsAppText(from, wrapped.messageText);
-                continue;
-              }
-            }
-          }
 
           if (messageAsksIfDoctorTreatsChildren(bodyText)) {
             const lastSede = resolveLastSedeEntryFromState(priorState);
