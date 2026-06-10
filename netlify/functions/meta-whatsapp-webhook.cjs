@@ -6841,6 +6841,7 @@ async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDi
   ) {
     const slotPrefix = buildPreferredSlotBookingAcknowledgementPrefix(lastSede, bodyText);
     return deliverBookingLinkReply(from, lastSede, priorState, profileDisplayName, {
+      userMessage: bodyText,
       primaryPrefix: slotPrefix || undefined,
       conversationStatePatch: {
         ...(buildLastSedeStatePatch(lastSede) || {}),

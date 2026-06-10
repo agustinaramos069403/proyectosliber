@@ -251,7 +251,13 @@
 - Tras esa respuesta: “sí”
   - Respuesta: repetir derivación telefónica; **no** “link que ya te pasé”.
 - Mismo criterio para Formosa (`3704445096`).
-- Si hubo link de Corrientes/Resistencia hace más de 3 h, no recordarlo al hablar de Formosa/Sáenz Peña.
+- Si hubo link de Corrientes/Resistencia hace más de 1 h, no recordarlo al hablar de Formosa/Sáenz Peña.
+
+## Link de agenda — no repetir en la misma hora
+- Tras enviar link de Resistencia (p. ej. confirmación de consulta virtual), usuario: “martes 10am”
+  - Respuesta: recordatorio corto (“Perfecto, el martes… Con el link que ya te pasé…”); **no** volver a pegar la URL ni “Cualquier duda que te surja, avisame.”
+- Mismo criterio si el usuario pide otro día/hora dentro de la hora siguiente al último link enviado para esa sede.
+- Pasada 1 h desde el último envío, puede volver a mandarse el link completo si el flujo lo requiere.
 
 ## Robustez producción
 - Deduplicación por `message.id` (evitar dobles respuestas por reintentos)
