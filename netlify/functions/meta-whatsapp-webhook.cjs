@@ -13928,8 +13928,12 @@ function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
 
 async function tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName) {
   if (!messageLooksLikeAlreadySentLinkBookingFollowUp(bodyText, priorState)) return false;
-  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const lastSede =
+    resolveActiveBookingSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   if (!lastSede) return false;
+  if (isReferralOnlySedeEntry(lastSede)) {
+    return sendReferralOnlySedeBookingReply(from, lastSede, priorState, profileDisplayName, bodyText);
+  }
   return deliverBookingLinkReminderReply(from, bodyText, priorState, profileDisplayName, lastSede);
 }
 
