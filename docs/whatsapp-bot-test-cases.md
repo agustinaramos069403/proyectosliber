@@ -223,6 +223,14 @@
 - Imagen/documento (posible credencial)
 - Respuesta: “no envíes datos sensibles por este chat” + pedir solo ciudad/OS sin números
 
+## Formosa / Sáenz Peña (solo derivación telefónica, sin link)
+- “Soy de Sáenz Peña y quiero atenderme la semana que viene.”
+  - Respuesta: teléfono de la sede (`36415314019`); **no** ofrecer link ni “coordinar cita por acá”.
+- Tras esa respuesta: “sí”
+  - Respuesta: repetir derivación telefónica; **no** “link que ya te pasé”.
+- Mismo criterio para Formosa (`3704445096`).
+- Si hubo link de Corrientes/Resistencia hace más de 3 h, no recordarlo al hablar de Formosa/Sáenz Peña.
+
 ## Robustez producción
 - Deduplicación por `message.id` (evitar dobles respuestas por reintentos)
 - Staleness: ignorar mensajes muy viejos o fuera de orden (timestamp vs `lastInboundMessageAtMs`)

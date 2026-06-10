@@ -1542,6 +1542,36 @@ function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
   );
 }
 
+function messageLooksLikeTreatmentAppointmentRequest(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsBeingSeen =
+    /\b(atenderme|atenderse|ser atendid[oa])\b/.test(normalized) ||
+    normalized.includes('quiero atender') ||
+    normalized.includes('necesito atender');
+  if (!mentionsBeingSeen) return false;
+  return (
+    /\b(quiero|necesito|quisiera|me gustaria|me gustaría|puedo|podria|podría)\b/.test(normalized) ||
+    normalized.includes('semana que viene') ||
+    normalized.includes('proxima semana') ||
+    normalized.includes('próxima semana') ||
+    normalized.includes('esta semana') ||
+    normalized.includes('cuando pueda') ||
+    normalized.includes('cuándo pueda')
+  );
+}
+
+function messageConfirmsReferralSedeBookingFollowUp(rawText, priorState) {
+  if (!priorState || !messageConfirmsLinkSend(rawText)) return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (!isReferralOnlySedeEntry(lastSede)) return false;
+  return (
+    stateHasRecentBookingConversationContext(priorState) ||
+    stateHasPendingBookingIntent(priorState) ||
+    stateLooksLikeAwaitingLinkConfirmation(priorState)
+  );
+}
+
 function messageLooksLikeReferralOnlySedeBookingIntent(rawText, priorState = null) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksGenericConsultationPrice(rawText)) return false;
@@ -1549,12 +1579,23 @@ function messageLooksLikeReferralOnlySedeBookingIntent(rawText, priorState = nul
   if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return false;
   return (
     messageLooksLikeBookingIntent(rawText) ||
+    messageLooksLikeTreatmentAppointmentRequest(rawText) ||
     messageExplicitlyRequestsBookingLink(rawText) ||
     messageLooksLikeAssistedBookingRequest(rawText) ||
     messageAsksWhereOrHowToBook(rawText) ||
     messageAsksExplicitlyHowToBookTurn(rawText) ||
-    (priorState && messageConfirmsLinkSend(rawText) && stateLooksLikeAwaitingLinkConfirmation(priorState))
+    messageConfirmsReferralSedeBookingFollowUp(rawText, priorState)
   );
+}
+
+function buildClearedStaleBookingLinkMemoryStatePatch() {
+  return {
+    lastBookingLinkSentAtMs: null,
+    lastBookingLinkSedeEnvKey: null,
+    lastBookingLinkSedeDisplayName: null,
+    lastBookingLinkUrl: null,
+    ...buildClearedAwaitingLinkConfirmationStatePatch(),
+  };
 }
 
 async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName) {
@@ -1566,6 +1607,7 @@ async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, pro
     mergeConversationStatePreservingGreeting(priorState, {}, {
       ...(wrapped.nextStatePatch || {}),
       ...(buildLastSedeStatePatch(sedeEntry) || {}),
+      ...buildClearedStaleBookingLinkMemoryStatePatch(),
       ...buildLastBotReplyStatePatch(wrapped.messageText),
       bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
     })
@@ -3258,6 +3300,9 @@ function buildAwaitingSedeSelectionStatePatch() {
 }
 
 function buildSedeConfirmedHelpMessage(sede) {
+  if (isReferralOnlySedeEntry(sede)) {
+    return `Sí, el Dr. atiende en ${sede.displayName}. ${buildReferralOnlySedeBookingReply(sede)}`;
+  }
   return `Sí, el Dr. atiende en ${sede.displayName}. ¿En qué te puedo ayudar?`;
 }
 
@@ -3493,6 +3538,9 @@ function messageIncludesSpecificAppointmentTime(rawText) {
 }
 
 function buildPreferredDayBookingReply(sede, weekdayName, priorState = null, rawText = '') {
+  if (isReferralOnlySedeEntry(sede)) {
+    return buildReferralOnlySedeBookingReply(sede);
+  }
   const includesSpecificTime = messageIncludesSpecificAppointmentTime(rawText);
   if (weekdayName) {
     if (hasBookingLinkInStateForSede(priorState, sede)) {
@@ -3613,6 +3661,9 @@ function buildBookingLinkStepByStepGuidanceReply(priorState, sedeEntry = null) {
 }
 
 async function buildBookingPolicyReplyForSede(sede, priorState, currentMessage = '', options = {}) {
+  if (isReferralOnlySedeEntry(sede)) {
+    return buildReferralOnlySedeBookingReply(sede);
+  }
   const requestText = resolvePendingBookingRequestText(priorState, currentMessage);
   const weekdayName =
     extractWeekdayNameFromText(requestText) ||
@@ -5057,6 +5108,10 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
 
 async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName) {
   if (!stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+  const pendingSedeEntry = resolveSedeEntryFromState(priorState);
+  if (isReferralOnlySedeEntry(pendingSedeEntry)) {
+    return sendReferralOnlySedeBookingReply(from, pendingSedeEntry, priorState, profileDisplayName);
+  }
   if (stateLooksLikeAwaitingSedeSelection(priorState) || conversationRecentlyAskedSedeSelection(priorState)) {
     return false;
   }
@@ -5934,6 +5989,7 @@ function priorStateLooksLikeRecentBookingLinkContext(priorState) {
 }
 
 function conversationLooksLikeOngoingBookingLinkGuidance(priorState) {
+  if (isReferralOnlySedeEntry(resolveLastSedeEntryFromState(priorState))) return false;
   if (priorStateLooksLikeRecentBookingLinkContext(priorState)) return true;
   if (!priorState || typeof priorState !== 'object') return false;
   if (!isLastBotReplyWithinBookingLinkRememberWindow(priorState)) return false;
@@ -5957,11 +6013,12 @@ function conversationLooksLikeOngoingBookingLinkGuidance(priorState) {
 }
 
 function resolveBookingLinkUrlFromPriorState(priorState) {
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  if (isReferralOnlySedeEntry(lastSede)) return null;
   if (priorState && typeof priorState.lastBookingLinkUrl === 'string') {
     const urlFromState = priorState.lastBookingLinkUrl.trim();
     if (urlFromState.length > 0) return urlFromState;
   }
-  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   return lastSede ? getAgendaUrl(lastSede) : null;
 }
 
@@ -6525,6 +6582,9 @@ async function tryHandleWhereToBookQuestion(from, bodyText, priorState, profileD
 }
 
 async function sendBookingFlowReplyForSede(from, bodyText, priorState, profileDisplayName, lastSede) {
+  if (isReferralOnlySedeEntry(lastSede)) {
+    return sendReferralOnlySedeBookingReply(from, lastSede, priorState, profileDisplayName);
+  }
   if (messageLooksLikeAssistedBookingRequest(bodyText)) {
     return sendAssistedBookingRequiredReply(from, bodyText, priorState, profileDisplayName);
   }
@@ -7362,6 +7422,7 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
 
   const isBookingCandidate =
     messageLooksLikeBookingIntent(bodyText) ||
+    messageLooksLikeTreatmentAppointmentRequest(bodyText) ||
     messageLooksLikeRealtimeAvailabilityQuestion(bodyText) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
     stateHasPendingBookingIntent(priorState);
@@ -7370,7 +7431,8 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
   let wantsToBook =
     stateHasPendingBookingIntent(priorState) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
-    messageLooksLikeBookingIntent(bodyText);
+    messageLooksLikeBookingIntent(bodyText) ||
+    messageLooksLikeTreatmentAppointmentRequest(bodyText);
   if (!wantsToBook) {
     wantsToBook = await tryResolveBookingIntentWithOpenAi(bodyText, { priorState, profileDisplayName });
   }
@@ -8006,6 +8068,7 @@ function buildClearedAwaitingLinkConfirmationStatePatch() {
 }
 
 function resolveBookingLinkUrlFromState(priorState, entry) {
+  if (isReferralOnlySedeEntry(entry)) return null;
   if (priorState && typeof priorState === 'object') {
     const urlFromState =
       typeof priorState.lastBookingLinkUrl === 'string' ? priorState.lastBookingLinkUrl.trim() : '';
@@ -8027,6 +8090,12 @@ function hasBookingLinkInStateForSede(priorState, entry) {
 }
 
 function buildAwaitingLinkConfirmationState(entry, reason, details = null) {
+  if (isReferralOnlySedeEntry(entry)) {
+    return {
+      ...(buildLastSedeStatePatch(entry) || {}),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    };
+  }
   const detailsObject = details && typeof details === 'object' ? details : null;
   const healthInsuranceName =
     detailsObject && typeof detailsObject.healthInsuranceName === 'string'
@@ -8126,6 +8195,7 @@ function userMessageRequiresFreshSedeForBooking(bodyText, priorState = null) {
   if (priorStateHasRecentKnownSede(priorState)) return false;
   return (
     messageLooksLikeBookingIntent(bodyText) ||
+    messageLooksLikeTreatmentAppointmentRequest(bodyText) ||
     messageExplicitlyRequestsBookingLink(bodyText) ||
     (Boolean(extractWeekdayNameFromText(bodyText)) && messageLooksLikePreferredDayForBooking(bodyText))
   );
@@ -8762,15 +8832,25 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
     }
     return false;
   }
+  const referralSedeFromMessage = findSedeFromText(bodyText);
+  if (
+    referralSedeFromMessage &&
+    isReferralOnlySedeEntry(referralSedeFromMessage) &&
+    (messageLooksLikeBookingIntent(bodyText) || messageLooksLikeTreatmentAppointmentRequest(bodyText))
+  ) {
+    return sendReferralOnlySedeBookingReply(from, referralSedeFromMessage, priorState, profileDisplayName);
+  }
   const openAiReply = await fetchOpenAiAssistantReply(bodyText, {
     profileDisplayName,
     priorState,
   });
   if (!openAiReply) return false;
   const processed = processAssistantReplyForPatient(openAiReply, { priorState, bodyText });
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
   const statePatch = {
     greeted: true,
     lastBotReplyAtMs: Date.now(),
+    ...(patientContext.statePatch || {}),
     ...buildLastBotReplyStatePatch(processed),
   };
   if (assistantReplyAsksForSedeCity(processed)) {
@@ -9036,6 +9116,7 @@ function messageLooksLikeBookingIntent(rawText) {
   }
   // Tolerate common typos like "urno" (missing t)
   if (/\burno\b/.test(normalized) || /\bun\s*urno\b/.test(normalized)) return true;
+  if (messageLooksLikeTreatmentAppointmentRequest(rawText)) return true;
   return false;
 }
 
@@ -10527,9 +10608,11 @@ async function tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, pro
         }
       : {}),
     ...(studyType ? { lastStudyType: studyType, lastStudyPriceContextAtMs: Date.now() } : {}),
-    ...buildAwaitingLinkConfirmationState(lastSede, 'after_rich_patient_intake', {
-      healthInsuranceName: healthInsuranceName || undefined,
-    }),
+    ...(isReferralOnlySedeEntry(lastSede)
+      ? buildClearedStaleBookingLinkMemoryStatePatch()
+      : buildAwaitingLinkConfirmationState(lastSede, 'after_rich_patient_intake', {
+          healthInsuranceName: healthInsuranceName || undefined,
+        })),
   };
   return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch);
 }
@@ -11363,6 +11446,9 @@ function buildLinkMessage(entry) {
 }
 
 function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options = {}) {
+  if (isReferralOnlySedeEntry(entry)) {
+    return buildReferralOnlySedeBookingReply(entry);
+  }
   const userMessage = typeof options.userMessage === 'string' ? options.userMessage : '';
   const cityName = entry.displayName;
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
@@ -11406,6 +11492,9 @@ async function deliverBookingLinkReminderReply(
   lastSede,
   options = {}
 ) {
+  if (isReferralOnlySedeEntry(lastSede)) {
+    return sendReferralOnlySedeBookingReply(from, lastSede, priorState, profileDisplayName);
+  }
   const rulesReply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede, {
     userMessage: bodyText,
   });
@@ -11528,6 +11617,7 @@ function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
   if (!priorState || typeof priorState !== 'object') return false;
   const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   if (!lastSede) return false;
+  if (isReferralOnlySedeEntry(lastSede)) return false;
   const linkWasShared =
     wasBookingLinkSentRecently(priorState) || hasBookingLinkInStateForSede(priorState, lastSede);
   if (!linkWasShared) return false;
@@ -14041,6 +14131,11 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            const pendingReferralSede = resolveSedeEntryFromState(priorState);
+            if (isReferralOnlySedeEntry(pendingReferralSede)) {
+              await sendReferralOnlySedeBookingReply(from, pendingReferralSede, priorState, profileDisplayName);
+              continue;
+            }
             if (messageMentionsOutOfCoverageCity(bodyText)) {
               await sendOutOfCoverageCityReply(from, bodyText, priorState, profileDisplayName);
               continue;
