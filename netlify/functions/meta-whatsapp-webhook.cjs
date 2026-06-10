@@ -212,7 +212,7 @@ const SMALL_TALK_COOLDOWN_MS = 20000;
 const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
 const PRICE_OBJECTION_CONTEXT_WINDOW_MS = 30 * 60 * 1000;
 const BOOKING_LINK_OFFER_REPEAT_COOLDOWN_MS = 8 * 60 * 1000;
-const BOOKING_LINK_RECENTLY_SENT_MS = 3 * 60 * 60 * 1000;
+const BOOKING_LINK_RECENTLY_SENT_MS = 60 * 60 * 1000;
 const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const URGENCY_CLARIFICATION_WINDOW_MS = 10 * 60 * 1000;
@@ -5194,6 +5194,19 @@ async function deliverBookingLinkReply(from, entry, priorState, profileDisplayNa
   if (!entry) return false;
   if (isReferralOnlySedeEntry(entry)) {
     return sendReferralOnlySedeBookingReply(from, entry, priorState, profileDisplayName);
+  }
+  const userMessage = typeof options.userMessage === 'string' ? options.userMessage : '';
+  if (!options.forceResend && hasBookingLinkInStateForSede(priorState, entry)) {
+    const primaryPrefix =
+      typeof options.primaryPrefix === 'string' && options.primaryPrefix.trim().length > 0
+        ? options.primaryPrefix.trim()
+        : '';
+    const acknowledgmentPrefix =
+      primaryPrefix || buildPreferredSlotBookingAcknowledgementPrefix(entry, userMessage) || undefined;
+    return deliverBookingLinkReminderReply(from, userMessage, priorState, profileDisplayName, entry, {
+      replyContext: options.replyContext || 'booking_link_reminder',
+      acknowledgmentPrefix,
+    });
   }
   const conversationStatePatch = options.conversationStatePatch || {};
   const primaryPrefix =
@@ -11714,11 +11727,25 @@ function buildLinkMessage(entry) {
   ].join('\n');
 }
 
+function combineSlotAcknowledgmentWithLinkReminder(acknowledgmentPrefix, reminderLine) {
+  if (!acknowledgmentPrefix || !reminderLine) return reminderLine;
+  const cleanedPrefix = acknowledgmentPrefix
+    .replace(/\.?\s*Por acá no agendamos por este chat\.?/gi, '')
+    .replace(/\.?\s*Por acá no confirmamos horarios puntuales ni disponibilidad\.?/gi, '')
+    .replace(/\.?\s*Por acá no confirmamos disponibilidad\.?/gi, '')
+    .trim();
+  if (!cleanedPrefix) return reminderLine;
+  const prefixEndsWithPunctuation = /[.!?]$/.test(cleanedPrefix);
+  return prefixEndsWithPunctuation ? `${cleanedPrefix} ${reminderLine}` : `${cleanedPrefix}. ${reminderLine}`;
+}
+
 function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options = {}) {
   if (isReferralOnlySedeEntry(entry)) {
     return buildReferralOnlySedeBookingReply(entry);
   }
   const userMessage = typeof options.userMessage === 'string' ? options.userMessage : '';
+  const acknowledgmentPrefix =
+    typeof options.acknowledgmentPrefix === 'string' ? options.acknowledgmentPrefix.trim() : '';
   const cityName = entry.displayName;
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
   const linkAlreadyShared =
@@ -11734,23 +11761,27 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
     return buildLinkMessage(entry);
   }
 
+  const reminderWithOptionalPrefix = acknowledgmentPrefix
+    ? combineSlotAcknowledgmentWithLinkReminder(acknowledgmentPrefix, directReminderLine)
+    : directReminderLine;
+
   if (
     messageAsksWhereOrHowToBook(userMessage) ||
     messageAsksExplicitlyHowToBookTurn(userMessage) ||
     messageAsksHowBookingWorks(userMessage)
   ) {
-    return directReminderLine;
+    return reminderWithOptionalPrefix;
   }
 
   if (messageIsAcknowledgement(userMessage) && !messageExplicitlyRequestsBookingLink(userMessage)) {
-    return null;
+    return acknowledgmentPrefix ? reminderWithOptionalPrefix : null;
   }
 
   if (messageExplicitlyRequestsBookingLink(userMessage)) {
-    return directReminderLine;
+    return reminderWithOptionalPrefix;
   }
 
-  return directReminderLine;
+  return reminderWithOptionalPrefix;
 }
 
 async function deliverBookingLinkReminderReply(
@@ -11766,6 +11797,7 @@ async function deliverBookingLinkReminderReply(
   }
   const rulesReply = buildAlreadySentBookingLinkAffirmationReply(priorState, lastSede, {
     userMessage: bodyText,
+    acknowledgmentPrefix: options.acknowledgmentPrefix,
   });
   if (!rulesReply) {
     return sendFinalizedPatientTextReply(
