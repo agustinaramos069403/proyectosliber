@@ -555,6 +555,7 @@ function messageIsSmallTalk(rawText) {
 
 function messageLooksLikeFragment(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -1536,6 +1537,9 @@ function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
 
 function messageLooksLikeReferralOnlySedeBookingIntent(rawText, priorState = null) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksGenericConsultationPrice(rawText)) return false;
+  if (messageLooksLikeAnyPriceQuestion(rawText)) return false;
+  if (messageLooksLikeHealthInsurancePlusQuestion(rawText)) return false;
   return (
     messageLooksLikeBookingIntent(rawText) ||
     messageExplicitlyRequestsBookingLink(rawText) ||
@@ -4003,6 +4007,29 @@ function buildGreetingOnlyOpeningMessages(profileDisplayName, priorState) {
     };
   }
   return { firstMessage: `${buildGreetingSentence(profileDisplayName)} Contame en qué te puedo ayudar.`, secondMessage: null };
+}
+
+function shouldSkipGreetingOnlyReply(priorState, bodyText) {
+  if (messageLooksLikeBookingIntent(bodyText) || messageExplicitlyRequestsBookingLink(bodyText)) return true;
+  if (!priorState || typeof priorState !== 'object') return false;
+  if (conversationRecentlyAskedSedeSelection(priorState)) return true;
+  if (stateHasPendingBookingIntent(priorState)) return true;
+  if (stateHasPendingConsultationPriceIntent(priorState)) return true;
+  if (stateHasPendingPrivatePriceIntent(priorState)) return true;
+  if (priorState.state === 'awaiting_sede_selection') return true;
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  if (!priorState.greeted || !Number.isFinite(lastBotReplyAtMs)) return false;
+  if (Date.now() - lastBotReplyAtMs > SMALL_TALK_COOLDOWN_MS) return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? normalizeForMatch(priorState.lastBotReplyText) : '';
+  if (
+    lastBotReplyText.includes('en que te puedo ayudar') ||
+    lastBotReplyText.includes('para que sede') ||
+    lastBotReplyText.includes('desde que ciudad')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 const GREETING_SESSION_RESET_MS = 20 * 60 * 1000;
@@ -8908,13 +8935,23 @@ function messageLooksLikeBookingIntent(rawText) {
   if (messageAsksWhyChooseDoctorOrTrustQuestion(rawText)) return false;
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  if (messageAsksGenericConsultationPrice(rawText)) return false;
+  if (
+    messageLooksLikeAnyPriceQuestion(rawText) &&
+    /\b(consulta|turno|visita)\b/.test(normalized)
+  ) {
+    return false;
+  }
   // Common intent words
   if (/\b(turno|turnos|agendar|agenda|reservar|reserva|cita)\b/.test(normalized)) return true;
   // Tolerate misspellings in key intent words.
   if (normalizedTextContainsApproxWord(normalized, 'turno', 2)) return true;
   if (normalizedTextContainsApproxWord(normalized, 'agendar', 2)) return true;
   if (normalizedTextContainsApproxWord(normalized, 'reservar', 2)) return true;
-  if (normalizedTextContainsApproxWord(normalized, 'consulta', 2)) return true;
+  if (normalizedTextContainsApproxWord(normalized, 'consulta', 2)) {
+    if (messageLooksLikeAnyPriceQuestion(rawText)) return false;
+    return true;
+  }
   // Tolerate common typos like "urno" (missing t)
   if (/\burno\b/.test(normalized) || /\bun\s*urno\b/.test(normalized)) return true;
   return false;
@@ -12947,6 +12984,16 @@ exports.handler = async (event) => {
           if (await tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (
+            await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
+              rulesOnly: isOpenAiCentralRoutingEnabled(),
+            })
+          ) {
+            continue;
+          }
+          if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -12978,16 +13025,6 @@ exports.handler = async (event) => {
               rulesOnly: rulesOnlyFallback,
             })
           ) {
-            continue;
-          }
-          if (
-            await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
-              rulesOnly: rulesOnlyFallback,
-            })
-          ) {
-            continue;
-          }
-          if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleScheduleQuestionWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
@@ -13254,6 +13291,15 @@ exports.handler = async (event) => {
           }
 
           if (messageIsSmallTalk(bodyText) && messageLooksLikeGreetingOnly(bodyText)) {
+            if (shouldSkipGreetingOnlyReply(priorState, bodyText)) {
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                  lastSeenAtMs: Date.now(),
+                })
+              );
+              continue;
+            }
             const lastBotReplyAtMs =
               priorState && typeof priorState === 'object' ? Number(priorState.lastBotReplyAtMs) : NaN;
             const isInCooldown =
@@ -13314,6 +13360,15 @@ exports.handler = async (event) => {
           }
 
           if (messageLooksLikeGreetingOnly(bodyText)) {
+            if (shouldSkipGreetingOnlyReply(priorState, bodyText)) {
+              await setConversationState(
+                from,
+                mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+                  lastSeenAtMs: Date.now(),
+                })
+              );
+              continue;
+            }
             const greetingOnlyReply = buildGreetingOnlyOpeningMessages(profileDisplayName, priorState);
             await setConversationState(
               from,
