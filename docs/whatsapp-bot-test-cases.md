@@ -369,6 +369,12 @@
 - Staleness: ignorar mensajes muy viejos o fuera de orden (timestamp vs `lastInboundMessageAtMs`)
 - Rate limiting por usuario: cooldown corto para mensajes de bajo signal (evitar spam)
 
+## Obra social institucional desconocida (Banco Nación) + varias preguntas
+- “Soy de Corrientes y tengo la obra social del Banco Nación. ¿Atienden? ¿Hay plus? ¿Cuánto cuesta la consulta y el test de alergia?”
+  - **No** responder solo “Sí, el Dr. atiende en Corrientes. ¿En qué te puedo ayudar?”.
+  - **No** fuzzy-matchear otra OS del sheet ni inventar plus.
+  - **Sí** (un mensaje por pregunta): derivar a consultorio por cobertura/plus no cargada + precio particular consulta + test de alergia requiere evaluación previa.
+
 ## Pediatría + dermatitis + IOSCOR + test + total (no mezclar FAQ inventada)
 - “Hola, es para mi hija de 4 años. Somos de Corrientes. Tiene dermatitis desde bebé, IOSCOR nos cubre. ¿Atiende niños? ¿Hace test de alergia? ¿Cuánto sale todo junto?”
   - **No** responder orden de consulta, medios de pago ni autorización si no los preguntó.
