@@ -5665,7 +5665,11 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
   if (messageLooksLikeAnyPriceQuestion(segmentText) && messageMatchesStudiesTopic(segmentText)) {
     return 'STUDY_PRICE';
   }
-  if (messageAsksWhetherDoctorPerformsStudyInMessage(segmentText)) {
+  if (
+    messageAsksWhetherDoctorPerformsStudyInMessage(segmentText) ||
+    (messageAsksStudyPerformanceQuestionInMessage(segmentText) &&
+      messageMentionsStudyTypeInMessage(fullText))
+  ) {
     return 'STUDY_AVAILABILITY';
   }
   if (messageAsksAboutStudyPreparation(segmentText) || messageAsksAboutStudyFasting(segmentText)) {
@@ -5914,7 +5918,8 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     priorState || {},
     patientContext.statePatch
   );
-  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  const lastSede =
+    patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState) || findSedeFromText(bodyText);
   if (!lastSede) return false;
 
   const isGenericInstitutionHealthInsurance = messageLooksLikeGenericInstitutionHealthInsurance(bodyText);
@@ -5942,6 +5947,16 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
 
   const replies = [];
   const seenReplyTexts = new Set();
+  if (
+    messageDescribesChronicOrQualifiedBreathingSymptom(bodyText) &&
+    !messageDescribesAcuteSymptomWorsening(bodyText)
+  ) {
+    const empathyReply = buildChronicSymptomEmpathyReply(bodyText);
+    if (empathyReply && empathyReply.trim().length > 0) {
+      seenReplyTexts.add(empathyReply.trim());
+      replies.push(empathyReply.trim());
+    }
+  }
   for (const intent of intents) {
     const reply = await buildReplyForPatientQuestionIntent(intent, replyContext);
     if (typeof reply !== 'string') continue;
@@ -14562,10 +14577,10 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
   priorState,
   profileDisplayName
 ) {
-  if (!messageShouldBypassSedeCityDeclaration(bodyText)) return false;
   if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (!messageShouldBypassSedeCityDeclaration(bodyText)) return false;
   if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -16664,6 +16679,9 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
