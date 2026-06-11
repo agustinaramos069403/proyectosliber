@@ -373,7 +373,13 @@
 - “Soy de Corrientes y tengo la obra social del Banco Nación. ¿Atienden? ¿Hay plus? ¿Cuánto cuesta la consulta y el test de alergia?”
   - **No** responder solo “Sí, el Dr. atiende en Corrientes. ¿En qué te puedo ayudar?”.
   - **No** fuzzy-matchear otra OS del sheet ni inventar plus.
-  - **Sí** (un mensaje por pregunta): derivar a consultorio por cobertura/plus no cargada + precio particular consulta + test de alergia requiere evaluación previa.
+  - **No** repetir dos mensajes casi iguales para “¿Atienden?” y “¿Hay plus?”; un solo mensaje de derivación que cubra aceptación y plus.
+  - **Sí** (máximo 2 mensajes): (1) derivación consultorio por cobertura/plus no cargada, (2) precio particular consulta + test de alergia requiere evaluación.
+
+## Emergencia aguda (empeoramiento reciente + respirar/garganta)
+- “Hace dos horas me puse peor, me cuesta respirar y tengo la garganta rara. ¿Turno urgente para hoy?”
+  - **Sí** derivar directo a guardia/107 en el primer mensaje (sin preguntar “¿urgencia o turno?”).
+  - Si el paciente ya confirmó urgencia, **no** repetir la misma derivación en otro mensaje.
 
 ## Pediatría + dermatitis + IOSCOR + test + total (no mezclar FAQ inventada)
 - “Hola, es para mi hija de 4 años. Somos de Corrientes. Tiene dermatitis desde bebé, IOSCOR nos cubre. ¿Atiende niños? ¿Hace test de alergia? ¿Cuánto sale todo junto?”

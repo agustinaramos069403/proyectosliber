@@ -1275,8 +1275,14 @@ function rawTextMatchesCriticalEmergencyPhrases(rawText) {
   return false;
 }
 
+function messageLooksLikeAcuteMedicalEmergency(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return messageDescribesAcuteSymptomWorsening(rawText);
+}
+
 function textMatchesMedicalEmergency(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeAcuteMedicalEmergency(rawText)) return true;
   if (shouldSkipMedicalEmergencyDetectionForMessage(rawText)) return false;
   return rawTextMatchesCriticalEmergencyPhrases(rawText);
 }
@@ -1285,6 +1291,7 @@ function messageLooksLikeAmbiguousUrgency(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   if (textMatchesMedicalEmergency(rawText)) return false;
+  if (messageLooksLikeAcuteMedicalEmergency(rawText)) return false;
   if (messageConfirmsMedicalEmergencyFromClarification(rawText)) return false;
   for (const phrase of AMBIGUOUS_URGENCY_NORMALIZED_SUBSTRINGS) {
     if (normalized.includes(phrase)) return true;
@@ -5576,8 +5583,25 @@ function messageLooksLikeGenericInstitutionHealthInsurance(rawText) {
   );
 }
 
-function buildGenericInstitutionHealthInsuranceReply() {
-  return `No tengo cargada en este chat la cobertura de esa obra social institucional. ${MISSING_INFORMATION_CALL_OFFICE_MESSAGE}`;
+function buildGenericInstitutionHealthInsuranceReply(lastSede = null) {
+  const cityClause =
+    lastSede && typeof lastSede.displayName === 'string' && lastSede.displayName.trim().length > 0
+      ? ` en ${lastSede.displayName}`
+      : '';
+  return `No tengo cargada en este chat si atendemos con esa obra social ni si tiene plus${cityClause}. ${MISSING_INFORMATION_CALL_OFFICE_MESSAGE}`;
+}
+
+function collapseRedundantPatientQuestionIntents(intents, options = {}) {
+  let collapsed = [...(intents || [])];
+  if (options.isGenericInstitutionHealthInsurance) {
+    if (
+      collapsed.includes('HEALTH_INSURANCE_ACCEPTANCE') &&
+      collapsed.includes('HEALTH_INSURANCE_PLUS')
+    ) {
+      collapsed = collapsed.filter((intent) => intent !== 'HEALTH_INSURANCE_PLUS');
+    }
+  }
+  return orderPatientQuestionIntents(collapsed);
 }
 
 function messageLooksLikeMultiQuestionPatientInquiry(rawText) {
@@ -5825,10 +5849,7 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
         }
         return priceReplies.filter(Boolean).join(' ');
       }
-      if (intent === 'HEALTH_INSURANCE_PLUS') {
-        return `Para confirmar si esa cobertura tiene plus en ${lastSede.displayName}, comunicate al consultorio; no la tengo cargada en este chat.`;
-      }
-      return buildGenericInstitutionHealthInsuranceReply();
+      return buildGenericInstitutionHealthInsuranceReply(lastSede);
     }
   }
 
@@ -5934,6 +5955,7 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
       intents = orderPatientQuestionIntents([...new Set([...intents, ...openAiIntents])]);
     }
   }
+  intents = collapseRedundantPatientQuestionIntents(intents, { isGenericInstitutionHealthInsurance });
   if (intents.length === 0) return false;
 
   const replyContext = {
@@ -5947,6 +5969,7 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
 
   const replies = [];
   const seenReplyTexts = new Set();
+  const seenReplyNormalizedKeys = new Set();
   if (
     messageDescribesChronicOrQualifiedBreathingSymptom(bodyText) &&
     !messageDescribesAcuteSymptomWorsening(bodyText)
@@ -5962,6 +5985,23 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     if (typeof reply !== 'string') continue;
     const trimmedReply = reply.trim();
     if (!trimmedReply || seenReplyTexts.has(trimmedReply)) continue;
+    const normalizedReplyKey = normalizeForMatch(trimmedReply)
+      .replace(/[!?.,;:]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (
+      normalizedReplyKey &&
+      (normalizedReplyKey.includes('consultorio') || normalizedReplyKey.includes('cobertura')) &&
+      seenReplyNormalizedKeys.has('generic_institution_handoff')
+    ) {
+      continue;
+    }
+    if (
+      isGenericInstitutionHealthInsurance &&
+      (intent === 'HEALTH_INSURANCE_ACCEPTANCE' || intent === 'HEALTH_INSURANCE_PLUS')
+    ) {
+      seenReplyNormalizedKeys.add('generic_institution_handoff');
+    }
     seenReplyTexts.add(trimmedReply);
     replies.push(trimmedReply);
   }
@@ -5990,6 +6030,7 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     userMessage: bodyText,
     replyContext: 'multi_question_patient_inquiry',
     suppressBookingLinkOffer: isGenericInstitutionHealthInsurance,
+    skipHumanization: true,
   });
 }
 
@@ -12847,6 +12888,7 @@ async function deliverSequentialPatientTextMessages(
       userMessage: deliveryOptions.userMessage || '',
       replyContext: deliveryOptions.replyContext || 'multi_reply',
       suppressBookingLinkOffer: deliveryOptions.suppressBookingLinkOffer,
+      skipHumanization: deliveryOptions.skipHumanization,
       conversationContext: buildIntentRoutingOpenAiContext(nextState),
     });
     const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedText, profileDisplayName, nextState);
