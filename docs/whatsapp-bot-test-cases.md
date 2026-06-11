@@ -369,6 +369,17 @@
 - Staleness: ignorar mensajes muy viejos o fuera de orden (timestamp vs `lastInboundMessageAtMs`)
 - Rate limiting por usuario: cooldown corto para mensajes de bajo signal (evitar spam)
 
+## Pediatría + dermatitis + IOSCOR + test + total (no mezclar FAQ inventada)
+- “Hola, es para mi hija de 4 años. Somos de Corrientes. Tiene dermatitis desde bebé, IOSCOR nos cubre. ¿Atiende niños? ¿Hace test de alergia? ¿Cuánto sale todo junto?”
+  - **No** responder orden de consulta, medios de pago ni autorización si no los preguntó.
+  - **Sí**: pediatría + dermatitis + test de alergia + cobertura IOSCOR + orientación de costo total (evaluación previa para alergia).
+
+## Mensaje rico con ciudad (no debe quedarse solo en sede)
+- “Hola, soy de Resistencia, tengo Swiss Medical, hace 8 años congestionado… neumonólogo pidió espirometría. ¿La hacen? ¿Cuánto me saldría en total con la consulta? ¿Tengo que ir en ayunas?”
+  - **No** responder solo “Sí, el Dr. atiende en Resistencia. ¿En qué te puedo ayudar?”.
+  - **Sí**: empatía por síntomas crónicos + confirma espirometría + cobertura Swiss + total aproximado + preparación (sin inventar ayunas).
+  - El handler de declaración de ciudad (`tryHandleSedeCityDeclaration`) debe ceder si el mensaje tiene varias preguntas o temas clínicos/administrativos.
+
 ## Memoria de conversación — reinicio por inactividad
 - Usuario eligió sede/OS ayer y hoy escribe de nuevo (sin mensajes en **4 h** por defecto)
   - El estado guardado (sede, link, obra social, etc.) se **borra**; la charla arranca de cero con saludo si corresponde.
