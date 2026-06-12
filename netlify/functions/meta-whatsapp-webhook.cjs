@@ -4058,20 +4058,6 @@ async function buildHealthInsuranceCoverageLineForSede(sedeEntry, healthInsuranc
     }
     return `En ${sedeEntry.displayName} trabajamos con ${canonicalHealthInsuranceName} sin plus.`;
   }
-  const alternateCityEntry = await findPrimaryAcceptedCityEntryForHealthInsurance(
-    canonicalHealthInsuranceName,
-    sedeEntry.displayName
-  );
-  if (alternateCityEntry) {
-    const alternateRule = await lookupPlusRule(alternateCityEntry.displayName, canonicalHealthInsuranceName);
-    if (alternateRule && alternateRule.isAccepted && alternateRule.hasPlus) {
-      const plusFormatted = formatArsAmount(alternateRule.plusAmountArs);
-      if (plusFormatted) {
-        return `En ${sedeEntry.displayName} no trabajamos con ${canonicalHealthInsuranceName}. En ${alternateCityEntry.displayName} sí, con plus de $${plusFormatted}.`;
-      }
-    }
-    return `En ${sedeEntry.displayName} no trabajamos con ${canonicalHealthInsuranceName}. En ${alternateCityEntry.displayName} sí trabajamos.`;
-  }
   return `En ${sedeEntry.displayName} no trabajamos con ${canonicalHealthInsuranceName}.`;
 }
 
@@ -6242,7 +6228,15 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
     }
     case 'STUDY_AVAILABILITY': {
       const studyType = await resolveStudyTypeFromMessage(fullText, priorState, { profileDisplayName });
-      if (!studyType) return null;
+      if (!studyType) {
+        if (messageAsksAboutSameDayStudies(fullText)) {
+          return SAME_DAY_STUDIES_MESSAGE;
+        }
+        if (messageAsksWhetherDoctorPerformsStudy(fullText) || messageMatchesStudiesTopic(fullText)) {
+          return buildGenericAllergyTestAvailabilityReply(priorState, fullText, { lastSede });
+        }
+        return null;
+      }
       return buildStudyAvailabilityPrimaryReply(studyType, priorState, { sedeEntry: lastSede });
     }
     case 'CONSULTATION_PRICE':
@@ -6383,6 +6377,13 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     }
     seenReplyTexts.add(trimmedReply);
     replies.push(trimmedReply);
+  }
+  if (messageAsksAboutSameDayStudies(bodyText)) {
+    const sameDayReply = stripDuplicatePatientReplyPrefix(SAME_DAY_STUDIES_MESSAGE, seenReplyTexts);
+    if (sameDayReply && !seenReplyTexts.has(sameDayReply)) {
+      seenReplyTexts.add(sameDayReply);
+      replies.push(sameDayReply);
+    }
   }
   if (replies.length === 0) return false;
 
@@ -13370,6 +13371,19 @@ function stripDuplicatePatientReplyPrefix(replyText, seenReplyTexts) {
   return trimmedReply;
 }
 
+function deduplicatePatientOrchestratedReplies(replies) {
+  const seenReplyTexts = new Set();
+  const deduped = [];
+  for (const reply of replies || []) {
+    if (typeof reply !== 'string') continue;
+    let trimmedReply = stripDuplicatePatientReplyPrefix(reply.trim(), seenReplyTexts);
+    if (!trimmedReply || seenReplyTexts.has(trimmedReply)) continue;
+    seenReplyTexts.add(trimmedReply);
+    deduped.push(trimmedReply);
+  }
+  return deduped;
+}
+
 async function deliverSequentialPatientTextMessages(
   from,
   messageTexts,
@@ -13451,10 +13465,14 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
   }
 
   const studyType = await resolveStudyTypeFromMessage(rawText, priorState);
-  if (studyType && messageAsksWhetherDoctorPerformsStudyInMessage(rawText)) {
-    replies.push(
-      buildStudyAvailabilityPrimaryReply(studyType, enrichedState, { sedeEntry: lastSede })
-    );
+  if (messageAsksWhetherDoctorPerformsStudyInMessage(rawText)) {
+    if (studyType) {
+      replies.push(
+        buildStudyAvailabilityPrimaryReply(studyType, enrichedState, { sedeEntry: lastSede })
+      );
+    } else if (messageMatchesStudiesTopic(rawText)) {
+      replies.push(buildGenericAllergyTestAvailabilityReply(enrichedState, rawText, { lastSede }));
+    }
   }
 
   if (messageAsksCompleteOrTotalCost(rawText) && studyType && healthInsuranceName) {
@@ -13496,7 +13514,10 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
               healthInsuranceName,
               lastSede.displayName
             )) || lastSede;
-      if (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) {
+      if (
+        (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) &&
+        (messageLooksLikeAnyPriceQuestion(rawText) || messageAsksCompleteOrTotalCost(rawText))
+      ) {
         replies.push(buildAllergyTestRequiresEvaluationPriceReply(lastSede));
       } else if (isSpirometryStudyType(studyType) && messageLooksLikeSpirometryPriceOnlyInquiry(rawText, studyType)) {
         replies.push(buildSpirometryStandalonePriceReply(priorState, rawText, lastSede));
@@ -13543,7 +13564,11 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
     }
   }
 
-  return replies;
+  if (messageAsksAboutSameDayStudies(rawText)) {
+    replies.push(SAME_DAY_STUDIES_MESSAGE);
+  }
+
+  return deduplicatePatientOrchestratedReplies(replies);
 }
 
 async function buildRichPatientIntakeReplies(priorState, rawText, lastSede, healthInsuranceName) {
@@ -13618,6 +13643,7 @@ async function tryHandleComplexClinicalInquiry(from, bodyText, priorState, profi
     userMessage: bodyText,
     replyContext: 'complex_clinical_inquiry',
     suppressBookingLinkOffer: isReferralOnlySedeEntry(lastSede),
+    skipHumanization: true,
   });
 }
 
@@ -13944,9 +13970,6 @@ function messageAsksWhatToBringForConsultation(rawText) {
 function messageAsksAboutSameDayStudies(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  const mentionsMultipleStudies =
-    (normalized.includes('test') || normalized.includes('prick') || normalized.includes('alerg')) &&
-    normalized.includes('espirometr');
   const asksSameDay =
     normalized.includes('mismo dia') ||
     normalized.includes('mismo día') ||
@@ -13955,7 +13978,17 @@ function messageAsksAboutSameDayStudies(rawText) {
     normalized.includes('misma visita') ||
     normalized.includes('misma consulta') ||
     normalized.includes('en una sola');
-  return mentionsMultipleStudies && asksSameDay;
+  if (!asksSameDay) return false;
+  const mentionsMultipleStudies =
+    (normalized.includes('test') || normalized.includes('prick') || normalized.includes('alerg')) &&
+    normalized.includes('espirometr');
+  if (mentionsMultipleStudies) return true;
+  return (
+    normalized.includes('estudio') ||
+    normalized.includes('estudios') ||
+    normalized.includes('test') ||
+    normalized.includes('prick')
+  );
 }
 
 const PATIENT_REPLY_TOPIC_ORDER = [
@@ -14283,6 +14316,7 @@ async function tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, pr
     userMessage: bodyText,
     replyContext: 'patient_topics_orchestrator',
     suppressBookingLinkOffer: false,
+    skipHumanization: true,
   });
 }
 
@@ -14447,6 +14481,7 @@ async function tryHandlePatientContextCorrection(from, bodyText, priorState, pro
       }, {
         userMessage: bodyText,
         replyContext: 'patient_context_correction',
+        skipHumanization: true,
       });
     }
   }
@@ -14771,6 +14806,7 @@ async function tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, pro
     userMessage: bodyText,
     replyContext: 'rich_patient_intake',
     suppressBookingLinkOffer: false,
+    skipHumanization: true,
   });
 }
 
