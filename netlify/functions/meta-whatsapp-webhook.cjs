@@ -731,8 +731,106 @@ function messageIsAcknowledgement(rawText) {
     .trim();
   if (normalized.length === 0) return false;
   // Short acknowledgements that often come after a helpful answer.
-  if (/^(bueno|ok|oka|dale|listo|perfecto|genial|gracias|joya|bien)$/.test(normalized)) return true;
-  return false;
+  if (/^(bueno|ok|oka|okey|okay|dale|listo|perfecto|genial|gracias|joya|bien)$/.test(normalized)) {
+    return true;
+  }
+  return messageLooksLikeUnderstandingAcknowledgement(rawText);
+}
+
+function messageLooksLikeUnderstandingAcknowledgement(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeBookingIntent(rawText) || messageLooksLikeAnyPriceQuestion(rawText)) {
+    return false;
+  }
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const wordCount = normalized.split(' ').filter(Boolean).length;
+  if (wordCount > 6) return false;
+  const hasUnderstanding =
+    normalized.includes('entiendo') ||
+    normalized.includes('entendido') ||
+    normalized.includes('comprendo') ||
+    normalized === 'claro' ||
+    normalized.startsWith('claro ');
+  const hasClosing =
+    normalized.includes('ok') ||
+    normalized.includes('okey') ||
+    normalized.includes('okay') ||
+    normalized.includes('dale') ||
+    normalized.includes('listo') ||
+    normalized.includes('bueno') ||
+    normalized.includes('bien') ||
+    normalized.includes('genial') ||
+    normalized.includes('perfecto');
+  return hasUnderstanding && (hasClosing || wordCount <= 2);
+}
+
+function priorStateRecentlyExplainedConsultationBeforeStudy(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '';
+  if (!lastBotReplyText.trim()) return false;
+  const normalized = normalizeForMatch(lastBotReplyText);
+  const mentionsConsultationFirst =
+    normalized.includes('consulta de evaluacion') ||
+    normalized.includes('consulta previa') ||
+    normalized.includes('primero hay consulta') ||
+    normalized.includes('primero hace falta') ||
+    normalized.includes('consulta para evaluar') ||
+    normalized.includes('no siempre es necesario') ||
+    normalized.includes('no siempre hace falta');
+  if (!mentionsConsultationFirst) return false;
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  if (
+    Number.isFinite(lastBotReplyAtMs) &&
+    Date.now() - lastBotReplyAtMs <= STUDY_PRICE_HEALTH_INSURANCE_WINDOW_MS
+  ) {
+    return true;
+  }
+  return stateHasRecentStudyPriceContext(priorState);
+}
+
+async function tryHandleStudyGuidanceAcknowledgementFollowUp(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (!messageIsAcknowledgement(bodyText)) return false;
+  if (!priorStateRecentlyExplainedConsultationBeforeStudy(priorState)) return false;
+  if (messageLooksLikeBookingIntent(bodyText) || messageExplicitlyRequestsBookingLink(bodyText)) {
+    return false;
+  }
+
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  const reply =
+    lastSede && !isReferralOnlySedeEntry(lastSede)
+      ? `¡Genial! El próximo paso es agendar la consulta de evaluación. ${buildMicroCommitmentMessage()}`
+      : '¡Genial! El próximo paso es la consulta de evaluación. Cualquier duda, escribime.';
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(reply, profileDisplayName, priorState);
+  const statePatch = {
+    ...(wrapped.nextStatePatch || {}),
+    ...buildLastBotReplyStatePatch(wrapped.messageText),
+    lastBotReplyAtMs: Date.now(),
+    state: undefined,
+    awaitingStudyPriceFollowUpAtMs: undefined,
+    awaitingStudyTypeForPriceAtMs: undefined,
+    ...(lastSede && !isReferralOnlySedeEntry(lastSede)
+      ? {
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          ...buildAwaitingLinkConfirmationState(lastSede, 'after_study_guidance_acknowledgement'),
+        }
+      : {}),
+  };
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, statePatch)
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
 }
 
 function messageIsGreeting(rawText) {
@@ -2083,8 +2181,80 @@ function priorStateLooksLikeRecentPriceOrPlusReply(priorState) {
   );
 }
 
-function buildPriceObjectionEmpathyReply() {
+function buildPriceObjectionEmpathyReply(rawText = '') {
+  const normalized = normalizeForMatch(rawText);
+  const mentionsLongSuffering =
+    normalized.includes('hace anos') ||
+    normalized.includes('hace años') ||
+    normalized.includes('tantos anos') ||
+    normalized.includes('tantos años') ||
+    messageAlreadyStatesSymptomDuration(rawText);
+  if (mentionsLongSuffering) {
+    return 'Entiendo que es un monto elevado y puede ser frustrante, sobre todo si llevás tiempo con molestias.';
+  }
   return 'Entiendo que es un monto elevado y puede ser frustrante.';
+}
+
+function buildPriceObjectionValueAndExperienceReply(rawText = '') {
+  const normalized = normalizeForMatch(rawText);
+  const mentionsLongSuffering =
+    normalized.includes('hace anos') ||
+    normalized.includes('hace años') ||
+    normalized.includes('tantos anos') ||
+    normalized.includes('tantos años') ||
+    messageAlreadyStatesSymptomDuration(rawText);
+  const qualityOfLifePart = mentionsLongSuffering
+    ? 'Llevar años así pesa mucho: muchas veces invertir en una buena evaluación rinde más que seguir resignándose a una mala calidad de vida.'
+    : 'Muchas veces invertir en una buena evaluación rinde más que seguir con molestias que limitan el día a día.';
+  return `El Dr. Liber Acosta es alergista e inmunólogo con más de 20 años en el NEA; en consulta evalúa cada caso en profundidad para armar un plan que funcione. ${qualityOfLifePart}`;
+}
+
+function buildPriceObjectionBookingOfferReply(priorState) {
+  const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  if (lastSede && !isReferralOnlySedeEntry(lastSede)) {
+    return `Si querés, te ayudo a reservar turno en ${lastSede.displayName}. ${buildMicroCommitmentMessage()}`;
+  }
+  return `Si querés, te ayudo a ver turnos en la agenda. ${buildMicroCommitmentMessage()}`;
+}
+
+function messageLooksLikeEscalatedPriceObjectionFollowUp(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('estoy enojad') ||
+    normalized.includes('estoy molest') ||
+    normalized.includes('me enoja') ||
+    normalized.includes('me molesta mucho') ||
+    normalized.includes('que bronca') ||
+    normalized.includes('qué bronca') ||
+    normalized.includes('indignad') ||
+    normalized.includes('furios') ||
+    normalized.includes('estoy hart') ||
+    normalized.includes('no puede ser') ||
+    normalized.includes('que barbaridad') ||
+    normalized.includes('qué barbaridad') ||
+    normalized.includes('un robo') ||
+    normalized.includes('ladron') ||
+    normalized.includes('estafa') ||
+    normalized.includes('abuso') ||
+    normalized.includes('pesimo') ||
+    normalized.includes('pésimo') ||
+    normalized.includes('malisimo') ||
+    normalized.includes('malísimo')
+  );
+}
+
+function priorStateAlreadyHandledPriceObjectionRecently(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastHandledAtMs = Number(priorState.lastPriceObjectionHandledAtMs);
+  return (
+    Number.isFinite(lastHandledAtMs) &&
+    Date.now() - lastHandledAtMs <= PRICE_OBJECTION_CONTEXT_WINDOW_MS
+  );
 }
 
 function buildPriceObjectionPersonalAssistanceFollowUpReply(priorState) {
@@ -2137,15 +2307,36 @@ function messageAsksWhatOptionsOrHelpIsAvailable(rawText) {
 
 async function tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName) {
   if (!priorStateLooksLikeRecentPriceObjectionContext(priorState)) return false;
+  if (messageLooksLikeEscalatedPriceObjectionFollowUp(bodyText)) {
+    return deliverSequentialPatientTextMessages(
+      from,
+      [buildPriceObjectionPersonalAssistanceFollowUpReply(priorState)],
+      priorState,
+      profileDisplayName,
+      {
+        lastPriceObjectionFollowUpAtMs: Date.now(),
+        bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      },
+      {
+        userMessage: bodyText,
+        replyContext: 'price_objection_escalation',
+        skipHumanization: true,
+      }
+    );
+  }
   if (!messageAsksWhatOptionsOrHelpIsAvailable(bodyText)) return false;
   return deliverSequentialPatientTextMessages(
     from,
-    [buildPriceObjectionPersonalAssistanceFollowUpReply(priorState)],
+    [buildPriceObjectionBookingOfferReply(priorState)],
     priorState,
     profileDisplayName,
     {
       lastPriceObjectionFollowUpAtMs: Date.now(),
-      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'price_objection',
+      skipHumanization: true,
     }
   );
 }
@@ -2917,6 +3108,7 @@ function messageStatesPrivatePayWithoutHealthInsurance(rawText) {
 
 function messageLooksLikePrivatePayOrHealthInsuranceAmbiguity(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageNamesExplicitHealthInsurance(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -3011,6 +3203,7 @@ async function tryResolvePrivatePayWithoutHealthInsuranceWithOpenAi(userMessage,
 
 async function resolvePrivatePayWithoutHealthInsuranceFromMessage(userMessage, options = {}) {
   if (!userMessage || typeof userMessage !== 'string') return false;
+  if (messageNamesExplicitHealthInsurance(userMessage)) return false;
   if (messageExplicitlyAsksPrivateConsultationPrice(userMessage)) return true;
   const normalized = normalizePriceTyposInText(userMessage)
     .replace(/[!?.,;:]+/g, ' ')
@@ -5617,6 +5810,10 @@ function isKnownNotAcceptedHealthInsurance(healthInsuranceName) {
   return KNOWN_NOT_ACCEPTED_HEALTH_INSURANCE_CANONICAL_NAMES.includes(canonicalName);
 }
 
+function messageNamesExplicitHealthInsurance(rawText) {
+  return Boolean(tryExtractHealthInsuranceName(rawText) || tryExtractHealthInsuranceNameFromPhrase(rawText));
+}
+
 function tryExtractHealthInsuranceNameFromPhrase(rawText) {
   if (!rawText || typeof rawText !== 'string') return null;
   const normalized = normalizeForMatch(rawText);
@@ -5624,6 +5821,7 @@ function tryExtractHealthInsuranceNameFromPhrase(rawText) {
     return 'PAMI';
   }
   const phrasePatterns = [
+    /(?:cobertura de|cobertura con|aceptan|trabajan con)\s+([a-z0-9][a-z0-9\s.-]{1,40})/,
     /(?:tengo|tiene|tenes|tenés)\s+(?:la\s+)?(?:obra social|prepaga)\s+([a-z0-9][a-z0-9\s.-]{1,40})/,
     /(?:obra social|prepaga)\s+(?:es\s+)?([a-z0-9][a-z0-9\s.-]{1,40})/,
     /(?:soy de|tengo)\s+([a-z0-9][a-z0-9\s.-]{1,30})/,
@@ -5640,6 +5838,8 @@ function tryExtractHealthInsuranceNameFromPhrase(rawText) {
 }
 
 async function resolveHealthInsuranceNameFromMessage(bodyText, priorState, options = {}) {
+  const fromRules = tryExtractHealthInsuranceName(bodyText) || tryExtractHealthInsuranceNameFromPhrase(bodyText);
+  if (fromRules) return normalizeHealthInsuranceCanonicalName(fromRules);
   if (
     await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
       priorState,
@@ -5648,8 +5848,6 @@ async function resolveHealthInsuranceNameFromMessage(bodyText, priorState, optio
   ) {
     return null;
   }
-  const fromRules = tryExtractHealthInsuranceName(bodyText) || tryExtractHealthInsuranceNameFromPhrase(bodyText);
-  if (fromRules) return normalizeHealthInsuranceCanonicalName(fromRules);
   if (!messageLooksLikeGenericInstitutionHealthInsurance(bodyText)) {
     const fromSheets = await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText);
     if (fromSheets) return fromSheets;
@@ -7630,16 +7828,51 @@ async function tryHandlePatientDissatisfactionWithOpenAi(
     }));
   if (!isDissatisfaction) return false;
 
-  if (isPriceObjectionAfterQuote) {
+  if (
+    isPriceObjectionAfterQuote &&
+    priorStateAlreadyHandledPriceObjectionRecently(priorState) &&
+    messageLooksLikeEscalatedPriceObjectionFollowUp(bodyText)
+  ) {
     return deliverSequentialPatientTextMessages(
       from,
-      [buildPriceObjectionEmpathyReply(), buildPriceObjectionPersonalAssistanceFollowUpReply(priorState)],
+      [buildPriceObjectionPersonalAssistanceFollowUpReply(priorState)],
+      priorState,
+      profileDisplayName,
+      {
+        lastPriceObjectionFollowUpAtMs: Date.now(),
+        lastPatientDissatisfactionAtMs: Date.now(),
+        bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      },
+      {
+        userMessage: bodyText,
+        replyContext: 'price_objection_escalation',
+        skipHumanization: true,
+      }
+    );
+  }
+
+  if (isPriceObjectionAfterQuote && !priorStateAlreadyHandledPriceObjectionRecently(priorState)) {
+    const lastSede = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+    return deliverSequentialPatientTextMessages(
+      from,
+      [
+        buildPriceObjectionEmpathyReply(bodyText),
+        buildPriceObjectionValueAndExperienceReply(bodyText),
+        buildPriceObjectionBookingOfferReply(priorState),
+      ],
       priorState,
       profileDisplayName,
       {
         lastPatientDissatisfactionAtMs: Date.now(),
         lastPriceObjectionHandledAtMs: Date.now(),
-        bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+        ...(lastSede && !isReferralOnlySedeEntry(lastSede)
+          ? buildAwaitingLinkConfirmationState(lastSede, 'after_price_objection')
+          : {}),
+      },
+      {
+        userMessage: bodyText,
+        replyContext: 'price_objection',
+        skipHumanization: true,
       }
     );
   }
@@ -10966,6 +11199,10 @@ async function tryHandleConversationalContinuationWithOpenAi(
   if (!getOpenAiApiKey()) return false;
   if (!stateHasActiveConversationalThread(priorState)) return false;
 
+  if (await tryHandleStudyGuidanceAcknowledgementFollowUp(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+
   if (await tryHandlePriceObjectionFollowUpInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -11013,6 +11250,9 @@ async function tryHandleConversationalContinuationWithOpenAi(
     return sendHealthInsurancePlusQuestionReply(from, bodyText, priorState, profileDisplayName);
   }
   if (continuation === 'STUDY_PRICE') {
+    if (messageIsAcknowledgement(bodyText) && priorStateRecentlyExplainedConsultationBeforeStudy(priorState)) {
+      return tryHandleStudyGuidanceAcknowledgementFollowUp(from, bodyText, priorState, profileDisplayName);
+    }
     return sendStudyPriceInformationReply(from, bodyText, priorState, profileDisplayName);
   }
   if (continuation === 'CONSULTATION_PRICE') {
@@ -12686,13 +12926,14 @@ function flattenStudiesReplyPayload(studiesReply) {
   return parts.join(' ');
 }
 
-function buildGenericAllergyTestAvailabilitySplitReply(priorState, rawText, context = {}) {
+function buildGenericAllergyTestAvailabilityReply(priorState, rawText, context = {}) {
   const sedeForReply = context.lastSede || resolveKnownSedeForConversationContext(priorState);
   const cityClause = sedeForReply ? ` en ${sedeForReply.displayName}` : '';
-  return {
-    primaryReply: `Sí, el Dr. realiza tests de alergia (prick test), espirometría y otros estudios según el caso${cityClause}.`,
-    followUpReply: ALLERGY_TEST_CONSULTATION_FIRST_AVAILABILITY_MESSAGE,
-  };
+  return (
+    `Sí, el Dr. realiza tests de alergia (prick test), espirometría y otros estudios según el caso${cityClause}. ` +
+    'Primero hay consulta de evaluación para ver si corresponde hacer algún test; no siempre es necesario. ' +
+    'Si necesitás solo espirometría, tiene valor particular que te informamos cuando lo indiques.'
+  );
 }
 
 async function tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, profileDisplayName) {
@@ -12703,7 +12944,7 @@ async function tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, pro
     !isSpirometryStudyType(studyType) ||
     messageLooksLikeBareAllergyOrGenericTestInquiry(bodyText);
   const studiesReply = shouldUseGenericAllergyReply
-    ? buildGenericAllergyTestAvailabilitySplitReply(priorState, bodyText, { lastSede })
+    ? buildGenericAllergyTestAvailabilityReply(priorState, bodyText, { lastSede })
     : await buildStudyAvailabilitySplitReply(studyType, priorState, bodyText, { lastSede });
   return deliverStudiesInformationReply(
     from,
@@ -12734,10 +12975,9 @@ async function buildStudyAvailabilitySplitReply(studyType, priorState, rawText, 
     !messageAsksAboutStudyPrice(rawText) &&
     !messageLooksLikeAnyPriceQuestion(rawText)
   ) {
-    return {
-      primaryReply,
-      followUpReply: ALLERGY_TEST_CONSULTATION_FIRST_AVAILABILITY_MESSAGE,
-    };
+    const studyWithArticle = buildStudyTypeWithArticle(studyType);
+    const sedeClause = sedeForReply ? ` en ${sedeForReply.displayName}` : '';
+    return `Sí, el Dr. realiza ${studyWithArticle}${sedeClause}. Primero hay consulta de evaluación para ver si corresponde; no siempre hace falta hacer tests.`;
   }
   if (!knownHealthInsuranceName && !sedeForReply) {
     return {
@@ -13475,12 +13715,18 @@ async function buildClinicInformationBundleReplies(priorState, rawText, lastSede
   );
   const normalized = normalizeForMatch(rawText);
   const replies = [];
+  const resolvedHealthInsuranceName =
+    healthInsuranceName ||
+    normalizeHealthInsuranceCanonicalName(
+      tryExtractHealthInsuranceName(rawText) || tryExtractHealthInsuranceNameFromPhrase(rawText) || ''
+    ) ||
+    null;
   if (messageAsksAboutHealthInsuranceCoverage(rawText)) {
-    if (healthInsuranceName && lastSede) {
-      replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
-    } else if (healthInsuranceName) {
+    if (resolvedHealthInsuranceName && lastSede) {
+      replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, resolvedHealthInsuranceName));
+    } else if (resolvedHealthInsuranceName) {
       replies.push(
-        `¿Desde qué ciudad consultás? ${buildAskSedeMessage()} Así te confirmo la cobertura de ${healthInsuranceName}.`
+        `¿Desde qué ciudad consultás? ${buildAskSedeMessage()} Así te confirmo la cobertura de ${resolvedHealthInsuranceName}.`
       );
     } else {
       replies.push('¿Qué obra social/prepaga tenés? Te digo si la aceptamos.');
@@ -13518,9 +13764,14 @@ async function tryHandleClinicInformationBundleInquiry(from, bodyText, priorStat
     patientContext.statePatch
   );
   const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
-  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
+  let healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
     profileDisplayName,
   });
+  if (!healthInsuranceName && messageAsksAboutHealthInsuranceCoverage(bodyText)) {
+    const fromRules =
+      tryExtractHealthInsuranceName(bodyText) || tryExtractHealthInsuranceNameFromPhrase(bodyText);
+    if (fromRules) healthInsuranceName = normalizeHealthInsuranceCanonicalName(fromRules);
+  }
   const needsSedeForReply =
     (messageAsksAboutHealthInsuranceCoverage(bodyText) && healthInsuranceName) ||
     messageLooksLikePrivatePriceQuestion(bodyText) ||
@@ -17530,6 +17781,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleBookingPersonalAssistanceRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleStudyGuidanceAcknowledgementFollowUp(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleStudyPriceAffirmativeFollowUp(from, bodyText, priorState, profileDisplayName)) {
