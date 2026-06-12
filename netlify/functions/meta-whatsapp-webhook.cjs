@@ -4503,10 +4503,10 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
   }
   if (options.replyContext === 'combined_price_breakdown') {
     replyContextInstructions.push(
-      'Contexto: el paciente pidió particular, obra social/prepaga y precio del estudio en el mismo mensaje.',
-      'Mantené EXACTOS los tres bloques de precio del borrador (consulta particular, plus/cobertura de la prepaga, valor del estudio con cobertura).',
-      'No omitas ningún monto ni confundas espirometría sola ($40.000) con el estudio en consulta ($30.000).',
-      'Mencioná la ciudad/sede UNA sola vez al inicio si el borrador ya agrupa todo; no repitas "En Corrientes" en cada oración.'
+      'Contexto: el paciente pidió obra social/prepaga, consulta particular y precio de espirometría en el mismo mensaje.',
+      'Son tres respuestas separadas en orden: (1) plus y total con obra social + espirometría en consulta, (2) consulta particular, (3) espirometría sola sin consulta.',
+      'Mantené EXACTOS los montos del borrador. No confundas espirometría sola ($40.000) con la espirometría en consulta ($30.000).',
+      'No repitas la ciudad en cada mensaje si el borrador ya la omitió en el segundo o tercer bloque.'
     );
   }
   if (options.replyContext === 'patient_topics_orchestrator') {
@@ -10315,10 +10315,10 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
-  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
-  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -13166,11 +13166,12 @@ function buildAllergyTestRequiresEvaluationPriceReply(lastSede = null) {
   return ALLERGY_TEST_REQUIRES_EVALUATION_PRICE_MESSAGE;
 }
 
-function buildSpirometryStandalonePriceReply(priorState, rawText, lastSede = null) {
+function buildSpirometryStandalonePriceReply(priorState, rawText, lastSede = null, options = {}) {
   const sede = lastSede || resolveKnownSedeForConversationContext(priorState);
   const formattedAmount = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
   const cityPart = sede ? ` en ${sede.displayName}` : '';
-  let reply = `Si venís solo por espirometría${cityPart}, sale $${formattedAmount}.`;
+  const withoutConsultationClause = options.emphasizeWithoutConsultation ? ' sin consulta previa' : '';
+  let reply = `Si venís solo por espirometría${withoutConsultationClause}${cityPart}, sale $${formattedAmount}.`;
   const normalized = normalizeForMatch(rawText);
   if (
     normalized.includes('ya me atendi') ||
@@ -13978,31 +13979,6 @@ function stripRedundantSedeLabelFromPatientReply(replyText, sedeDisplayName) {
   result = result.replace(new RegExp(`^En\\s+${escapedCity}[,\\s:]+`, 'i'), '');
   result = result.replace(new RegExp(`\\s+en\\s+${escapedCity}(?=\\s|,|\\.|$)`, 'gi'), '');
   return result.trim().replace(/^[,:;\s]+/, '').trim();
-}
-
-function capitalizePatientReplySentenceStart(replyPart) {
-  if (!replyPart || typeof replyPart !== 'string') return '';
-  const trimmedPart = replyPart.trim();
-  if (!trimmedPart) return '';
-  return `${trimmedPart.charAt(0).toUpperCase()}${trimmedPart.slice(1)}`;
-}
-
-function joinPatientReplyDetailParts(cityName, detailParts) {
-  const cleanedParts = (detailParts || [])
-    .map((part) => (typeof part === 'string' ? part.trim() : ''))
-    .filter((part) => part.length > 0)
-    .map((part) => part.replace(/[.!?]+\s*$/, '').trim())
-    .filter((part) => part.length > 0)
-    .map((part, partIndex) => (partIndex === 0 ? part : capitalizePatientReplySentenceStart(part)));
-  if (cleanedParts.length === 0) return '';
-  if (cleanedParts.length === 1) {
-    const singlePart = cleanedParts[0];
-    if (/^en\s+/i.test(singlePart)) {
-      return `${singlePart}.`;
-    }
-    return `En ${cityName}: ${singlePart}.`;
-  }
-  return `En ${cityName}: ${cleanedParts.join('. ')}.`;
 }
 
 async function deliverSequentialPatientTextMessages(
@@ -15469,7 +15445,8 @@ function messageAsksObraSocialOrCoveragePrice(rawText) {
       normalized.includes('cuanto cuesta con') ||
       normalized.includes('con cobertura') ||
       normalized.includes('con prepaga') ||
-      normalized.includes('obra social'))
+      normalized.includes('obra social') ||
+      normalized.includes('con mi obra social'))
   ) {
     return true;
   }
@@ -15714,22 +15691,8 @@ async function buildStudyPriceLineForKnownCoverage(studyType, sedeEntry, healthI
   return `Con ${canonicalHealthInsuranceName} en ${sedeEntry.displayName}, ${studyWithArticle} en consulta sería $${formattedAmount} del estudio.`;
 }
 
-async function buildConsolidatedCombinedPriceBreakdownReply(
-  lastSede,
-  healthInsuranceName,
-  studyType,
-  rawText = ''
-) {
-  const cityName = lastSede.displayName;
-  const detailParts = [];
-  const warmPrefix = messageMentionsChildPatientContext(rawText)
-    ? 'Qué bueno que consulten antes, así van con una idea más clara. '
-    : '';
-
-  const privatePriceReply = await buildPrivatePriceReply(lastSede);
-  if (privatePriceReply) {
-    detailParts.push(stripRedundantSedeLabelFromPatientReply(privatePriceReply, cityName));
-  }
+async function buildTriplePriceBreakdownReplies(lastSede, healthInsuranceName, studyType, rawText = '') {
+  const replies = [];
 
   const coverageTotalReply = await buildCompleteCostTotalReply(
     lastSede,
@@ -15737,38 +15700,25 @@ async function buildConsolidatedCombinedPriceBreakdownReply(
     studyType,
     rawText
   );
-  const coveragePart = stripRedundantSedeLabelFromPatientReply(coverageTotalReply, cityName);
-  if (coveragePart) {
-    if (warmPrefix && coveragePart.startsWith(warmPrefix.trim())) {
-      detailParts.push(coveragePart.slice(warmPrefix.trim().length).trim());
-    } else {
-      detailParts.push(coveragePart);
-    }
+  if (coverageTotalReply && coverageTotalReply.trim()) {
+    replies.push(coverageTotalReply.trim());
+  }
+
+  const privatePriceReply = await buildPrivatePriceReply(lastSede);
+  if (privatePriceReply && privatePriceReply.trim()) {
+    replies.push(privatePriceReply.trim());
   }
 
   if (messageAsksStudyProcedurePrice(rawText) && isSpirometryStudyType(studyType)) {
-    const standaloneReply = buildSpirometryStandalonePriceReply(null, rawText, lastSede);
-    const standalonePart = stripRedundantSedeLabelFromPatientReply(standaloneReply, cityName);
-    if (standalonePart) {
-      detailParts.push(standalonePart);
+    const standaloneReply = buildSpirometryStandalonePriceReply(null, rawText, lastSede, {
+      emphasizeWithoutConsultation: true,
+    });
+    if (standaloneReply && standaloneReply.trim()) {
+      replies.push(standaloneReply.trim());
     }
   }
 
-  const consolidatedBody = joinPatientReplyDetailParts(cityName, detailParts);
-  if (!consolidatedBody) return '';
-  return warmPrefix && !consolidatedBody.startsWith(warmPrefix.trim())
-    ? `${warmPrefix}${consolidatedBody}`
-    : consolidatedBody;
-}
-
-async function buildTriplePriceBreakdownReplies(lastSede, healthInsuranceName, studyType, rawText = '') {
-  const consolidatedReply = await buildConsolidatedCombinedPriceBreakdownReply(
-    lastSede,
-    healthInsuranceName,
-    studyType,
-    rawText
-  );
-  return consolidatedReply ? [consolidatedReply] : [];
+  return replies;
 }
 
 async function sendCombinedConsultationAndStudyPriceReply(
@@ -15869,13 +15819,13 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
   if (await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (!messageShouldBypassSedeCityDeclaration(bodyText)) return false;
-  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
-    return true;
-  }
   if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -18164,6 +18114,9 @@ exports.handler = async (event) => {
           ) {
             continue;
           }
+          if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -18336,9 +18289,6 @@ exports.handler = async (event) => {
               updatedRecentIds,
             })
           ) {
-            continue;
-          }
-          if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
