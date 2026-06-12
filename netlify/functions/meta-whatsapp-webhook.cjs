@@ -1200,6 +1200,36 @@ function findSedeFromText(rawText) {
   return null;
 }
 
+function findAllSedeEntriesFromTextInOrder(rawText) {
+  if (!rawText || typeof rawText !== 'string') return [];
+  if (messageMentionsAmbiguousChacoRegion(rawText)) return [];
+  const normalized = normalizeForMatch(rawText);
+  const matches = [];
+  for (const entry of SEDE_ENTRIES) {
+    let earliestIndex = -1;
+    for (const keyword of entry.match) {
+      if (/^[12]$/.test(keyword)) continue;
+      const keyNorm = normalizeForMatch(keyword);
+      const index = normalized.indexOf(keyNorm);
+      if (index >= 0 && (earliestIndex < 0 || index < earliestIndex)) {
+        earliestIndex = index;
+      }
+    }
+    if (earliestIndex >= 0) {
+      matches.push({ entry, index: earliestIndex });
+    }
+  }
+  matches.sort((first, second) => first.index - second.index);
+  const seenDisplayNames = new Set();
+  const orderedEntries = [];
+  for (const match of matches) {
+    if (seenDisplayNames.has(match.entry.displayName)) continue;
+    seenDisplayNames.add(match.entry.displayName);
+    orderedEntries.push(match.entry);
+  }
+  return orderedEntries;
+}
+
 function messageLooksLikePossibleSedeTypoAnswer(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (
@@ -1773,8 +1803,64 @@ function messageLooksLikeClosingAcknowledgement(rawText) {
   );
 }
 
+function messageMentionsExistingBookingContext(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('ya saque turno') ||
+    normalized.includes('ya saqué turno') ||
+    normalized.includes('saque un turno') ||
+    normalized.includes('saqué un turno') ||
+    normalized.includes('saque turno') ||
+    normalized.includes('saqué turno') ||
+    normalized.includes('ya agende') ||
+    normalized.includes('ya agendé') ||
+    normalized.includes('ya reserve') ||
+    normalized.includes('ya reservé') ||
+    normalized.includes('ya guarde') ||
+    normalized.includes('ya guardé') ||
+    normalized.includes('ya tengo turno') ||
+    normalized.includes('sacado turno') ||
+    normalized.includes('reserve desde') ||
+    normalized.includes('reservé desde') ||
+    normalized.includes('desde la agenda') ||
+    normalized.includes('desde el link') ||
+    normalized.includes('desde calendly')
+  );
+}
+
+function messageAsksAboutExistingBookingScheduleRecall(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!messageMentionsExistingBookingContext(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const asksRecall =
+    normalized.includes('no recuerdo') ||
+    normalized.includes('no me acuerdo') ||
+    normalized.includes('olvide cuando') ||
+    normalized.includes('olvidé cuándo') ||
+    normalized.includes('olvide que dia') ||
+    normalized.includes('olvidé qué día') ||
+    normalized.includes('que dia era') ||
+    normalized.includes('qué día era') ||
+    normalized.includes('que dia es') ||
+    normalized.includes('qué día es') ||
+    normalized.includes('si era el') ||
+    normalized.includes('si es el') ||
+    (Boolean(extractWeekdayNameFromText(rawText)) && normalized.includes(' o '));
+  return asksRecall || (normalized.includes('turno') && normalized.includes('no recuerdo'));
+}
+
 function messageAsksToConfirmExistingBooking(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutExistingBookingScheduleRecall(rawText)) return true;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -1813,22 +1899,7 @@ function messageAsksToConfirmExistingBooking(rawText) {
     normalized.includes('confirmación de turno') ||
     ((normalized.includes('verificar') || normalized.includes('verificacion') || normalized.includes('verificación')) &&
       (normalized.includes('turno') || normalized.includes('reserva')));
-  const hasBookedContext =
-    normalized.includes('ya saque turno') ||
-    normalized.includes('ya saqué turno') ||
-    normalized.includes('ya agende') ||
-    normalized.includes('ya agendé') ||
-    normalized.includes('ya reserve') ||
-    normalized.includes('ya reservé') ||
-    normalized.includes('ya guarde') ||
-    normalized.includes('ya guardé') ||
-    normalized.includes('ya tengo turno') ||
-    normalized.includes('sacado turno') ||
-    normalized.includes('reserve desde') ||
-    normalized.includes('reservé desde') ||
-    normalized.includes('desde la agenda') ||
-    normalized.includes('desde el link') ||
-    normalized.includes('desde calendly');
+  const hasBookedContext = messageMentionsExistingBookingContext(rawText);
   if (asksConfirmationStatus) return true;
   if (asksConfirmation && (hasBookedContext || normalized.includes('turno') || normalized.includes('reserva'))) {
     return true;
@@ -4457,16 +4528,29 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'Mantené: un turno por persona, no reservar por chat, no confirmar horarios. Respetá plus/cobertura y precios del borrador.'
     );
   }
+  if (options.replyContext === 'spirometry_scheduling_inquiry') {
+    replyContextInstructions.push(
+      'Contexto: el paciente quiere espirometría en una sede con día u horario preferido.',
+      'Mantené que el Dr. realiza la espirometría. No confirmes horarios puntuales ni disponibilidad del lunes/hora indicados.',
+      'Mantené el link de agenda si el borrador lo incluye.'
+    );
+  }
   if (options.replyContext === 'reschedule_booking') {
     replyContextInstructions.push(
       'Contexto: el paciente ya tiene turno y quiere reprogramar, cambiar de día u horario, o cancelar.',
       'Mantené EXACTOS los teléfonos de sede del borrador. No ofrezcas link de agenda ni confirmes horarios nuevos por chat.'
     );
   }
+  if (options.replyContext === 'change_booking_sede') {
+    replyContextInstructions.push(
+      'Contexto: el paciente ya tiene turno en una sede y quiere atenderse en otra (cambio de sede).',
+      'Mantené EXACTOS los teléfonos de sede del borrador. No ofrezcas link de agenda ni generes un turno nuevo por chat.'
+    );
+  }
   if (options.replyContext === 'confirm_existing_booking') {
     replyContextInstructions.push(
-      'Contexto: el paciente ya reservó turno y pide confirmar o verificar la reserva.',
-      'Mantené EXACTOS los teléfonos de sede del borrador. No confirmes horarios ni datos de turno por chat.'
+      'Contexto: el paciente ya reservó turno y pide confirmar, verificar la reserva, o no recuerda el día (ej. jueves o viernes).',
+      'Mantené EXACTOS los teléfonos de sede del borrador. No consultes la agenda ni confirmes horarios por chat; derivá al teléfono de la sede.'
     );
   }
   if (options.replyContext === 'chaco_sede_disambiguation') {
@@ -4923,6 +5007,34 @@ function extractRelativeDayLabelFromText(rawText) {
   if (normalized.includes('manana') || normalized.includes('mañana')) return 'mañana';
   if (normalized.includes('hoy')) return 'hoy';
   return null;
+}
+
+function messagePrioritizesBookingOverHealthInsuranceInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksToChangeBookingSede(rawText)) return false;
+  if (messageLooksLikeSpirometrySchedulingInquiry(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  const hasBookingSignal =
+    messageLooksLikeBookingIntent(rawText) ||
+    messageLooksLikeSpecificSlotBookingRequest(rawText) ||
+    messageExplicitlyRequestsBookingLink(rawText);
+  if (!hasBookingSignal) return false;
+  const asksHealthInsuranceCoverageOnly =
+    (normalized.includes('cuanto sale con') ||
+      normalized.includes('cuanto cuesta con') ||
+      normalized.includes('aceptan') ||
+      normalized.includes('trabajan con') ||
+      normalized.includes('tienen plus') ||
+      normalized.includes('hay plus') ||
+      normalized.includes('cual es el plus')) &&
+    !/\b(turno|turnos|agendar|reservar|cita)\b/.test(normalized);
+  if (asksHealthInsuranceCoverageOnly) return false;
+  if (findSedeFromText(rawText)) return true;
+  const mentionsHealthInsurance =
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageStatesHealthInsuranceMembership(rawText) ||
+    Boolean(tryExtractHealthInsuranceName(rawText));
+  return mentionsHealthInsurance;
 }
 
 function messageLooksLikeSpecificSlotBookingRequest(rawText) {
@@ -6096,10 +6208,23 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
     return 'HEALTH_INSURANCE_PLUS';
   }
   if (
-    (segment.includes('atienden') || segment.includes('aceptan') || segment.includes('trabajan con')) &&
+    (segment.includes('atienden') ||
+      segment.includes('aceptan') ||
+      segment.includes('trabajan con') ||
+      segment.includes('cubre') ||
+      segment.includes('cubren')) &&
     hasHealthInsuranceContext
   ) {
     return 'HEALTH_INSURANCE_ACCEPTANCE';
+  }
+  if (
+    messageAsksAboutStandaloneSpirometryWithoutConsultation(fullText) &&
+    (segment.includes('sin consulta') ||
+      segment.includes('puedo hacer') ||
+      segment.includes('puede hacer') ||
+      segment.includes('hacerla sin'))
+  ) {
+    return 'STUDY_AVAILABILITY';
   }
   if (segment.includes('atienden') || segment.includes('atiende en') || segment.includes('atiende cerca')) {
     return 'SEDE_PRESENCE';
@@ -6227,7 +6352,8 @@ async function extractPatientQuestionIntentsWithOpenAi(userMessage, priorState, 
     'Leé el mensaje completo y devolvé SOLO JSON válido: { "intents": ["INTENT_1", "INTENT_2"] }',
     `Intents permitidos (en orden lógico de respuesta): ${PATIENT_QUESTION_INTENT_OPENAI_TOKENS.join(', ')}.`,
     'Reglas:',
-    '- Si pregunta si ACEPTAN/ATIENDEN con una obra social o prepaga → HEALTH_INSURANCE_ACCEPTANCE (no SEDE_PRESENCE).',
+    '- Si pregunta si ACEPTAN/ATIENDEN o si CUBRE una obra social o prepaga → HEALTH_INSURANCE_ACCEPTANCE (no SEDE_PRESENCE).',
+    '- Si pregunta ayuno o preparación del estudio → STUDY_PREPARATION.',
     '- Si pregunta por plus/coseguro/copago → HEALTH_INSURANCE_PLUS.',
     '- Si pregunta cuánto sale/cuesta consulta Y test/estudio juntos → CONSULTATION_AND_STUDY_PRICE.',
     '- Si pide SOLO espirometría sin consulta y pregunta precio → STANDALONE_SPIROMETRY_PRICE.',
@@ -6416,6 +6542,7 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
   if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText)) return false;
   if (messageStatesHealthInsuranceCoversConsultationButWantsOnlyStudy(bodyText)) return false;
   if (conversationAwaitingStandaloneStudyTypeForCoveredConsultationPrice(priorState)) return false;
+  if (messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) return false;
 
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
   const mergedState = mergeConversationStatePreservingGreeting(
@@ -6505,6 +6632,17 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     if (sameDayReply && !seenReplyTexts.has(sameDayReply)) {
       seenReplyTexts.add(sameDayReply);
       replies.push(sameDayReply);
+    }
+  }
+  if (
+    isStandaloneSpirometryWithoutConsultation &&
+    !shouldDeliverBookingLink &&
+    lastSede &&
+    !isReferralOnlySedeEntry(lastSede)
+  ) {
+    const bookingOfferReply = buildMicroCommitmentMessage();
+    if (!seenReplyTexts.has(bookingOfferReply)) {
+      replies.push(bookingOfferReply);
     }
   }
   if (replies.length === 0) return false;
@@ -9012,6 +9150,7 @@ async function tryHandleAddressQuestionWithOpenAi(from, bodyText, priorState, pr
 }
 
 async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, options = {}) {
+  if (messagePrioritizesBookingOverHealthInsuranceInquiry(userMessage)) return false;
   const apiKey = getOpenAiApiKey();
   if (apiKey) {
     const modelName = getOpenAiModelName();
@@ -9021,6 +9160,7 @@ async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, option
       'Respondé solo: YES o NO.',
       'YES ejemplos: "tengo obra social PAMI/Pani", "soy de OSDE", "¿aceptan Swis?", "tengo prepaga", "mi obra social es ...".',
       'NO ejemplos: pedir turno/link, precio de consulta, dirección, horarios del Dr., saludo sin mencionar cobertura.',
+      'NO si menciona obra social/prepaga solo como contexto pero pide TURNO o agenda ("tengo IOSCOR y quiero turno el martes").',
       'Si dice "tengo obra social X" aunque X sea typo (Pani=PAMI), respondé YES.',
     ].join('\n');
     const userContent = buildOpenAiClassifierUserContent(userMessage, {
@@ -9070,6 +9210,7 @@ async function tryResolveHealthInsurancePlusIntentWithOpenAi(userMessage, option
 }
 
 async function shouldHandleAsHealthInsurancePlusQuestion(bodyText, priorState, profileDisplayName, options = {}) {
+  if (messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) return false;
   if (messageLooksLikeClinicInformationBundleInquiry(bodyText)) return false;
   if (messageLooksLikeFamilyConsultationCostEstimateInquiry(bodyText)) return false;
   if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) return false;
@@ -9667,9 +9808,58 @@ async function tryHandlePreferredDayBooking(from, bodyText, priorState, profileD
   return true;
 }
 
+async function tryHandleBookingWithHealthInsuranceContext(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (messageAsksToChangeBookingSede(bodyText)) return false;
+  if (!messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
+  if (!lastSede) return false;
+  if (isReferralOnlySedeEntry(lastSede)) {
+    return sendReferralOnlySedeBookingReply(from, lastSede, mergedState, profileDisplayName, bodyText);
+  }
+  const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
+    profileDisplayName,
+  });
+  const slotPrefix = buildPreferredSlotBookingAcknowledgementPrefix(lastSede, bodyText);
+  return deliverBookingLinkReply(from, lastSede, mergedState, profileDisplayName, {
+    userMessage: bodyText,
+    primaryPrefix: slotPrefix || undefined,
+    forceResend: true,
+    conversationStatePatch: {
+      ...(patientContext.statePatch || {}),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      ...(healthInsuranceName
+        ? {
+            healthInsuranceName,
+            lastHealthInsuranceName: healthInsuranceName,
+            ...buildLastHealthInsuranceDiscussionStatePatch(),
+          }
+        : {}),
+      ...buildClearedAwaitingLinkConfirmationStatePatch(),
+      ...buildClearedPendingBookingIntentPatch(),
+      ...buildClearedPendingBookingDetailsPatch(),
+      ...buildLastScheduleDiscussedStatePatch(),
+    },
+  });
+}
+
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
+  if (messageAsksToChangeBookingSede(bodyText)) return false;
   if (messageAsksWhyChooseDoctorOrTrustQuestion(bodyText)) return false;
   if (messageLooksLikeSpirometryOnlyInquiry(bodyText)) return false;
+  if (messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) {
+    return tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName);
+  }
   if (
     conversationLooksLikeOngoingBookingLinkGuidance(priorState) &&
     (messageLooksLikeBookingLinkUsageDifficulty(bodyText) ||
@@ -9835,6 +10025,9 @@ function messageLooksLikeMultiIntentCandidate(rawText) {
 
 async function tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName) {
   if (!messageLooksLikeMultiIntentCandidate(bodyText)) return false;
+  if (await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -9903,6 +10096,9 @@ async function tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, pr
 
   const primaryIntent = intents.length > 0 ? intents[0] : null;
   if (primaryIntent === 'HEALTH_INSURANCE') {
+    if (await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)) {
+      return true;
+    }
     const sedeFromMessage = findSedeFromText(bodyText) || resolveLastSedeEntryFromState(priorState);
     const healthInsuranceName =
       tryExtractHealthInsuranceName(bodyText) ||
@@ -10097,6 +10293,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await tryHandleCoupleConsultationInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (await tryHandleChangeBookingSedeInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandleRescheduleOrCancelBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -10111,6 +10310,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
       profileDisplayName
     )
   ) {
+    return true;
+  }
+  if (await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
@@ -11491,6 +11693,9 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
   if (await tryHandleCoupleConsultationInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (await tryHandleChangeBookingSedeInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandleRescheduleOrCancelBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -12020,6 +12225,7 @@ function priorStateHasKnownBookingSede(priorState) {
 
 function messageLooksLikeBookingIntent(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksToChangeBookingSede(rawText)) return false;
   if (messageAsksToRescheduleOrCancelBooking(rawText)) return false;
   if (messageLooksLikeStudyProcedureRequest(rawText)) return false;
   if (messageLooksLikeReferralSedePatientGuidanceInquiry(rawText)) return false;
@@ -13412,14 +13618,27 @@ function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
     normalized.includes('unicamente una espirometr') ||
     normalized.includes('unicamente espirometr') ||
     normalized.includes('solamente espirometr') ||
+    normalized.includes('solamente una espirometr') ||
     normalized.includes('solamente la espirometr') ||
     (normalized.includes('unicamente') && normalized.includes('espirometr')) ||
     (normalized.includes('ya tengo diagnostico') && normalized.includes('espirometr'))
   );
 }
 
+function messageLooksLikeSpirometrySchedulingInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!messageMentionsSpirometryStudy(rawText)) return false;
+  if (!findSedeFromText(rawText)) return false;
+  if (messageLooksLikeMultiQuestionPatientInquiry(rawText)) return false;
+  if (messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) return false;
+  return (
+    messageLooksLikeStudyProcedureRequest(rawText) || messageLooksLikeSpecificSlotBookingRequest(rawText)
+  );
+}
+
 function messageLooksLikeSpirometryOnlyInquiry(rawText) {
   if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) return false;
+  if (messageLooksLikeMultiQuestionPatientInquiry(rawText)) return false;
   if (!messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   return (
@@ -13440,6 +13659,58 @@ async function buildSpirometryOnlyInquirySplitReply(priorState, rawText) {
   const lastSede = patientContext.sedeEntry || resolveKnownSedeForConversationContext(priorState);
   const primaryReply = buildStudyAvailabilityPrimaryReply('espirometría', priorState, { sedeEntry: lastSede });
   return { primaryReply, followUpReply: buildSpirometryOnlyInquiryPriceAndLinkReply() };
+}
+
+async function sendSpirometrySchedulingInquiryReply(from, bodyText, priorState, profileDisplayName) {
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede =
+    patientContext.sedeEntry || findSedeFromText(bodyText) || resolveLastSedeEntryFromState(mergedState);
+  if (!lastSede) return false;
+
+  const primaryReply = buildStudyAvailabilityPrimaryReply('espirometría', mergedState, { sedeEntry: lastSede });
+  const statePatch = {
+    ...(patientContext.statePatch || {}),
+    ...(buildLastSedeStatePatch(lastSede) || {}),
+    lastStudyType: 'espirometría',
+    lastStudyPriceContextAtMs: Date.now(),
+    ...buildLastScheduleDiscussedStatePatch(),
+  };
+
+  const delivered = await deliverSequentialPatientTextMessages(
+    from,
+    [primaryReply],
+    priorState,
+    profileDisplayName,
+    statePatch,
+    {
+      userMessage: bodyText,
+      replyContext: 'spirometry_scheduling_inquiry',
+      skipHumanization: true,
+    }
+  );
+  if (!delivered) return false;
+
+  if (isReferralOnlySedeEntry(lastSede)) return true;
+
+  const stateAfterReplies = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    statePatch
+  );
+  await deliverBookingLinkReply(from, lastSede, stateAfterReplies, profileDisplayName, {
+    userMessage: bodyText,
+    forceResend: true,
+    sendFollowUp: false,
+    primaryPrefix:
+      buildPreferredSlotBookingAcknowledgementPrefix(lastSede, bodyText) ||
+      'Por acá no confirmamos horarios puntuales; en la agenda online ves los turnos disponibles.',
+  });
+  return true;
 }
 
 async function sendSpirometryOnlyInquiryReply(from, bodyText, priorState, profileDisplayName) {
@@ -13508,6 +13779,9 @@ async function sendSpirometryOnlyInquiryReply(from, bodyText, priorState, profil
 }
 
 async function tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (messageLooksLikeSpirometrySchedulingInquiry(bodyText)) {
+    return sendSpirometrySchedulingInquiryReply(from, bodyText, priorState, profileDisplayName);
+  }
   const resolvedStudyType = await resolveStudyTypeFromMessage(bodyText, priorState, { profileDisplayName });
   const matchesSpirometryOnlyInquiry =
     messageLooksLikeSpirometryOnlyInquiry(bodyText) ||
@@ -14946,6 +15220,8 @@ function messageShouldSkipOpenAiAssistantFallback(rawText, priorState) {
   if (messageMentionsAmbiguousChacoRegion(rawText)) return true;
   if (messageLooksLikePatientContextCorrection(rawText)) return true;
   if (messageAsksToRescheduleOrCancelBooking(rawText)) return true;
+  if (messageAsksToChangeBookingSede(rawText)) return true;
+  if (messageLooksLikeSpirometrySchedulingInquiry(rawText)) return true;
   if (messageAsksToConfirmExistingBooking(rawText)) return true;
   if (messageLooksLikeCoupleConsultationInquiry(rawText)) return true;
   if (messageLooksLikePatientTopicsOrchestratorCandidate(rawText, priorState)) return true;
@@ -15588,6 +15864,9 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
       profileDisplayName
     )
   ) {
+    return true;
+  }
+  if (await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
@@ -16687,6 +16966,129 @@ function buildSelfBookingRequiredReply(priorState) {
   return 'Entiendo, me encantaría ayudarte con eso. No puedo agendar por vos desde acá, pero te paso el link y lo hacemos juntos.';
 }
 
+function messageAsksToChangeBookingSede(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!messageMentionsExistingBookingContext(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const sedesInOrder = findAllSedeEntriesFromTextInOrder(rawText);
+  const wantsDifferentSede =
+    normalized.includes('quiero atenderme en') ||
+    normalized.includes('quiero atenderme') ||
+    normalized.includes('quiero ir a') ||
+    normalized.includes('quiero ir en') ||
+    normalized.includes('prefiero atenderme') ||
+    normalized.includes('prefiero ir') ||
+    normalized.includes('mejor en') ||
+    normalized.includes('ahora en') ||
+    normalized.includes('pasarme a') ||
+    normalized.includes('pasar a') ||
+    normalized.includes('cambiar de sede') ||
+    normalized.includes('cambiar la sede') ||
+    normalized.includes('cambiar sede') ||
+    normalized.includes('otra sede') ||
+    normalized.includes('en otra ciudad') ||
+    normalized.includes('en otra sede');
+  if (
+    sedesInOrder.length >= 2 &&
+    (normalized.includes('pero') || normalized.includes('ahora') || wantsDifferentSede)
+  ) {
+    return true;
+  }
+  if (wantsDifferentSede && sedesInOrder.length >= 1) return true;
+  return false;
+}
+
+function resolveExistingBookingSedeForChangeRequest(rawText, priorState) {
+  const sedesInOrder = findAllSedeEntriesFromTextInOrder(rawText);
+  if (sedesInOrder.length >= 2) return sedesInOrder[0];
+  const originFromState =
+    resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
+  if (
+    sedesInOrder.length === 1 &&
+    originFromState &&
+    sedesInOrder[0].displayName !== originFromState.displayName
+  ) {
+    return originFromState;
+  }
+  return originFromState || sedesInOrder[0] || null;
+}
+
+function resolveTargetSedeForBookingChangeRequest(rawText, priorState) {
+  const sedesInOrder = findAllSedeEntriesFromTextInOrder(rawText);
+  if (sedesInOrder.length >= 2) return sedesInOrder[sedesInOrder.length - 1];
+  const bookingSede = resolveExistingBookingSedeForChangeRequest(rawText, priorState);
+  if (
+    sedesInOrder.length === 1 &&
+    bookingSede &&
+    sedesInOrder[0].displayName !== bookingSede.displayName
+  ) {
+    return sedesInOrder[0];
+  }
+  return sedesInOrder[0] || null;
+}
+
+function buildChangeBookingSedeReply(priorState, rawText) {
+  const bookingSede = resolveExistingBookingSedeForChangeRequest(rawText, priorState);
+  const targetSede = resolveTargetSedeForBookingChangeRequest(rawText, priorState);
+  const intro =
+    'Sin problema 😊 Si ya tenés turno y querés cambiar de sede, eso lo coordina nuestro equipo por teléfono. Por este chat no movemos reservas ni generamos un turno nuevo.';
+  const closing = 'Ellos tienen acceso a la agenda y te ayudan con el cambio.';
+  if (bookingSede) {
+    const phoneNumber = resolveClinicAssistancePhoneNumberForSedeEntry(bookingSede);
+    const targetLabel =
+      targetSede && targetSede.displayName !== bookingSede.displayName
+        ? ` para pasarte a ${targetSede.displayName}`
+        : '';
+    return `${intro}\n\nComunicate al ${phoneNumber} (${bookingSede.displayName}), donde hiciste la reserva${targetLabel}.\n\n${closing}`;
+  }
+  return `${intro}\n\nComunicate al ${CORRIENTES_ASSISTANCE_PHONE_NUMBER} (Corrientes) o al ${RESISTENCIA_ASSISTANCE_PHONE_NUMBER} (Resistencia), según donde tengas el turno actual.\n\n${closing}`;
+}
+
+async function tryHandleChangeBookingSedeInquiry(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName,
+  inboundMetadata = {}
+) {
+  if (!messageAsksToChangeBookingSede(bodyText)) return false;
+  const reply = buildChangeBookingSedeReply(priorState, bodyText);
+  const finalizedReply = await finalizePatientReplyText(reply, {
+    priorState,
+    profileDisplayName,
+    userMessage: bodyText,
+    replyContext: 'change_booking_sede',
+    suppressBookingLinkOffer: true,
+    skipHumanization: true,
+    conversationContext: buildIntentRoutingOpenAiContext(priorState),
+  });
+  const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedReply, profileDisplayName, priorState);
+  const bookingSede = resolveExistingBookingSedeForChangeRequest(bodyText, priorState);
+  await setConversationState(
+    from,
+    mergeConversationStatePreservingGreeting(priorState, priorState || {}, {
+      ...(wrapped.nextStatePatch || {}),
+      ...(bookingSede ? buildLastSedeStatePatch(bookingSede) || {} : {}),
+      ...buildLastBotReplyStatePatch(wrapped.messageText),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      lastBotReplyAtMs: Date.now(),
+      lastSeenAtMs: Date.now(),
+      ...(Number.isFinite(Number(inboundMetadata.inboundAtMs))
+        ? { lastInboundMessageAtMs: Number(inboundMetadata.inboundAtMs) }
+        : {}),
+      ...(Array.isArray(inboundMetadata.updatedRecentIds)
+        ? { recentInboundMessageIds: inboundMetadata.updatedRecentIds }
+        : {}),
+    })
+  );
+  await sendWhatsAppText(from, wrapped.messageText);
+  return true;
+}
+
 function messageAsksToRescheduleOrCancelBooking(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -16792,9 +17194,13 @@ function buildConfirmExistingBookingReply(priorState, rawText) {
     findSedeFromText(rawText) ||
     resolveLastSedeEntryFromState(priorState) ||
     resolveSedeEntryFromState(priorState);
-  const intro =
-    'Por este chat no confirmamos turnos. Si ya reservaste desde la agenda, para verificar o confirmar tu reserva comunicate con el equipo de la sede al:';
-  const closing = 'Ellos tienen acceso a la agenda y pueden confirmarte si quedó todo bien.';
+  const isScheduleRecall = messageAsksAboutExistingBookingScheduleRecall(rawText);
+  const intro = isScheduleRecall
+    ? 'Por este chat no consultamos la agenda ni podemos ver tu turno. Para confirmar el día y horario de tu reserva, comunicate con el equipo de la sede al:'
+    : 'Por este chat no confirmamos turnos. Si ya reservaste desde la agenda, para verificar o confirmar tu reserva comunicate con el equipo de la sede al:';
+  const closing = isScheduleRecall
+    ? 'Ellos tienen acceso a la agenda y te confirman si es el jueves, el viernes u otro día.'
+    : 'Ellos tienen acceso a la agenda y pueden confirmarte si quedó todo bien.';
   if (lastSede) {
     const phoneNumber = resolveClinicAssistancePhoneNumberForSedeEntry(lastSede);
     return `${intro}\n${phoneNumber} (${lastSede.displayName})\n\n${closing}`;
@@ -16817,6 +17223,7 @@ async function tryHandleConfirmExistingBookingInquiry(
     userMessage: bodyText,
     replyContext: 'confirm_existing_booking',
     suppressBookingLinkOffer: true,
+    skipHumanization: true,
     conversationContext: buildIntentRoutingOpenAiContext(priorState),
   });
   const wrapped = buildAutoReplyWithGreetingIfNeeded(finalizedReply, profileDisplayName, priorState);
@@ -16847,18 +17254,34 @@ async function tryHandleConfirmExistingBookingInquiry(
 
 function messageSaysDoesNotKnowHealthInsurance(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksToConfirmExistingBooking(rawText)) return false;
+  if (messageAsksAboutExistingBookingScheduleRecall(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   if (!normalized) return false;
+  const mentionsHealthInsuranceContext =
+    normalized.includes('obra social') ||
+    normalized.includes('prepaga') ||
+    normalized.includes('cobertura') ||
+    normalized.includes('mama') ||
+    normalized.includes('mamá') ||
+    messageLooksLikeHealthInsurancePlusQuestion(rawText);
+  if (
+    (normalized.includes('no me acuerdo') || normalized.includes('no recuerdo')) &&
+    !mentionsHealthInsuranceContext &&
+    (normalized.includes('turno') || normalized.includes('reserva') || normalized.includes('cita') || extractWeekdayNameFromText(rawText))
+  ) {
+    return false;
+  }
   return (
     normalized.includes('no se mi obra social') ||
     normalized.includes('no sé mi obra social') ||
     normalized.includes('no se cual es') ||
     normalized.includes('no sé cuál es') ||
-    normalized.includes('no me acuerdo') ||
-    normalized.includes('no recuerdo') ||
+    (normalized.includes('no me acuerdo') && mentionsHealthInsuranceContext) ||
+    (normalized.includes('no recuerdo') && mentionsHealthInsuranceContext) ||
     normalized.includes('la obra social de mi mama') ||
     normalized.includes('la obra social de mi mamá') ||
     normalized.includes('es la de mi mama') ||
@@ -17623,6 +18046,15 @@ exports.handler = async (event) => {
           }
 
           if (
+            await tryHandleChangeBookingSedeInquiry(from, bodyText, priorState, profileDisplayName, {
+              inboundAtMs,
+              updatedRecentIds,
+            })
+          ) {
+            continue;
+          }
+
+          if (
             await tryHandleRescheduleOrCancelBookingInquiry(from, bodyText, priorState, profileDisplayName, {
               inboundAtMs,
               updatedRecentIds,
@@ -17710,12 +18142,25 @@ exports.handler = async (event) => {
             continue;
           }
           if (
+            await tryHandleChangeBookingSedeInquiry(from, bodyText, priorState, profileDisplayName, {
+              inboundAtMs,
+              updatedRecentIds,
+            })
+          ) {
+            continue;
+          }
+          if (
             await tryHandleHealthInsuranceCoversConsultationStandaloneStudyPriceInquiry(
               from,
               bodyText,
               priorState,
               profileDisplayName
             )
+          ) {
+            continue;
+          }
+          if (
+            await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)
           ) {
             continue;
           }
@@ -17867,6 +18312,14 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleCoupleConsultationInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (
+            await tryHandleChangeBookingSedeInquiry(from, bodyText, priorState, profileDisplayName, {
+              inboundAtMs,
+              updatedRecentIds,
+            })
+          ) {
             continue;
           }
           if (
@@ -18284,6 +18737,19 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandlePrivatePriceWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (
+            await tryHandleChangeBookingSedeInquiry(from, bodyText, priorState, profileDisplayName, {
+              inboundAtMs,
+              updatedRecentIds,
+            })
+          ) {
+            continue;
+          }
+          if (
+            await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)
+          ) {
             continue;
           }
           if (
