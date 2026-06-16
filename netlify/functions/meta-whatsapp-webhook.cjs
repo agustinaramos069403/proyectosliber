@@ -1395,7 +1395,7 @@ function messageLooksLikeComplexClinicalInquiry(rawText) {
       normalized.includes('realiza la') ||
       normalized.includes('hacen la'),
   ].filter(Boolean).length;
-  const questionCount = (String(rawText).match(/\?/g) || []).length;
+  const questionCount = countPatientImplicitQuestionSignals(rawText);
   return (administrativeSignals >= 1 && clinicalStudySignals >= 1) || questionCount >= 3;
 }
 
@@ -6577,9 +6577,67 @@ function messageHasMultipleDistinctQuestionSignalsLite(rawText) {
   return signalCount >= 2;
 }
 
+function countPatientImplicitQuestionSignals(rawText) {
+  if (!rawText || typeof rawText !== 'string') return 0;
+  const explicitCount = (String(rawText).match(/\?/g) || []).length;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:()]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return explicitCount;
+  let implicitCount = 0;
+  implicitCount += (normalized.match(/\b(cuanto|cuánto)\s+(cuesta|sale|esta|es)\b/g) || []).length;
+  if (normalized.includes('quiero saber si')) implicitCount += 1;
+  if (/\bsi puedo\b/.test(normalized)) implicitCount += 1;
+  if (/\bsi tienen\b/.test(normalized)) implicitCount += 1;
+  if (/\bsi atiende\b/.test(normalized)) implicitCount += 1;
+  if (/\bsi hacen\b/.test(normalized)) implicitCount += 1;
+  if (/\bsi realizan\b/.test(normalized)) implicitCount += 1;
+  return Math.max(explicitCount, implicitCount);
+}
+
+function countRichPatientIntakeTopicSignals(rawText) {
+  if (!rawText || typeof rawText !== 'string') return 0;
+  const normalized = normalizeForMatch(rawText);
+  return [
+    messageAsksAboutConditionTreatment(rawText) ||
+      normalized.includes('rinitis') ||
+      normalized.includes('asma') ||
+      normalized.includes('dermatitis') ||
+      messageDescribesChronicOrQualifiedBreathingSymptom(rawText),
+    messageLooksLikeAnyPriceQuestion(rawText),
+    messageAsksAboutPaymentMethods(rawText),
+    messageAsksAboutAfternoonAvailability(rawText) || messageLooksLikeRealtimeAvailabilityQuestion(rawText),
+    messageMatchesStudiesTopic(rawText) || Boolean(getStudyTypeFromText(rawText)),
+    messageLooksLikeBookingIntent(rawText),
+    messageMentionsChildPatientContext(rawText) || messageAsksIfDoctorTreatsChildren(rawText),
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) || messageStatesHealthInsuranceMembership(rawText),
+    messageAsksAboutStudyPreparation(rawText) ||
+      messageAsksAboutStudyFasting(rawText) ||
+      messageAsksWhetherDoctorPerformsStudyInMessage(rawText),
+    normalized.includes('quiero saber si') &&
+      (normalized.includes('atiende') || normalized.includes('doctor') || normalized.includes('dr')),
+  ].filter(Boolean).length;
+}
+
+function shouldDeferSingleTopicFaqForComprehensivePatientInquiry(bodyText, priorState = null) {
+  if (!bodyText || typeof bodyText !== 'string') return false;
+  if (messageLooksLikeRichPatientIntakeInquiry(bodyText)) return true;
+  if (messageLooksLikeComplexClinicalInquiry(bodyText)) return true;
+  if (messageLooksLikeMultiIntentCandidate(bodyText)) return true;
+  if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return true;
+  if (
+    countPatientImplicitQuestionSignals(bodyText) >= 2 &&
+    countRichPatientIntakeTopicSignals(bodyText) >= 2
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function messageLooksLikeMultiQuestionPatientInquiryLite(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  const questionCount = (String(rawText).match(/\?/g) || []).length;
+  const questionCount = countPatientImplicitQuestionSignals(rawText);
   if (questionCount >= 2) return true;
   if (questionCount >= 1 && messageHasMultipleDistinctQuestionSignalsLite(rawText)) return true;
   if (questionCount === 1) {
@@ -6631,7 +6689,7 @@ function messageLooksLikeMultiQuestionPatientInquiry(rawText, priorState = null)
     return messageLooksLikeMultiQuestionPatientInquiryLite(rawText);
   }
   if (!rawText || typeof rawText !== 'string') return false;
-  const questionCount = (String(rawText).match(/\?/g) || []).length;
+  const questionCount = countPatientImplicitQuestionSignals(rawText);
   if (questionCount >= 2) return true;
   if (questionCount >= 1 && messageLooksLikeComplexClinicalInquiry(rawText)) return true;
 
@@ -10949,7 +11007,7 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
-  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandleComprehensivePatientInquiryBeforeSingleTopicFaq(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -13428,6 +13486,7 @@ function buildPatientFaqReply(bodyText, priorState) {
 }
 
 async function tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (shouldDeferSingleTopicFaqForComprehensivePatientInquiry(bodyText, priorState)) return false;
   if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return false;
   if (messageAsksForCashDiscountOrSpecialPrice(bodyText)) return false;
   if (messageAsksForInvoiceAdministrativeAssistance(bodyText)) return false;
@@ -15068,32 +15127,27 @@ function messageAsksWhetherDoctorPerformsStudyInMessage(rawText) {
 
 function messageLooksLikeRichPatientIntakeInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  const questionCount = (String(rawText).match(/\?/g) || []).length;
-  const normalized = normalizeForMatch(rawText);
-  const topicCount = [
-    messageAsksAboutConditionTreatment(rawText) ||
-      normalized.includes('rinitis') ||
-      normalized.includes('asma') ||
-      normalized.includes('dermatitis') ||
-      messageDescribesChronicOrQualifiedBreathingSymptom(rawText),
-    messageLooksLikeAnyPriceQuestion(rawText),
-    messageAsksAboutPaymentMethods(rawText),
-    messageAsksAboutAfternoonAvailability(rawText) || messageLooksLikeRealtimeAvailabilityQuestion(rawText),
-    messageMatchesStudiesTopic(rawText) || Boolean(getStudyTypeFromText(rawText)),
-    messageLooksLikeBookingIntent(rawText),
-    messageMentionsChildPatientContext(rawText) || messageAsksIfDoctorTreatsChildren(rawText),
-    messageLooksLikeHealthInsurancePlusQuestion(rawText) || messageStatesHealthInsuranceMembership(rawText),
-    messageAsksAboutStudyPreparation(rawText) ||
-      messageAsksAboutStudyFasting(rawText) ||
-      messageAsksWhetherDoctorPerformsStudyInMessage(rawText),
-  ].filter(Boolean).length;
+  const questionCount = countPatientImplicitQuestionSignals(rawText);
+  const topicCount = countRichPatientIntakeTopicSignals(rawText);
   if (questionCount >= 3 && topicCount >= 2) return true;
   if (questionCount >= 2 && topicCount >= 3) return true;
+  if (topicCount >= 4 && questionCount >= 1) return true;
+  if (topicCount >= 3 && questionCount >= 2) return true;
+  const normalized = normalizeForMatch(rawText);
   if (
     questionCount >= 1 &&
     topicCount >= 4 &&
     messageAsksCompleteOrTotalCost(rawText) &&
     (messageLooksLikeRealtimeAvailabilityQuestion(rawText) || messageLooksLikeBookingIntent(rawText))
+  ) {
+    return true;
+  }
+  if (
+    messageAlreadyStatesSymptomDuration(rawText) &&
+    topicCount >= 3 &&
+    (normalized.includes('rinitis') ||
+      normalized.includes('asma') ||
+      messageAsksAboutConditionTreatment(rawText))
   ) {
     return true;
   }
@@ -17011,13 +17065,43 @@ function messageShouldBypassSedeCityDeclaration(rawText) {
   return false;
 }
 
+async function tryHandleComprehensivePatientInquiryBeforeSingleTopicFaq(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (!shouldDeferSingleTopicFaqForComprehensivePatientInquiry(bodyText, priorState)) {
+    return false;
+  }
+  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  return false;
+}
+
 async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
   from,
   bodyText,
   priorState,
   profileDisplayName
 ) {
-  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandleComprehensivePatientInquiryBeforeSingleTopicFaq(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -19573,7 +19657,14 @@ exports.handler = async (event) => {
           if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+          if (
+            await tryHandleComprehensivePatientInquiryBeforeSingleTopicFaq(
+              from,
+              bodyText,
+              priorState,
+              profileDisplayName
+            )
+          ) {
             continue;
           }
           if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
