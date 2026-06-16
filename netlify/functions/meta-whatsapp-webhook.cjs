@@ -13272,8 +13272,75 @@ function messageAsksAboutInvoice(rawText) {
   return normalized.includes('factura') || normalized.includes('facturacion') || normalized.includes('facturación');
 }
 
+function messageAsksForInvoiceAdministrativeAssistance(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  if (
+    !normalized.includes('factura') &&
+    !normalized.includes('facturacion') &&
+    !normalized.includes('facturación')
+  ) {
+    return false;
+  }
+  return (
+    /\bfactura\s*[abc]\b/.test(normalized) ||
+    normalized.includes('factura a') ||
+    normalized.includes('factura b') ||
+    normalized.includes('factura c') ||
+    normalized.includes('tipo de factura') ||
+    normalized.includes('factura electronica') ||
+    normalized.includes('factura electrónica') ||
+    normalized.includes('necesito factura') ||
+    normalized.includes('quiero factura') ||
+    normalized.includes('emision de factura') ||
+    normalized.includes('emisión de factura') ||
+    normalized.includes('datos de facturacion') ||
+    normalized.includes('datos de facturación') ||
+    normalized.includes('razon social') ||
+    normalized.includes('razón social') ||
+    (normalized.includes('cuit') && normalized.includes('factura'))
+  );
+}
+
+function messageAsksForCashDiscountOrSpecialPrice(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const mentionsCash = normalized.includes('efectivo');
+  const asksSpecialPrice =
+    normalized.includes('precio') ||
+    normalized.includes('descuento') ||
+    normalized.includes('mas barato') ||
+    normalized.includes('más barato') ||
+    normalized.includes('me haces precio') ||
+    normalized.includes('me hacés precio') ||
+    normalized.includes('me hacen precio') ||
+    normalized.includes('me haces descuento') ||
+    normalized.includes('me hacés descuento') ||
+    normalized.includes('promo') ||
+    normalized.includes('promocion') ||
+    normalized.includes('promoción') ||
+    normalized.includes('rebaja') ||
+    normalized.includes('bonificacion') ||
+    normalized.includes('bonificación');
+  if (mentionsCash && asksSpecialPrice) return true;
+  return (
+    normalized.includes('me haces precio') ||
+    normalized.includes('me hacés precio') ||
+    normalized.includes('me hacen precio')
+  );
+}
+
 function messageAsksAboutPaymentMethods(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksForCashDiscountOrSpecialPrice(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   return (
     normalized.includes('como pago') ||
@@ -13362,6 +13429,8 @@ function buildPatientFaqReply(bodyText, priorState) {
 
 async function tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName) {
   if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return false;
+  if (messageAsksForCashDiscountOrSpecialPrice(bodyText)) return false;
+  if (messageAsksForInvoiceAdministrativeAssistance(bodyText)) return false;
   if (!messageLooksLikePatientFaqQuestion(bodyText)) return false;
   if (messageAsksAboutStudyPreparation(bodyText, priorState)) return false;
   const reply = buildPatientFaqReply(bodyText, priorState);
@@ -13830,6 +13899,111 @@ function messageAsksForPhoneCall(rawText) {
 
 function buildPhoneCallRequestReply() {
   return 'Te recomiendo que me envíes tu consulta por acá. Así puedo ayudarte mejor, ya que no recibimos llamadas.';
+}
+
+function messageRequestsHumanContactAssistance(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  return (
+    normalized.includes('alguien humano') ||
+    normalized.includes('persona humana') ||
+    normalized.includes('hablar con un humano') ||
+    normalized.includes('hablar con alguien humano') ||
+    normalized.includes('atencion humana') ||
+    normalized.includes('atención humana') ||
+    (normalized.includes('humano') &&
+      (normalized.includes('hablar') || normalized.includes('alguien') || normalized.includes('persona')))
+  );
+}
+
+function messageAsksForDoctorPrivateContact(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const mentionsDoctor =
+    normalized.includes('doctor') ||
+    normalized.includes('medico') ||
+    normalized.includes('médico') ||
+    normalized.includes('dr liber') ||
+    normalized.includes('dr. liber') ||
+    normalized.includes('liber acosta') ||
+    normalized.includes('liber');
+  if (!mentionsDoctor) return false;
+  const asksPersonalChannel =
+    normalized.includes('celular') ||
+    normalized.includes('whatsapp') ||
+    normalized.includes('wsp') ||
+    normalized.includes('numero') ||
+    normalized.includes('número') ||
+    (normalized.includes('telefono') &&
+      !normalized.includes('consultorio') &&
+      !normalized.includes('clinica') &&
+      !normalized.includes('clínica'));
+  if (!asksPersonalChannel) return false;
+  return (
+    normalized.includes('pas') ||
+    normalized.includes('me das') ||
+    normalized.includes('me dás') ||
+    normalized.includes('tenes') ||
+    normalized.includes('tenés') ||
+    normalized.includes('tienes') ||
+    normalized.includes('contacto') ||
+    normalized.includes('del doctor') ||
+    normalized.includes('del medico') ||
+    normalized.includes('del médico')
+  );
+}
+
+function buildHumanContactAssistanceReply(priorState) {
+  const sedeEntry =
+    resolveKnownSedeForConversationContext(priorState) || resolveLastSedeEntryFromState(priorState);
+  const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
+  if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    return `Sí. Para hablar con el equipo de ${sedeEntry.displayName.trim()}, comunicate al ${phoneNumber}.`;
+  }
+  return `Sí. Decime tu ciudad (${ACTIVE_SEDE_CITIES_LIST_MESSAGE}) y te paso el teléfono del consultorio correspondiente.`;
+}
+
+function buildDoctorPrivateContactRedirectReply(priorState) {
+  const sedeEntry =
+    resolveKnownSedeForConversationContext(priorState) || resolveLastSedeEntryFromState(priorState);
+  const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
+  if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    return `No compartimos el contacto personal del médico por este chat. Para consultas del consultorio en ${sedeEntry.displayName.trim()}, comunicate al ${phoneNumber}.`;
+  }
+  return `No compartimos el contacto personal del médico por este chat. ${buildBookingPersonalAssistanceMessage(priorState)}`;
+}
+
+function buildSedeAdministrativeAssistanceReply(priorState, introSentence) {
+  const sedeEntry =
+    resolveKnownSedeForConversationContext(priorState) || resolveLastSedeEntryFromState(priorState);
+  const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
+  const intro =
+    typeof introSentence === 'string' && introSentence.trim().length > 0
+      ? `${introSentence.trim().replace(/\.$/, '')}.`
+      : '';
+  if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    return `${intro} Comunicate con el consultorio de ${sedeEntry.displayName.trim()} al ${phoneNumber} y te lo confirman.`.trim();
+  }
+  return `${intro} Decime tu ciudad (${ACTIVE_SEDE_CITIES_LIST_MESSAGE}) y te paso el teléfono del consultorio.`.trim();
+}
+
+function buildCashDiscountRedirectReply(priorState) {
+  return buildSedeAdministrativeAssistanceReply(
+    priorState,
+    'No manejo descuentos ni promociones por este chat'
+  );
+}
+
+function buildInvoiceAdministrativeAssistanceReply(priorState) {
+  return buildSedeAdministrativeAssistanceReply(priorState, 'Para facturación y tipo de factura');
 }
 
 function buildTalkToDoctorReply(priorState) {
@@ -15644,7 +15818,7 @@ function collectPatientReplyTopicsFromMessage(rawText, priorState = null) {
   if (messageAsksAboutPaymentMethods(rawText)) {
     topics.push('PAYMENT_METHODS');
   }
-  if (messageAsksAboutInvoice(rawText)) {
+  if (messageAsksAboutInvoice(rawText) && !messageAsksForInvoiceAdministrativeAssistance(rawText)) {
     topics.push('INVOICE');
   }
   if (messageAsksAboutConsultDuration(rawText)) {
@@ -17796,6 +17970,83 @@ async function tryHandleBookingPersonalAssistanceRequest(from, bodyText, priorSt
   );
 }
 
+async function tryHandleHumanContactAssistanceInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageRequestsHumanContactAssistance(bodyText)) return false;
+  return sendFinalizedPatientTextReply(
+    from,
+    buildHumanContactAssistanceReply(priorState),
+    priorState,
+    profileDisplayName,
+    {
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'human_contact_assistance',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
+async function tryHandleDoctorPrivateContactInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksForDoctorPrivateContact(bodyText)) return false;
+  return sendFinalizedPatientTextReply(
+    from,
+    buildDoctorPrivateContactRedirectReply(priorState),
+    priorState,
+    profileDisplayName,
+    {
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'doctor_private_contact_redirect',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
+async function tryHandleCashDiscountInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksForCashDiscountOrSpecialPrice(bodyText)) return false;
+  return sendFinalizedPatientTextReply(
+    from,
+    buildCashDiscountRedirectReply(priorState),
+    priorState,
+    profileDisplayName,
+    {
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'cash_discount_redirect',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
+async function tryHandleInvoiceAdministrativeAssistanceInquiry(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (!messageAsksForInvoiceAdministrativeAssistance(bodyText)) return false;
+  return sendFinalizedPatientTextReply(
+    from,
+    buildInvoiceAdministrativeAssistanceReply(priorState),
+    priorState,
+    profileDisplayName,
+    {
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'invoice_administrative_assistance',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
 function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksToConfirmExistingBooking(rawText)) return false;
@@ -19159,6 +19410,29 @@ exports.handler = async (event) => {
         });
       }
 
+          if (await tryHandleDoctorPrivateContactInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+
+          if (await tryHandleCashDiscountInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+
+          if (
+            await tryHandleInvoiceAdministrativeAssistanceInquiry(
+              from,
+              bodyText,
+              priorState,
+              profileDisplayName
+            )
+          ) {
+            continue;
+          }
+
+          if (await tryHandleHumanContactAssistanceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+
           if (messageAsksToTalkToSecretary(bodyText)) {
             const preservedSessionState = mergeConversationStatePreservingGreeting(
               priorState,
@@ -19171,7 +19445,7 @@ exports.handler = async (event) => {
               recentInboundMessageIds: updatedRecentIds,
             });
             const wrapped = buildAutoReplyWithGreetingIfNeeded(
-              DERIVATIVE_HANDOFF_PATIENT_MESSAGE,
+              buildHumanContactAssistanceReply(preservedSessionState),
               profileDisplayName,
               preservedSessionState
             );
@@ -20519,7 +20793,8 @@ exports.handler = async (event) => {
           if (
             messageAsksAboutDocumentationOrRequirements(bodyText) ||
             messageAsksAboutReferralOrPrescription(bodyText) ||
-            messageAsksAboutInvoice(bodyText) ||
+            (messageAsksAboutInvoice(bodyText) &&
+              !messageAsksForInvoiceAdministrativeAssistance(bodyText)) ||
             messageAsksAboutPaymentMethods(bodyText) ||
             messageAsksAboutConsultDuration(bodyText) ||
             messageAsksAboutCompanion(bodyText) ||
