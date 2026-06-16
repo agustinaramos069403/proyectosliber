@@ -1665,26 +1665,30 @@ function messageInsistsOnSameDayDoctorVisit(rawText) {
   return wantsDoctorVisit;
 }
 
+function buildSameDayDoctorVisitDraftReply(includeSedePrompt = false) {
+  const empathy =
+    'Lamento que estés en un momento en el que necesitás atención pronto. Entiendo que quieras ver al Dr. hoy. ';
+  const policy =
+    'En este consultorio no se atienden urgencias ni se reservan turnos para el mismo día: ' +
+    'los turnos se sacan con anticipación en la agenda online. ';
+  const safety =
+    'Si sentís que puede ser una urgencia médica ahora, lo más seguro es ir a guardia o llamar al 107.';
+  if (includeSedePrompt) {
+    return `${empathy}${policy}${safety} ¿Desde qué ciudad querés ver el próximo turno disponible? ${buildSedeNumberedOptionsSuffix()}`;
+  }
+  return `${empathy}${policy}${safety}`;
+}
+
 function buildSameDayDoctorVisitAfterEmergencyEmpathyMessage() {
-  return (
-    'Entiendo que quieras verlo hoy y que te preocupe. ' +
-    'El Dr. no atiende urgencias ni turnos para el mismo día; los turnos se reservan con anticipación en la agenda online. ' +
-    'Si sentís que empeorás, andá a guardia o llamá al 107.'
-  );
+  return buildSameDayDoctorVisitDraftReply(false);
 }
 
 function buildSameDayDoctorVisitAfterEmergencyBookingPrompt() {
-  return `${buildSameDayDoctorVisitAfterEmergencyEmpathyMessage()} ¿Para qué sede necesitás turno? ${buildSedeNumberedOptionsSuffix()}`;
+  return buildSameDayDoctorVisitDraftReply(true);
 }
 
-async function tryHandleSameDayDoctorVisitAfterEmergency(
-  from,
-  bodyText,
-  priorState,
-  profileDisplayName
-) {
+async function tryHandleSameDayDoctorVisitInquiry(from, bodyText, priorState, profileDisplayName) {
   if (!messageInsistsOnSameDayDoctorVisit(bodyText)) return false;
-  if (!priorStateHasRecentMedicalEmergencyGuidance(priorState)) return false;
 
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, {
     profileDisplayName,
@@ -1699,17 +1703,18 @@ async function tryHandleSameDayDoctorVisitAfterEmergency(
     }
   );
   const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
+
   if (lastSede) {
-    const delivered = await deliverSequentialPatientTextMessages(
+    const delivered = await sendFinalizedPatientTextReply(
       from,
-      [buildSameDayDoctorVisitAfterEmergencyEmpathyMessage()],
+      buildSameDayDoctorVisitDraftReply(false),
       priorState,
       profileDisplayName,
       mergedState,
       {
         userMessage: bodyText,
-        replyContext: 'same_day_doctor_visit_after_emergency',
-        skipHumanization: true,
+        replyContext: 'same_day_doctor_visit',
+        suppressBookingLinkOffer: false,
       }
     );
     if (!delivered) return false;
@@ -1721,27 +1726,42 @@ async function tryHandleSameDayDoctorVisitAfterEmergency(
     return sendBookingFlowReplyForSede(from, bodyText, stateAfterEmpathy, profileDisplayName, lastSede);
   }
 
-  const prompt = buildSameDayDoctorVisitAfterEmergencyBookingPrompt();
-  const wrapped = buildAutoReplyWithGreetingIfNeeded(prompt, profileDisplayName, priorState);
-  const afterReplyState = mergeConversationStatePreservingGreeting(
+  return sendFinalizedPatientTextReply(
+    from,
+    buildSameDayDoctorVisitDraftReply(true),
     priorState,
+    profileDisplayName,
+    mergeConversationStatePreservingGreeting(
+      priorState,
+      {
+        state: 'awaiting_sede_selection',
+        awaitingSedeSelectionAtMs: Date.now(),
+        lastBotAskedSedeCityAtMs: Date.now(),
+      },
+      {
+        ...mergedState,
+        ...buildClearedStaleSedeForFreshBookingPatch(),
+        lastSeenAtMs: Date.now(),
+        lastBotReplyAtMs: Date.now(),
+      }
+    ),
     {
-      state: 'awaiting_sede_selection',
-      awaitingSedeSelectionAtMs: Date.now(),
-      lastBotAskedSedeCityAtMs: Date.now(),
-    },
-    {
-      ...mergedState,
-      ...(wrapped.nextStatePatch || {}),
-      ...buildLastBotReplyStatePatch(wrapped.messageText),
-      ...buildClearedStaleSedeForFreshBookingPatch(),
-      lastSeenAtMs: Date.now(),
-      lastBotReplyAtMs: Date.now(),
+      userMessage: bodyText,
+      replyContext: 'same_day_doctor_visit',
+      suppressBookingLinkOffer: true,
     }
   );
-  await setConversationState(from, afterReplyState);
-  await sendWhatsAppText(from, wrapped.messageText);
-  return true;
+}
+
+async function tryHandleSameDayDoctorVisitAfterEmergency(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (!messageInsistsOnSameDayDoctorVisit(bodyText)) return false;
+  if (!priorStateHasRecentMedicalEmergencyGuidance(priorState)) return false;
+  return tryHandleSameDayDoctorVisitInquiry(from, bodyText, priorState, profileDisplayName);
 }
 
 async function sendUrgentBookingPriorityReply(from, bodyText, priorState, profileDisplayName) {
@@ -4750,6 +4770,18 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'Contexto: el paciente pregunta por qué atenderse con el Dr., si hace algo diferente, expresa frustración con otros alergistas, o aún no sabe si quiere turno y pide recomendación.',
       'Validá la emoción primero (frustración, cansancio, duda). Mencioná la experiencia del Dr. Liber (20+ años, alergia e inmunología, NEA) y enfoque personalizado según historial.',
       'NO listes estudios ni precios. NO digas solo que "hacen prick test". Motivá con calidez sin prometer cura. NO pidas sede ni ofrezcas link de turno en esta respuesta.'
+    );
+  }
+  if (
+    options.replyContext === 'same_day_doctor_visit' ||
+    options.replyContext === 'same_day_doctor_visit_after_emergency'
+  ) {
+    replyContextInstructions.push(
+      'Contexto: el paciente quiere ver al Dr. HOY o un turno para el mismo día.',
+      'Validá con empatía genuina su preocupación y el deseo de atención pronta; soná humana, cercana y comprensiva, no como un mensaje automático repetido.',
+      'Mantené EXACTO: no hay urgencias ni turnos el mismo día en este consultorio; los turnos se reservan con anticipación en la agenda online.',
+      'Mantené guardia/107 solo como opción si puede ser urgencia médica real.',
+      'Si el borrador pregunta la ciudad/sede, conservá esa pregunta al final sin cambiar las opciones.'
     );
   }
   if (options.replyContext === 'address_info') {
@@ -10662,7 +10694,7 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
     priorStateHasRecentMedicalEmergencyGuidance(bookingState) &&
     messageInsistsOnSameDayDoctorVisit(bodyText)
   ) {
-    return tryHandleSameDayDoctorVisitAfterEmergency(from, bodyText, priorState, profileDisplayName);
+    return tryHandleSameDayDoctorVisitInquiry(from, bodyText, priorState, profileDisplayName);
   }
   await sendAskSedeTwoStep(from, profileDisplayName, bookingState);
   return true;
@@ -19772,14 +19804,7 @@ exports.handler = async (event) => {
             await sendMedicalEmergencyResponse(from, priorState, profileDisplayName);
             continue;
           }
-          if (
-            await tryHandleSameDayDoctorVisitAfterEmergency(
-              from,
-              bodyText,
-              priorState,
-              profileDisplayName
-            )
-          ) {
+          if (await tryHandleSameDayDoctorVisitInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (messageLooksLikeAmbiguousUrgency(bodyText)) {
