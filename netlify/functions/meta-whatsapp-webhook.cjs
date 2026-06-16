@@ -283,6 +283,8 @@ const ALLERGY_TEST_REQUIRES_EVALUATION_PRICE_MESSAGE =
   'Los tests de alergia pueden ser a medicamentos, alimentos o aeroalérgenos, y no todos tienen el mismo valor. Primero hace falta una consulta de evaluación; ahí el Dr. te indica cuál corresponde y el costo según tu caso.';
 const ALLERGY_TEST_CONSULTATION_FIRST_AVAILABILITY_MESSAGE =
   'Los tests de alergia no tienen un valor único por acá: primero hace falta la consulta de evaluación y ahí el Dr. define si corresponde hacer algún test y cuál. A veces se lee "test" y se asume que sí o sí se hace, pero no siempre es necesario; eso se ve en consulta. La espirometría, si la necesitás sola, sí tiene valor particular que te podemos informar cuando lo indiques.';
+const CONSULTATION_DOES_NOT_INCLUDE_STUDIES_MESSAGE =
+  'La consulta no incluye los estudios: se abonan por separado según el tipo de estudio y tu cobertura.';
 const SPIROMETRY_FOLLOW_UP_PRICE_NOTE =
   'Si ya te atendiste por asma y volvés solo por control con espirometría, puede haber un valor distinto; eso te lo confirman en la clínica.';
 
@@ -1006,6 +1008,75 @@ function messageMentionsAmbiguousChacoRegion(rawText) {
     return false;
   }
   return true;
+}
+
+function storedSedeConflictsWithDeclaredRegion(rawText, priorState) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastSede = resolveLastSedeEntryFromState(priorState);
+  if (!lastSede) return false;
+
+  if (messageMentionsAmbiguousChacoRegion(rawText)) {
+    return lastSede.displayName !== 'Resistencia' && lastSede.displayName !== 'Sáenz Peña';
+  }
+
+  const declaredSede = findSedeFromText(rawText);
+  if (declaredSede && declaredSede.envKey !== lastSede.envKey) {
+    return true;
+  }
+
+  return false;
+}
+
+function buildPatientRegionChangeStateResetPatch() {
+  return {
+    ...buildClearedStaleSedeForFreshBookingPatch(),
+    ...buildClearedStaleBookingLinkMemoryStatePatch(),
+    pendingBookingIntentAtMs: null,
+    lastPendingBookingRequestText: null,
+    pendingBookingWeekday: null,
+    lastStudyType: null,
+    lastStudyPriceContextAtMs: null,
+  };
+}
+
+function applyPatientRegionResetIfNeeded(rawText, priorState) {
+  if (!storedSedeConflictsWithDeclaredRegion(rawText, priorState)) return priorState;
+  return mergeConversationStatePreservingGreeting(priorState, {}, buildPatientRegionChangeStateResetPatch());
+}
+
+function botReplyActuallyContainsBookingLinkUrl(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  return /https?:\/\/\S+/i.test(replyText);
+}
+
+function messageAsksWhetherConsultationIncludesStudies(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsStudies =
+    normalized.includes('estudio') ||
+    normalized.includes('estudios') ||
+    messageMentionsSpirometryStudy(rawText) ||
+    messageMentionsAllergyTestStudy(rawText);
+  if (!mentionsStudies) return false;
+  const asksInclusionOrSeparation =
+    normalized.includes('incluye') ||
+    normalized.includes('incluid') ||
+    normalized.includes('aparte') ||
+    normalized.includes('por separado') ||
+    normalized.includes('separado') ||
+    normalized.includes('abonan') ||
+    normalized.includes('cobran') ||
+    normalized.includes('se pagan') ||
+    normalized.includes('se paga');
+  if (!asksInclusionOrSeparation) return false;
+  return (
+    normalized.includes('consulta') ||
+    normalized.includes('turno') ||
+    normalized.includes('visita') ||
+    normalized.includes('atencion') ||
+    normalized.includes('atención')
+  );
 }
 
 function stateLooksLikeAwaitingChacoSedeDisambiguation(priorState) {
@@ -2809,11 +2880,40 @@ function buildClearedStaleReferralRoutingStatePatch() {
   };
 }
 
+function shouldSkipDuplicateBotReply(priorState, replyText) {
+  if (!priorState || typeof priorState !== 'object' || !replyText) return false;
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  if (!Number.isFinite(lastBotReplyAtMs) || lastBotReplyAtMs <= 0) return false;
+  if (Date.now() - lastBotReplyAtMs > USER_REPLY_COOLDOWN_MS) return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (!lastBotReplyText) return false;
+  const normalizedLast = normalizeForMatch(lastBotReplyText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalizedNext = normalizeForMatch(replyText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalizedLast === normalizedNext;
+}
+
 async function sendReferralOnlySedeBookingReply(from, sedeEntry, priorState, profileDisplayName, bodyText = '') {
   if (!sedeEntry) return false;
   const reply = bodyText
     ? buildReferralOnlySedeSlotFollowUpReply(sedeEntry, bodyText)
     : buildReferralOnlySedeBookingReply(sedeEntry);
+  if (shouldSkipDuplicateBotReply(priorState, reply)) {
+    await setConversationState(
+      from,
+      mergeConversationStatePreservingGreeting(priorState, {}, {
+        lastSeenAtMs: Date.now(),
+        ...(buildLastSedeStatePatch(sedeEntry) || {}),
+      })
+    );
+    return true;
+  }
   let patientContextPatch = {};
   if (bodyText) {
     const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
@@ -5036,8 +5136,42 @@ function messageCombinesHealthInsuranceAcceptanceWithBooking(rawText) {
   return messageAsksHealthInsuranceAcceptanceInText(rawText);
 }
 
+function messagePrioritizesFamilyOrApproximateCostInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeFamilyConsultationCostEstimateInquiry(rawText)) return true;
+  if (!messageAsksApproximateConsultationCost(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    messageMentionsChildPatientContext(rawText) ||
+    normalized.includes('ambos') ||
+    messageMatchesStudiesTopic(rawText) ||
+    normalized.includes('dermatitis') ||
+    normalized.includes('asma')
+  );
+}
+
+function collectStudyTypesFromClinicalContext(rawText) {
+  const explicitStudyTypes = collectStudyTypesFromText(rawText);
+  if (explicitStudyTypes.length > 0) return explicitStudyTypes;
+  if (!rawText || typeof rawText !== 'string') return [];
+  const normalized = normalizeForMatch(rawText);
+  const inferredStudyTypes = [];
+  if (
+    normalized.includes('dermatitis') ||
+    normalized.includes('alerg') ||
+    normalized.includes('rinitis')
+  ) {
+    inferredStudyTypes.push(STUDY_TYPE_ALLERGY_TEST);
+  }
+  if (normalized.includes('asma') || messageDescribesChronicOrQualifiedBreathingSymptom(rawText)) {
+    inferredStudyTypes.push(STUDY_TYPE_SPIROMETRY);
+  }
+  return inferredStudyTypes;
+}
+
 function messagePrioritizesBookingOverHealthInsuranceInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messagePrioritizesFamilyOrApproximateCostInquiry(rawText)) return false;
   if (messageAsksToChangeBookingSede(rawText)) return false;
   if (messageLooksLikeSpirometrySchedulingInquiry(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
@@ -6290,10 +6424,29 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
   if (messageLooksLikeAnyPriceQuestion(segmentText) && messageMatchesStudiesTopic(segmentText)) {
     return 'STUDY_PRICE';
   }
+  if (messageAsksApproximateConsultationCost(segmentText) || messageAsksApproximateConsultationCost(fullText)) {
+    if (
+      messageMentionsChildPatientContext(fullText) ||
+      full.includes('ambos') ||
+      messageMatchesStudiesTopic(fullText)
+    ) {
+      return 'CONSULTATION_AND_STUDY_PRICE';
+    }
+    return 'CONSULTATION_PRICE';
+  }
   if (
     messageAsksWhetherDoctorPerformsStudyInMessage(segmentText) ||
     (messageAsksStudyPerformanceQuestionInMessage(segmentText) &&
       messageMentionsStudyTypeInMessage(fullText))
+  ) {
+    return 'STUDY_AVAILABILITY';
+  }
+  if (
+    (segment.includes('necesito') ||
+      segment.includes('quiero') ||
+      segment.includes('quisiera') ||
+      segment.includes('me hace falta')) &&
+    messageMentionsStudyTypeInMessage(fullText)
   ) {
     return 'STUDY_AVAILABILITY';
   }
@@ -6494,6 +6647,12 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
       return reply;
     }
     case 'STUDY_AVAILABILITY': {
+      const studyTypesFromMessage = collectStudyTypesFromText(fullText);
+      if (studyTypesFromMessage.length >= 2) {
+        return buildMultipleStudyAvailabilityPrimaryReply(studyTypesFromMessage, priorState, {
+          sedeEntry: lastSede,
+        });
+      }
       const studyType = await resolveStudyTypeFromMessage(fullText, priorState, { profileDisplayName });
       if (!studyType) {
         if (messageAsksAboutSameDayStudies(fullText)) {
@@ -6530,7 +6689,16 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
       if (messageStatesHealthInsuranceCoversConsultationButWantsOnlyStudy(fullText)) {
         return null;
       }
-      const studyType = await resolveStudyTypeFromMessage(fullText, priorState, { profileDisplayName });
+      if (messagePrioritizesFamilyOrApproximateCostInquiry(fullText)) {
+        return null;
+      }
+      let studyType = await resolveStudyTypeFromMessage(fullText, priorState, { profileDisplayName });
+      if (!studyType) {
+        const studyTypesFromContext = collectStudyTypesFromClinicalContext(fullText);
+        if (studyTypesFromContext.length > 0) {
+          studyType = studyTypesFromContext[0];
+        }
+      }
       if (!studyType) return null;
       if (messageAsksAboutStandaloneSpirometryWithoutConsultation(fullText) && isSpirometryStudyType(studyType)) {
         return buildSpirometryStandalonePriceReply(priorState, fullText, lastSede);
@@ -6562,12 +6730,14 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
   priorState,
   profileDisplayName
 ) {
+  if (messagePrioritizesFamilyOrApproximateCostInquiry(bodyText)) return false;
   if (!messageLooksLikeMultiQuestionPatientInquiry(bodyText)) return false;
   if (messageLooksLikeSpirometryOnlyInquiry(bodyText)) return false;
   if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText)) return false;
   if (messageStatesHealthInsuranceCoversConsultationButWantsOnlyStudy(bodyText)) return false;
   if (conversationAwaitingStandaloneStudyTypeForCoveredConsultationPrice(priorState)) return false;
   if (messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) return false;
+  if (messageMentionsAmbiguousChacoRegion(bodyText)) return false;
 
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
   const mergedState = mergeConversationStatePreservingGreeting(
@@ -6673,6 +6843,7 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
   if (replies.length === 0) return false;
 
   const studyType = await resolveStudyTypeFromMessage(bodyText, mergedState, { profileDisplayName });
+  const studyTypesFromMessage = collectStudyTypesFromText(bodyText);
   const statePatch = {
     ...(patientContext.statePatch || {}),
     ...(buildLastSedeStatePatch(lastSede) || {}),
@@ -6683,7 +6854,11 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
           ...buildLastHealthInsuranceDiscussionStatePatch(),
         }
       : {}),
-    ...(studyType ? { lastStudyType: studyType, lastStudyPriceContextAtMs: Date.now() } : {}),
+    ...(studyTypesFromMessage.length > 0
+      ? { lastStudyType: studyTypesFromMessage[studyTypesFromMessage.length - 1], lastStudyPriceContextAtMs: Date.now() }
+      : studyType
+        ? { lastStudyType: studyType, lastStudyPriceContextAtMs: Date.now() }
+        : {}),
     ...(isReferralOnlySedeEntry(lastSede)
       ? buildClearedStaleBookingLinkMemoryStatePatch()
       : buildAwaitingLinkConfirmationState(lastSede, 'after_multi_question_inquiry', {
@@ -7042,6 +7217,7 @@ function buildLastBotReplyStatePatch(messageText) {
 
 function messageLooksLikeAnyPriceQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksApproximateConsultationCost(rawText)) return true;
   const normalized = normalizePriceTyposInText(rawText);
   return (
     normalized.includes('precio') ||
@@ -7355,6 +7531,9 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
   if (messageClearlyRejectsLinkSend(userMessage)) {
     return { action: 'DO_NOT_SEND', source: 'rules-reject' };
   }
+  if (messageLooksLikePatientFaqQuestion(userMessage)) {
+    return { action: 'ASK_CLARIFY', source: 'rules-faq' };
+  }
   if (messageLooksLikePrivatePriceQuestion(userMessage, options.priorState)) {
     return { action: 'ASK_CLARIFY', source: 'rules-private-price' };
   }
@@ -7394,6 +7573,7 @@ async function resolveBookingLinkOfferResponseWithOpenAi(userMessage, options = 
 
 async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName) {
   if (!stateLooksLikeAwaitingLinkConfirmation(priorState)) return false;
+  if (messageLooksLikePatientFaqQuestion(bodyText)) return false;
   const pendingSedeEntry = resolveSedeEntryFromState(priorState);
   if (isReferralOnlySedeEntry(pendingSedeEntry)) {
     return sendReferralOnlySedeBookingReply(from, pendingSedeEntry, priorState, profileDisplayName);
@@ -7434,6 +7614,7 @@ async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, pro
   }
 
   if (linkOfferDecision.action === 'SEND_LINK') {
+    if (messageLooksLikePatientFaqQuestion(bodyText)) return false;
     const entryFromState = resolveSedeEntryFromState(priorState);
     if (entryFromState) {
       await sendBookingLinkForSedeEntry(from, priorState, profileDisplayName, entryFromState);
@@ -7477,8 +7658,10 @@ async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, pro
 
   const shouldBypassPendingLinkConfirmation =
     linkOfferDecision.action === 'ASK_CLARIFY' &&
-    (messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
+    (messageLooksLikePatientFaqQuestion(bodyText) ||
+      messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
       messageLooksLikeAnyPriceQuestion(bodyText) ||
+      messageAsksWhetherConsultationIncludesStudies(bodyText) ||
       messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
       messageMatchesStudiesTopic(bodyText) ||
       messageAsksAboutConditionTreatment(bodyText) ||
@@ -8271,6 +8454,7 @@ async function shouldSendBookingLinkDirectly(bodyText, priorState, profileDispla
 
 async function tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName, options = {}) {
   if (messageLooksLikeAssistedBookingRequest(bodyText)) return false;
+  if (messageLooksLikePatientFaqQuestion(bodyText)) return false;
   const shouldSendLink = await shouldSendBookingLinkDirectly(bodyText, priorState, profileDisplayName, options);
   if (!shouldSendLink) return false;
 
@@ -8315,10 +8499,9 @@ function priorStateLooksLikeRecentBookingLinkContext(priorState) {
   return (
     lastBotReplyText.includes('calendar.app.google') ||
     lastBotReplyText.includes('calendly.com') ||
+    botReplyActuallyContainsBookingLinkUrl(lastBotReplyText) ||
     lastBotReplyText.includes('link para elegir') ||
     lastBotReplyText.includes('link para ver horarios') ||
-    lastBotReplyText.includes('link que ya te pasé') ||
-    lastBotReplyText.includes('link que ya te pase') ||
     lastBotReplyText.includes('te acompaño paso a paso') ||
     lastBotReplyText.includes('te acompano paso a paso')
   );
@@ -8829,20 +9012,26 @@ async function tryExtractPatientContextWithOpenAi(rawText, priorState) {
 }
 
 async function resolvePatientContextFromMessage(rawText, priorState, options = {}) {
-  const requiresFreshSede = userMessageRequiresFreshSedeForBooking(rawText, priorState);
+  const regionConflict = storedSedeConflictsWithDeclaredRegion(rawText, priorState);
+  const contextPriorState = regionConflict
+    ? mergeConversationStatePreservingGreeting(priorState, {}, buildPatientRegionChangeStateResetPatch())
+    : priorState;
+  const requiresFreshSede = userMessageRequiresFreshSedeForBooking(rawText, contextPriorState);
+  const isAmbiguousChacoMessage = messageMentionsAmbiguousChacoRegion(rawText);
   const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(rawText, {
-    priorState,
+    priorState: contextPriorState,
     profileDisplayName: options.profileDisplayName,
   });
   let sedeEntry = findSedeFromText(rawText) || null;
-  if (!sedeEntry && !requiresFreshSede) {
-    sedeEntry = resolveSedeEntryFromState(priorState) || resolveLastSedeEntryFromState(priorState) || null;
+  if (!sedeEntry && !requiresFreshSede && !isAmbiguousChacoMessage) {
+    sedeEntry =
+      resolveSedeEntryFromState(contextPriorState) || resolveLastSedeEntryFromState(contextPriorState) || null;
   }
   let healthInsuranceName = isPrivatePay
     ? null
-    : resolveKnownHealthInsuranceNameForStudyPricing(priorState, rawText);
+    : resolveKnownHealthInsuranceNameForStudyPricing(contextPriorState, rawText);
 
-  if (!sedeEntry && !requiresFreshSede) {
+  if (!sedeEntry && !requiresFreshSede && !isAmbiguousChacoMessage) {
     sedeEntry = await resolveSedeFromTextWithOpenAi(rawText);
   }
   if (
@@ -8851,15 +9040,19 @@ async function resolvePatientContextFromMessage(rawText, priorState, options = {
     !shouldSkipHealthInsuranceFuzzyResolutionForMessage(rawText)
   ) {
     const fuzzyHealthInsuranceName = await tryResolveHealthInsuranceNameFromSheetsFuzzy(rawText, {
-      priorState,
+      priorState: contextPriorState,
       profileDisplayName: options.profileDisplayName,
     });
     if (fuzzyHealthInsuranceName) {
       healthInsuranceName = normalizeHealthInsuranceNameForStudyPricing(fuzzyHealthInsuranceName);
     }
   }
-  if (getOpenAiApiKey() && (!sedeEntry || (!healthInsuranceName && !isPrivatePay))) {
-    const openAiPatientContext = await tryExtractPatientContextWithOpenAi(rawText, priorState);
+  if (
+    getOpenAiApiKey() &&
+    !isAmbiguousChacoMessage &&
+    (!sedeEntry || (!healthInsuranceName && !isPrivatePay))
+  ) {
+    const openAiPatientContext = await tryExtractPatientContextWithOpenAi(rawText, contextPriorState);
     if (openAiPatientContext) {
       if (!sedeEntry && openAiPatientContext.sedeEntry && !requiresFreshSede) {
         sedeEntry = openAiPatientContext.sedeEntry;
@@ -8873,8 +9066,11 @@ async function resolvePatientContextFromMessage(rawText, priorState, options = {
   const patientSubjectFromMessage = resolvePatientSubjectFromMessage(rawText);
   const patientSubject =
     patientSubjectFromMessage ||
-    (priorState && typeof priorState.patientSubject === 'string' ? priorState.patientSubject : null);
+    (contextPriorState && typeof contextPriorState.patientSubject === 'string'
+      ? contextPriorState.patientSubject
+      : null);
   const statePatch = {
+    ...(regionConflict ? buildPatientRegionChangeStateResetPatch() : {}),
     ...(sedeEntry ? buildLastSedeStatePatch(sedeEntry) || {} : {}),
     ...(healthInsuranceName
       ? { healthInsuranceName, lastHealthInsuranceName: healthInsuranceName }
@@ -9840,6 +10036,8 @@ async function tryHandleBookingWithHealthInsuranceContext(
   profileDisplayName
 ) {
   if (messageAsksToChangeBookingSede(bodyText)) return false;
+  if (messagePrioritizesFamilyOrApproximateCostInquiry(bodyText)) return false;
+  if (messageLooksLikePatientFaqQuestion(bodyText)) return false;
   if (!messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) return false;
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
   let mergedState = mergeConversationStatePreservingGreeting(
@@ -9849,9 +10047,7 @@ async function tryHandleBookingWithHealthInsuranceContext(
   );
   const lastSede = resolveConfirmedSedeEntryForBookingFlow(bodyText, mergedState);
   if (!lastSede) return false;
-  if (isReferralOnlySedeEntry(lastSede)) {
-    return sendReferralOnlySedeBookingReply(from, lastSede, mergedState, profileDisplayName, bodyText);
-  }
+  if (isReferralOnlySedeEntry(lastSede)) return false;
   const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
     profileDisplayName,
   });
@@ -9924,6 +10120,8 @@ async function tryHandleBookingWithPatientContext(from, bodyText, priorState, pr
   if (messageAsksToChangeBookingSede(bodyText)) return false;
   if (messageAsksWhyChooseDoctorOrTrustQuestion(bodyText)) return false;
   if (messageLooksLikeSpirometryOnlyInquiry(bodyText)) return false;
+  if (messagePrioritizesFamilyOrApproximateCostInquiry(bodyText)) return false;
+  if (messageLooksLikePatientFaqQuestion(bodyText)) return false;
   if (messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) {
     return tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName);
   }
@@ -10354,6 +10552,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandlePatientContextCorrection(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -10383,6 +10584,12 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     return true;
   }
   if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleConsultationIncludesStudiesInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
@@ -12300,6 +12507,7 @@ function messageLooksLikeBookingIntent(rawText) {
   if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (messageAsksGenericConsultationPrice(rawText)) return false;
+  if (messageAsksApproximateConsultationCost(rawText)) return false;
   if (
     messageLooksLikeAnyPriceQuestion(rawText) &&
     /\b(consulta|turno|visita)\b/.test(normalized)
@@ -12425,8 +12633,13 @@ function mustDeliverFullBookingLinkUrl(priorState, userMessage, entry, options =
 
 function shouldResendFullBookingLinkUrl(priorState, userMessage, entry) {
   if (messageExplicitlyRequestsBookingLink(userMessage)) return true;
+  if (messageConfirmsLinkSend(userMessage)) return true;
+  if (messageLooksLikeBookingIntent(userMessage)) return true;
   if (!wasBookingLinkSentRecently(priorState)) return true;
   if (!hasBookingLinkInStateForSede(priorState, entry)) return true;
+  const lastBotReplyText =
+    priorState && typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '';
+  if (!botReplyActuallyContainsBookingLinkUrl(lastBotReplyText)) return true;
   return false;
 }
 
@@ -12572,7 +12785,127 @@ function messageAsksAboutPaymentMethods(rawText) {
 function messageAsksAboutConsultDuration(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  return normalized.includes('cuanto dura') || normalized.includes('cuánto dura') || normalized.includes('duracion');
+  return (
+    normalized.includes('cuanto dura') ||
+    normalized.includes('cuánto dura') ||
+    normalized.includes('duracion') ||
+    normalized.includes('cuanto tiempo dura') ||
+    normalized.includes('cuanto tarda') ||
+    normalized.includes('dura la consulta') ||
+    normalized.includes('dura el turno')
+  );
+}
+
+function messageLooksLikePatientFaqQuestion(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  return (
+    messageAsksAboutConsultDuration(rawText) ||
+    messageAsksAboutCompanion(rawText) ||
+    messageAsksAboutInvoice(rawText) ||
+    messageAsksAboutPaymentMethods(rawText) ||
+    messageAsksAboutDocumentationOrRequirements(rawText) ||
+    messageAsksAboutReferralOrPrescription(rawText) ||
+    messageAsksWhatToBringForConsultation(rawText) ||
+    messageAsksAboutSameDayStudies(rawText) ||
+    messageAsksAboutStudyFasting(rawText) ||
+    messageAsksAboutStudyMedicationPreparation(rawText) ||
+    messageAsksAboutStudyDuration(rawText) ||
+    messageAsksAboutMedicationAllergyStudy(rawText) ||
+    messageAsksAboutVirtualVisit(rawText) ||
+    (messageAsksAboutOtherProvinces(rawText) && !messageAsksAboutConsultDuration(rawText)) ||
+    messageAsksForMapsLocation(rawText) ||
+    messageAsksAboutSedeAddressOrHowToArrive(rawText)
+  );
+}
+
+function buildPatientFaqReply(bodyText, priorState) {
+  const sedeMentionedInMessage = messageAsksAboutSedeAddressOrHowToArrive(bodyText)
+    ? findSedeFromText(bodyText)
+    : null;
+  if (messageAsksAboutInvoice(bodyText)) return INVOICE_MESSAGE;
+  if (messageAsksAboutPaymentMethods(bodyText)) return PAYMENT_METHODS_MESSAGE;
+  if (messageAsksAboutConsultDuration(bodyText)) return CONSULT_DURATION_MESSAGE;
+  if (messageAsksAboutCompanion(bodyText)) return COMPANION_ALLOWED_MESSAGE;
+  if (messageAsksAboutOtherProvinces(bodyText)) return OTHER_PROVINCES_MESSAGE;
+  if (messageAsksAboutVirtualVisit(bodyText)) return VIRTUAL_VISITS_MESSAGE;
+  if (messageAsksForMapsLocation(bodyText)) {
+    return buildSedeMapsLocationReply(priorState, findSedeFromText(bodyText));
+  }
+  if (messageAsksAboutSedeAddressOrHowToArrive(bodyText)) {
+    return buildSedeAddressReply(priorState, sedeMentionedInMessage);
+  }
+  if (messageAsksAboutStudyFasting(bodyText)) return STUDY_FASTING_MESSAGE;
+  if (messageAsksAboutStudyMedicationPreparation(bodyText)) {
+    return STUDY_PREPARATION_MEDICATION_MESSAGE;
+  }
+  if (messageAsksAboutStudyDuration(bodyText)) return STUDY_DURATION_MESSAGE;
+  if (messageAsksAboutMedicationAllergyStudy(bodyText)) return MEDICATION_ALLERGY_STUDY_MESSAGE;
+  if (messageAsksAboutReferralOrPrescription(bodyText)) {
+    return appendAskSedeIfMissing(priorState, NO_REFERRAL_REQUIRED_MESSAGE);
+  }
+  if (messageAsksAboutDocumentationOrRequirements(bodyText)) {
+    const normalized = normalizeForMatch(bodyText);
+    if (normalized.includes('credencial') || normalized.includes('autoriz')) {
+      return appendAskSedeIfMissing(priorState, AUTHORIZATION_AND_DIGITAL_CARD_MESSAGE);
+    }
+    return appendAskSedeIfMissing(priorState, DOCUMENTATION_REQUIREMENTS_MESSAGE);
+  }
+  return null;
+}
+
+async function tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageLooksLikePatientFaqQuestion(bodyText)) return false;
+  if (messageAsksAboutStudyPreparation(bodyText, priorState)) return false;
+  const reply = buildPatientFaqReply(bodyText, priorState);
+  if (!reply) return false;
+
+  const preservedSessionState =
+    stateLooksLikeAwaitingLinkConfirmation(priorState) && priorState && typeof priorState === 'object'
+      ? {
+          greeted: Boolean(priorState.greeted),
+          lastSeenAtMs: priorState.lastSeenAtMs,
+          lastSedeEnvKey: priorState.lastSedeEnvKey,
+          lastSedeDisplayName: priorState.lastSedeDisplayName,
+          lastSedeOptionNumber: priorState.lastSedeOptionNumber,
+          lastSedeAtMs: priorState.lastSedeAtMs,
+          lastBotReplyAtMs: priorState.lastBotReplyAtMs,
+        }
+      : {};
+
+  const sedeMentionedInMessage = messageAsksAboutSedeAddressOrHowToArrive(bodyText)
+    ? findSedeFromText(bodyText)
+    : null;
+  const shouldAwaitVirtualVisitConfirmation =
+    messageAsksAboutVirtualVisit(bodyText) || messageAsksAboutOtherProvinces(bodyText);
+  const addressSedeForState =
+    sedeMentionedInMessage ||
+    (messageAsksAboutSedeAddressOrHowToArrive(bodyText)
+      ? resolveLastSedeEntryFromState(priorState)
+      : null);
+  const suppressBookingLinkOffer =
+    messageAsksAboutConsultDuration(bodyText) ||
+    messageAsksAboutCompanion(bodyText) ||
+    messageAsksAboutInvoice(bodyText) ||
+    messageAsksAboutPaymentMethods(bodyText);
+
+  return sendFinalizedPatientTextReply(
+    from,
+    reply,
+    priorState,
+    profileDisplayName,
+    mergeConversationStatePreservingGreeting(priorState, preservedSessionState, {
+      lastSeenAtMs: Date.now(),
+      lastBotReplyAtMs: Date.now(),
+      ...(shouldAwaitVirtualVisitConfirmation ? buildAwaitingVirtualVisitConfirmationStatePatch() : {}),
+      ...(addressSedeForState ? buildLastSedeStatePatch(addressSedeForState) || {} : {}),
+    }),
+    {
+      userMessage: bodyText,
+      replyContext: 'patient_faq',
+      suppressBookingLinkOffer,
+      skipHumanization: messageAsksAboutConsultDuration(bodyText),
+    }
+  );
 }
 
 function messageAsksAboutCompanion(rawText) {
@@ -12583,8 +12916,19 @@ function messageAsksAboutCompanion(rawText) {
 
 function messageAsksAboutOtherProvinces(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageAsksAboutConsultDuration(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
-  return normalized.includes('otra provincia') || normalized.includes('otras provincias') || normalized.includes('otra ciudad');
+  if (normalized.includes('otra provincia') || normalized.includes('otras provincias')) {
+    return true;
+  }
+  if (!normalized.includes('otra ciudad')) return false;
+  if (
+    (normalized.includes('viajo') || normalized.includes('voy') || normalized.includes('vengo')) &&
+    normalized.includes('desde')
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function messageAsksAboutVirtualVisit(rawText) {
@@ -13035,18 +13379,67 @@ function buildConditionTreatmentReply(priorState, rawText) {
   return `${base} Para orientarte bien según el caso, lo ideal es una consulta de evaluación. ${buildAskSedeMessage()}`;
 }
 
-function getStudyTypeFromText(rawText) {
-  if (messageMentionsSpirometryStudy(rawText)) return STUDY_TYPE_SPIROMETRY;
+function messageMentionsAllergyTestStudy(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
   if (normalized.includes('test de alerg') || normalized.includes('test alerg') || normalized.includes('prick')) {
-    return STUDY_TYPE_ALLERGY_TEST;
+    return true;
   }
-  if (normalized.includes('test del parche') || normalized.includes('patch') || normalized.includes('parche')) {
-    return STUDY_TYPE_PATCH_TEST;
+  if (messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) && !messageMentionsSpirometryStudy(rawText)) {
+    return true;
   }
-  if (messageLooksLikeBareAllergyOrGenericTestInquiry(rawText)) {
-    return STUDY_TYPE_ALLERGY_TEST;
+  return false;
+}
+
+function messageMentionsPatchTestStudy(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('test del parche') || normalized.includes('patch') || normalized.includes('parche')
+  );
+}
+
+function collectStudyTypesFromText(rawText) {
+  if (!rawText || typeof rawText !== 'string') return [];
+  const studyTypes = [];
+  if (messageMentionsAllergyTestStudy(rawText)) {
+    studyTypes.push(STUDY_TYPE_ALLERGY_TEST);
   }
+  if (messageMentionsPatchTestStudy(rawText)) {
+    studyTypes.push(STUDY_TYPE_PATCH_TEST);
+  }
+  if (messageMentionsSpirometryStudy(rawText)) {
+    studyTypes.push(STUDY_TYPE_SPIROMETRY);
+  }
+  return studyTypes;
+}
+
+function messageMentionsMultipleStudyTypes(rawText) {
+  return collectStudyTypesFromText(rawText).length >= 2;
+}
+
+function buildMultipleStudiesWithArticlePhrase(studyTypes) {
+  const phrases = (studyTypes || [])
+    .map((studyType) => buildStudyTypeWithArticle(studyType))
+    .filter((phrase) => typeof phrase === 'string' && phrase.trim().length > 0);
+  if (phrases.length === 0) return 'los estudios';
+  if (phrases.length === 1) return phrases[0];
+  if (phrases.length === 2) return `${phrases[0]} y ${phrases[1]}`;
+  return `${phrases.slice(0, -1).join(', ')} y ${phrases[phrases.length - 1]}`;
+}
+
+function buildMultipleStudyAvailabilityPrimaryReply(studyTypes, priorState, options = {}) {
+  const sedeFromState = options.sedeEntry || resolveKnownSedeForConversationContext(priorState);
+  const studiesPhrase = buildMultipleStudiesWithArticlePhrase(studyTypes);
+  if (sedeFromState) {
+    return `Sí, el Dr. realiza ${studiesPhrase} en ${sedeFromState.displayName}.`;
+  }
+  return `Sí, el Dr. realiza ${studiesPhrase}.`;
+}
+
+function getStudyTypeFromText(rawText) {
+  const studyTypes = collectStudyTypesFromText(rawText);
+  if (studyTypes.length > 0) return studyTypes[studyTypes.length - 1];
   return null;
 }
 
@@ -13370,6 +13763,27 @@ async function tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, pro
     if (openAiTrust === true) return false;
   }
   const lastSede = resolveKnownSedeForConversationContext(priorState);
+  const studyTypesFromMessage = collectStudyTypesFromText(bodyText);
+  if (studyTypesFromMessage.length >= 2) {
+    const studiesReply = buildMultipleStudyAvailabilityPrimaryReply(studyTypesFromMessage, priorState, {
+      sedeEntry: lastSede,
+    });
+    return deliverStudiesInformationReply(
+      from,
+      studiesReply,
+      priorState,
+      profileDisplayName,
+      {
+        lastStudyType: studyTypesFromMessage[studyTypesFromMessage.length - 1],
+        lastStudyPriceContextAtMs: Date.now(),
+        bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+      },
+      {
+        userMessage: bodyText,
+        replyContext: 'generic_test_consultation_first',
+      }
+    );
+  }
   const studyType = await resolveStudyTypeFromMessage(bodyText, priorState, { profileDisplayName });
   const shouldUseGenericAllergyReply =
     !isSpirometryStudyType(studyType) ||
@@ -14140,9 +14554,14 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
     replies.push(buildConditionTreatmentReply(enrichedState, rawText));
   }
 
+  const studyTypesFromMessage = collectStudyTypesFromText(rawText);
   const studyType = await resolveStudyTypeFromMessage(rawText, priorState);
   if (messageAsksWhetherDoctorPerformsStudyInMessage(rawText)) {
-    if (studyType) {
+    if (studyTypesFromMessage.length >= 2) {
+      replies.push(
+        buildMultipleStudyAvailabilityPrimaryReply(studyTypesFromMessage, enrichedState, { sedeEntry: lastSede })
+      );
+    } else if (studyType) {
       replies.push(
         buildStudyAvailabilityPrimaryReply(studyType, enrichedState, { sedeEntry: lastSede })
       );
@@ -14743,6 +15162,7 @@ function messageLooksLikePatientTopicsOrchestratorCandidate(rawText, priorState 
   const topics = collectPatientReplyTopicsFromMessage(rawText, priorState);
   if (topics.length >= 2) return true;
   if (topics.includes('SAME_DAY_STUDIES')) return true;
+  if (topics.length === 1 && messageLooksLikePatientFaqQuestion(rawText)) return true;
   if (topics.includes('PEDIATRICS') && messageMentionsInfantPatientContext(rawText)) return true;
   const questionCount = (String(rawText).match(/\?/g) || []).length;
   return questionCount >= 3 && topics.length >= 1;
@@ -14950,7 +15370,9 @@ async function tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, pr
     return false;
   }
   if (topics.length < 2 && !topics.includes('SAME_DAY_STUDIES')) {
-    if (!(topics.includes('PEDIATRICS') && messageMentionsInfantPatientContext(bodyText))) {
+    if (topics.length === 1 && messageLooksLikePatientFaqQuestion(bodyText)) {
+      // Single explicit FAQ question (for example consultation duration).
+    } else if (!(topics.includes('PEDIATRICS') && messageMentionsInfantPatientContext(bodyText))) {
       return false;
     }
   }
@@ -14972,6 +15394,8 @@ async function tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, pr
     topics
   );
   if (replies.length === 0) return false;
+  const isSingleConsultationDurationTopic =
+    topics.length === 1 && topics[0] === 'CONSULTATION_DURATION';
   const statePatch = {
     ...(patientContext.statePatch || {}),
     ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
@@ -14982,7 +15406,9 @@ async function tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, pr
           ...buildLastHealthInsuranceDiscussionStatePatch(),
         }
       : {}),
-    ...(lastSede && !isReferralOnlySedeEntry(lastSede)
+    ...(lastSede &&
+    !isReferralOnlySedeEntry(lastSede) &&
+    !isSingleConsultationDurationTopic
       ? buildAwaitingLinkConfirmationState(lastSede, 'after_patient_topics_orchestrator', {
           healthInsuranceName: healthInsuranceName || undefined,
         })
@@ -14991,7 +15417,7 @@ async function tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, pr
   return deliverSequentialPatientTextMessages(from, replies, priorState, profileDisplayName, statePatch, {
     userMessage: bodyText,
     replyContext: 'patient_topics_orchestrator',
-    suppressBookingLinkOffer: false,
+    suppressBookingLinkOffer: isSingleConsultationDurationTopic,
     skipHumanization: true,
   });
 }
@@ -15077,6 +15503,51 @@ async function tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState
   if (!messageMentionsAmbiguousChacoRegion(bodyText)) return false;
   const healthInsuranceName =
     tryExtractHealthInsuranceName(bodyText) || (await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText));
+  const studyTypes = collectStudyTypesFromText(bodyText);
+  const contextualReplies = [];
+
+  if (healthInsuranceName) {
+    const resistenciaEntry = SEDE_ENTRIES.find((entry) => entry.displayName === 'Resistencia');
+    if (resistenciaEntry) {
+      const coverageReply = await buildHealthInsuranceCoverageLineForSede(resistenciaEntry, healthInsuranceName);
+      if (coverageReply) {
+        contextualReplies.push(
+          coverageReply.replace(/^En Resistencia\b/i, 'En Resistencia y en Sáenz Peña')
+        );
+      }
+    }
+  }
+
+  if (studyTypes.length >= 2) {
+    contextualReplies.push(buildMultipleStudyAvailabilityPrimaryReply(studyTypes, priorState, {}));
+  } else if (studyTypes.length === 1) {
+    contextualReplies.push(buildStudyAvailabilityPrimaryReply(studyTypes[0], priorState, {}));
+  }
+
+  const statePatch = {
+    ...buildAwaitingChacoSedeDisambiguationStatePatch(),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
+    ...(studyTypes.length > 0
+      ? { lastStudyType: studyTypes[studyTypes.length - 1], lastStudyPriceContextAtMs: Date.now() }
+      : {}),
+  };
+
+  if (contextualReplies.length > 0) {
+    contextualReplies.push(CHACO_REGION_DISAMBIGUATION_MESSAGE);
+    return deliverSequentialPatientTextMessages(from, contextualReplies, priorState, profileDisplayName, statePatch, {
+      userMessage: bodyText,
+      replyContext: 'chaco_sede_disambiguation',
+      suppressBookingLinkOffer: true,
+      skipHumanization: true,
+    });
+  }
+
   const wrapped = buildAutoReplyWithGreetingIfNeeded(
     CHACO_REGION_DISAMBIGUATION_MESSAGE,
     profileDisplayName,
@@ -15260,6 +15731,8 @@ async function tryHandleCoupleConsultationInquiry(from, bodyText, priorState, pr
 
 function messageShouldSkipOpenAiAssistantFallback(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikePatientFaqQuestion(rawText)) return true;
+  if (messageAsksWhetherConsultationIncludesStudies(rawText)) return true;
   if (messageMentionsAmbiguousChacoRegion(rawText)) return true;
   if (messageLooksLikePatientContextCorrection(rawText)) return true;
   if (messageAsksToRescheduleOrCancelBooking(rawText)) return true;
@@ -15346,6 +15819,20 @@ async function buildFamilyConsultationCostEstimateReplies(
     clinicalLine += ` Para consultar en ${lastSede.displayName}, lo ideal es una evaluación en consulta.`;
   }
   replies.push(clinicalLine);
+  const studyTypesFromContext = collectStudyTypesFromClinicalContext(rawText);
+  if (studyTypesFromContext.length >= 2) {
+    replies.push(
+      buildMultipleStudyAvailabilityPrimaryReply(studyTypesFromContext, priorState, { sedeEntry: lastSede })
+    );
+  } else if (studyTypesFromContext.length === 1) {
+    replies.push(
+      buildStudyAvailabilityPrimaryReply(studyTypesFromContext[0], priorState, { sedeEntry: lastSede })
+    );
+  } else if (mentionsStudies) {
+    replies.push(
+      'Sí, el Dr. realiza tests de alergia y espirometría según lo que indique la evaluación en consulta.'
+    );
+  }
   if (healthInsuranceName) {
     replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
   }
@@ -15873,6 +16360,12 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
   priorState,
   profileDisplayName
 ) {
+  if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (
     await tryHandleHealthInsuranceCoversConsultationStandaloneStudyPriceInquiry(
       from,
@@ -16530,9 +17023,7 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
   const cityName = entry.displayName;
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
   const linkAlreadyShared =
-    wasBookingLinkSentRecently(priorState) &&
-    (hasBookingLinkInStateForSede(priorState, entry) ||
-      conversationLooksLikeOngoingBookingLinkGuidance(priorState));
+    wasBookingLinkSentRecently(priorState) && hasBookingLinkInStateForSede(priorState, entry);
   const directReminderLine = linkAlreadyShared
     ? `Con el link que ya te pasé podés ver horarios y reservar tu turno en ${cityName}.`
     : linkUrl
@@ -16560,6 +17051,58 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
   }
 
   return reminderWithOptionalPrefix;
+}
+
+async function tryHandleConsultationIncludesStudiesInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksWhetherConsultationIncludesStudies(bodyText)) return false;
+
+  const healthInsuranceName =
+    resolveActiveHealthInsuranceNameFromState(priorState) ||
+    tryExtractHealthInsuranceName(bodyText) ||
+    (await tryResolveHealthInsuranceNameFromSheetsFuzzy(bodyText));
+  const lastSede = resolveKnownSedeForConversationContext(priorState);
+  const studyTypes = collectStudyTypesFromText(bodyText);
+  const studyType =
+    studyTypes.length > 0
+      ? studyTypes[studyTypes.length - 1]
+      : priorState && typeof priorState.lastStudyType === 'string'
+        ? priorState.lastStudyType
+        : null;
+
+  let reply = CONSULTATION_DOES_NOT_INCLUDE_STUDIES_MESSAGE;
+  if (
+    healthInsuranceName &&
+    INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(healthInsuranceName) &&
+    studyType &&
+    isSpirometryStudyType(studyType)
+  ) {
+    const includedStudyReply = buildIncludedStudyCoverageFollowUpReply(
+      studyType,
+      healthInsuranceName,
+      lastSede
+    );
+    if (includedStudyReply) {
+      reply = `${CONSULTATION_DOES_NOT_INCLUDE_STUDIES_MESSAGE} ${includedStudyReply}`;
+    }
+  }
+
+  return sendFinalizedPatientTextReply(from, reply, priorState, profileDisplayName, {
+    ...(lastSede ? buildLastSedeStatePatch(lastSede) || {} : {}),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
+    ...(studyType ? { lastStudyType: studyType, lastStudyPriceContextAtMs: Date.now() } : {}),
+    bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+  }, {
+    userMessage: bodyText,
+    replyContext: 'consultation_includes_studies',
+    suppressBookingLinkOffer: true,
+    skipHumanization: true,
+  });
 }
 
 async function deliverBookingLinkReminderReply(
@@ -16609,7 +17152,7 @@ async function deliverBookingLinkReminderReply(
     profileDisplayName,
     {
       ...(buildLastSedeStatePatch(lastSede) || {}),
-      ...(buildLinkSentStatePatch(lastSede) || {}),
+      ...(botReplyActuallyContainsBookingLinkUrl(rulesReply) ? buildLinkSentStatePatch(lastSede) || {} : {}),
     },
     {
       userMessage: bodyText,
@@ -16703,6 +17246,8 @@ async function tryHandleBookingPersonalAssistanceRequest(from, bodyText, priorSt
 function messageLooksLikeAlreadySentLinkBookingFollowUp(rawText, priorState) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksToConfirmExistingBooking(rawText)) return false;
+  if (messageLooksLikePatientFaqQuestion(rawText)) return false;
+  if (messageAsksWhetherConsultationIncludesStudies(rawText)) return false;
   if (messageRequestsPersonalBookingAssistance(rawText)) return false;
   if (conversationExpectsStudyPriceOrTypeAnswer(priorState)) return false;
   if (!priorState || typeof priorState !== 'object') return false;
@@ -17452,6 +17997,14 @@ function shouldThrottleUserReply(priorState, rawText) {
   if (messageConfirmsLinkSend(rawText) || messageClearlyRejectsLinkSend(rawText)) return false;
   // Never throttle explicit booking/link requests.
   if (messageExplicitlyRequestsBookingLink(rawText) || messageLooksLikeBookingIntent(rawText)) return false;
+  // Ignore bare acknowledgements right after a substantive reply (e.g. "bueno" after trust answer).
+  if (
+    messageIsAcknowledgement(rawText) &&
+    !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
+    !stateHasPendingBookingIntent(priorState)
+  ) {
+    return true;
+  }
   // Throttle low-signal messages.
   if (messageLooksLikeFragment(rawText) || messageLooksLikeVagueAnswer(rawText) || messageIsGreeting(rawText)) return true;
   return false;
@@ -17960,7 +18513,7 @@ exports.handler = async (event) => {
 
     for (const item of latestMessageBySender.values()) {
       const { from, profileDisplayName, isText, messageType } = item;
-      const priorState = await getConversationState(from);
+      let priorState = await getConversationState(from);
       if (!isText) {
         const lastSensitiveWarnAtMs =
           priorState && typeof priorState === 'object' ? Number(priorState.lastSensitiveDataWarningAtMs) : NaN;
@@ -18040,6 +18593,17 @@ exports.handler = async (event) => {
           recentInboundMessageIds: updatedRecentIds,
         });
         continue;
+      }
+
+      const regionResetState = applyPatientRegionResetIfNeeded(bodyText, priorState);
+      if (regionResetState !== priorState) {
+        priorState = regionResetState;
+        await setConversationState(from, {
+          ...priorState,
+          lastSeenAtMs: Date.now(),
+          lastInboundMessageAtMs: inboundAtMs,
+          recentInboundMessageIds: updatedRecentIds,
+        });
       }
 
           if (messageAsksToTalkToSecretary(bodyText)) {
@@ -18166,6 +18730,9 @@ exports.handler = async (event) => {
           ) {
             continue;
           }
+          if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (
             await tryHandleHealthInsuranceCoversConsultationStandaloneStudyPriceInquiry(
               from,
@@ -18176,12 +18743,21 @@ exports.handler = async (event) => {
           ) {
             continue;
           }
+          if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (
             await tryHandleBookingWithHealthInsuranceContext(from, bodyText, priorState, profileDisplayName)
           ) {
             continue;
           }
           if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
@@ -18207,9 +18783,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleWrongSedeAssumptionCorrection(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
 
@@ -18323,6 +18896,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleReferralOnlySedeBookingInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -18652,7 +19228,13 @@ exports.handler = async (event) => {
               continue;
             }
           }
+          if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleConsultationIncludesStudiesInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleSedePresenceInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -18746,6 +19328,9 @@ exports.handler = async (event) => {
           if (await tryHandleAlreadySentBookingLinkFollowUp(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (
             await tryHandleConsultationPriceWithPatientContext(from, bodyText, priorState, profileDisplayName, {
               rulesOnly: isOpenAiCentralRoutingEnabled(),
@@ -18788,6 +19373,9 @@ exports.handler = async (event) => {
           if (await tryHandleWhereToBookQuestion(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -18795,6 +19383,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleExplicitBookingLinkRequest(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleConsultationIncludesStudiesInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, profileDisplayName)) {
@@ -19617,6 +20208,9 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+              continue;
+            }
             const pendingReferralSede = resolveSedeEntryFromState(priorState);
             if (
               isReferralOnlySedeEntry(pendingReferralSede) &&
@@ -19734,13 +20328,19 @@ exports.handler = async (event) => {
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             const shouldBypassPendingLinkConfirmation =
               linkOfferDecision.action === 'ASK_CLARIFY' &&
-              (messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
+              (messageLooksLikePatientFaqQuestion(bodyText) ||
+                messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
                 messageLooksLikeAnyPriceQuestion(bodyText) ||
                 messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
                 messageMatchesStudiesTopic(bodyText) ||
                 messageAsksAboutConditionTreatment(bodyText) ||
                 messageLooksLikeChronicSymptomFrustration(bodyText));
             if (shouldBypassPendingLinkConfirmation) {
+              if (messageLooksLikePatientFaqQuestion(bodyText)) {
+                if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
+                  continue;
+                }
+              }
               if (
                 stateHasRecentStudyPriceContext(priorState) &&
                 messageLooksLikeAnyPriceQuestion(bodyText) &&
@@ -19843,6 +20443,7 @@ exports.handler = async (event) => {
 
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
+            !messageLooksLikePatientFaqQuestion(bodyText) &&
             wasBookingLinkSentRecently(priorState) &&
             messageIsAcknowledgement(bodyText) &&
             !messageAsksToConfirmExistingBooking(bodyText) &&
@@ -19865,6 +20466,7 @@ exports.handler = async (event) => {
 
           if (
             !stateLooksLikeAwaitingLinkConfirmation(priorState) &&
+            !messageAsksWhetherConsultationIncludesStudies(bodyText) &&
             wasBookingLinkSentRecently(priorState) &&
             !messageAsksToConfirmExistingBooking(bodyText) &&
             (messageConfirmsLinkSend(bodyText) ||
