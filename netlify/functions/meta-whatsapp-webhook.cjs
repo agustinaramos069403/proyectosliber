@@ -5009,6 +5009,33 @@ function extractRelativeDayLabelFromText(rawText) {
   return null;
 }
 
+function messageAsksHealthInsuranceAcceptanceInText(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!messageHasHealthInsuranceContextInText(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('atienden con') ||
+    normalized.includes('atiende con') ||
+    normalized.includes('atienen con') ||
+    normalized.includes('atiene con') ||
+    normalized.includes('aceptan') ||
+    normalized.includes('trabajan con') ||
+    /\b(atienden|atiende|atienen)\b/.test(normalized) ||
+    normalized.includes('cubren') ||
+    normalized.includes('tienen plus') ||
+    normalized.includes('hay plus') ||
+    messageAsksObraSocialOrCoveragePrice(rawText)
+  );
+}
+
+function messageCombinesHealthInsuranceAcceptanceWithBooking(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const hasBookingSignal =
+    messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText);
+  if (!hasBookingSignal) return false;
+  return messageAsksHealthInsuranceAcceptanceInText(rawText);
+}
+
 function messagePrioritizesBookingOverHealthInsuranceInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   if (messageAsksToChangeBookingSede(rawText)) return false;
@@ -5020,12 +5047,9 @@ function messagePrioritizesBookingOverHealthInsuranceInquiry(rawText) {
     messageExplicitlyRequestsBookingLink(rawText);
   if (!hasBookingSignal) return false;
   const asksHealthInsuranceCoverageOnly =
-    (normalized.includes('cuanto sale con') ||
+    (messageAsksHealthInsuranceAcceptanceInText(rawText) ||
+      normalized.includes('cuanto sale con') ||
       normalized.includes('cuanto cuesta con') ||
-      normalized.includes('aceptan') ||
-      normalized.includes('trabajan con') ||
-      normalized.includes('tienen plus') ||
-      normalized.includes('hay plus') ||
       normalized.includes('cual es el plus')) &&
     !/\b(turno|turnos|agendar|reservar|cita)\b/.test(normalized);
   if (asksHealthInsuranceCoverageOnly) return false;
@@ -6209,6 +6233,7 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
   }
   if (
     (segment.includes('atienden') ||
+      segment.includes('atienen') ||
       segment.includes('aceptan') ||
       segment.includes('trabajan con') ||
       segment.includes('cubre') ||
@@ -9817,7 +9842,7 @@ async function tryHandleBookingWithHealthInsuranceContext(
   if (messageAsksToChangeBookingSede(bodyText)) return false;
   if (!messagePrioritizesBookingOverHealthInsuranceInquiry(bodyText)) return false;
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
-  const mergedState = mergeConversationStatePreservingGreeting(
+  let mergedState = mergeConversationStatePreservingGreeting(
     priorState,
     priorState || {},
     patientContext.statePatch
@@ -9830,26 +9855,68 @@ async function tryHandleBookingWithHealthInsuranceContext(
   const healthInsuranceName = await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, {
     profileDisplayName,
   });
+  const conversationStatePatch = {
+    ...(patientContext.statePatch || {}),
+    ...(buildLastSedeStatePatch(lastSede) || {}),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
+    ...buildClearedAwaitingLinkConfirmationStatePatch(),
+    ...buildClearedPendingBookingIntentPatch(),
+    ...buildClearedPendingBookingDetailsPatch(),
+    ...buildLastScheduleDiscussedStatePatch(),
+  };
+  if (messageCombinesHealthInsuranceAcceptanceWithBooking(bodyText) && healthInsuranceName) {
+    const coverageReply = await buildHealthInsurancePlusReplyOrAskCity(
+      lastSede,
+      healthInsuranceName,
+      mergedState,
+      { replyContext: 'health_insurance_info', suppressBookingLinkOffer: true }
+    );
+    if (coverageReply && coverageReply !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
+      const deliveredCoverage = await deliverSequentialPatientTextMessages(
+        from,
+        [coverageReply],
+        priorState,
+        profileDisplayName,
+        {
+          ...(patientContext.statePatch || {}),
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        },
+        {
+          userMessage: bodyText,
+          replyContext: 'health_insurance_info',
+          suppressBookingLinkOffer: true,
+          skipHumanization: true,
+        }
+      );
+      if (!deliveredCoverage) return false;
+      mergedState = mergeConversationStatePreservingGreeting(
+        priorState,
+        priorState || {},
+        {
+          ...(patientContext.statePatch || {}),
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      );
+    }
+  }
   const slotPrefix = buildPreferredSlotBookingAcknowledgementPrefix(lastSede, bodyText);
   return deliverBookingLinkReply(from, lastSede, mergedState, profileDisplayName, {
     userMessage: bodyText,
     primaryPrefix: slotPrefix || undefined,
     forceResend: true,
-    conversationStatePatch: {
-      ...(patientContext.statePatch || {}),
-      ...(buildLastSedeStatePatch(lastSede) || {}),
-      ...(healthInsuranceName
-        ? {
-            healthInsuranceName,
-            lastHealthInsuranceName: healthInsuranceName,
-            ...buildLastHealthInsuranceDiscussionStatePatch(),
-          }
-        : {}),
-      ...buildClearedAwaitingLinkConfirmationStatePatch(),
-      ...buildClearedPendingBookingIntentPatch(),
-      ...buildClearedPendingBookingDetailsPatch(),
-      ...buildLastScheduleDiscussedStatePatch(),
-    },
+    conversationStatePatch,
   });
 }
 
