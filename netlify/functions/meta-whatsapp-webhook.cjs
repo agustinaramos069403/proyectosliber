@@ -2666,6 +2666,13 @@ function stateLooksLikeAwaitingVirtualVisitConfirmation(state) {
   );
 }
 
+function buildAwaitingVirtualVisitConfirmationStatePatch() {
+  return {
+    state: 'awaiting_virtual_visit_confirmation',
+    awaitingVirtualVisitConfirmationAtMs: Date.now(),
+  };
+}
+
 function messageLooksLikeTreatmentAppointmentRequest(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
@@ -20435,10 +20442,7 @@ exports.handler = async (event) => {
               mergeConversationStatePreservingGreeting(
                 priorState,
                 shouldAwaitVirtualVisitConfirmation
-                  ? {
-                      state: 'awaiting_virtual_visit_confirmation',
-                      awaitingVirtualVisitConfirmationAtMs: Date.now(),
-                    }
+                  ? buildAwaitingVirtualVisitConfirmationStatePatch()
                   : priorState || {},
                 {
                   ...(addressSedeForState ? buildLastSedeStatePatch(addressSedeForState) : null),
