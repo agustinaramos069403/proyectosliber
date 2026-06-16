@@ -275,7 +275,7 @@ const STUDIES_DIGITAL_RESULTS_MESSAGE =
 const STUDIES_SENT_FOR_STUDIES_BEFORE_VISIT_MESSAGE =
   'Si otro médico te indicó estudios, traé la orden o informe que te hayan dado y los resultados si ya los tenés. En la consulta el Dr. los revisa y ve si hace falta algo más.';
 const STUDY_PRICE_WITH_CONSULTATION_ARS = 30000;
-const STANDALONE_SPIROMETRY_PRICE_ARS = 40000;
+const STANDALONE_SPIROMETRY_PRICE_ARS = 45000;
 const STUDY_TYPE_SPIROMETRY = 'espirometría';
 const STUDY_TYPE_ALLERGY_TEST = 'test de alergia';
 const STUDY_TYPE_PATCH_TEST = 'test del parche';
@@ -4091,6 +4091,24 @@ async function getGoogleSheetsData() {
     return null;
   }
 
+  const plusSpreadsheetId = getGoogleSheetsPlusSpreadsheetId();
+  const privatePricesSpreadsheetId = getGoogleSheetsPrivatePricesSpreadsheetId();
+  if (
+    plusSpreadsheetId &&
+    privatePricesSpreadsheetId &&
+    plusSpreadsheetId === privatePricesSpreadsheetId
+  ) {
+    console.warn(
+      'meta-whatsapp-webhook: plus and private prices use the same spreadsheet ID; ensure both tabs exist and are up to date',
+      { spreadsheetId: plusSpreadsheetId }
+    );
+  } else if (privatePricesSpreadsheetId && !process.env.GOOGLE_SHEETS_PRIVATE_PRICES_SPREADSHEET_ID) {
+    console.warn(
+      'meta-whatsapp-webhook: GOOGLE_SHEETS_PRIVATE_PRICES_SPREADSHEET_ID is unset; private prices fall back to GOOGLE_SHEETS_SPREADSHEET_ID (plus file). Set the private-prices spreadsheet ID explicitly.',
+      { fallbackSpreadsheetId: privatePricesSpreadsheetId }
+    );
+  }
+
   cachedGoogleSheetsData = {
     plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
     privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
@@ -4209,9 +4227,22 @@ async function healthInsuranceExistsInAnyCity(healthInsuranceName) {
 
 async function lookupPrivatePrice(cityDisplayName) {
   const data = await getGoogleSheetsData();
-  if (!data) return null;
+  if (!data) {
+    console.warn('meta-whatsapp-webhook: private price lookup missed (no sheets data)', {
+      cityDisplayName,
+    });
+    return null;
+  }
   const cityKey = normalizeForMatch(normalizeCityKeyForSheets(cityDisplayName));
-  return data.privatePriceLookup.get(cityKey) ?? null;
+  const priceArs = data.privatePriceLookup.get(cityKey) ?? null;
+  console.info('meta-whatsapp-webhook: private price lookup', {
+    cityDisplayName,
+    cityKey,
+    priceArs,
+    privatePriceSource: data.privatePriceSource || null,
+    privatePriceLookupSize: data.privatePriceLookup.size,
+  });
+  return priceArs;
 }
 
 /**
@@ -4643,6 +4674,8 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
 
   const apiKey = getOpenAiApiKey();
   const modelName = getOpenAiModelName();
+  const standaloneSpirometryPriceLabel = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
+  const studyWithConsultationPriceLabel = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
   const replyContextInstructions = [];
   if (options.replyContext === 'booking_link_reminder') {
     replyContextInstructions.push(
@@ -4679,7 +4712,7 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
   if (options.replyContext === 'study_price_policy') {
     replyContextInstructions.push(
       'Contexto: precio o política de estudios (espirometría o test de alergia).',
-      'Mantené EXACTOS los montos y la regla: test de alergia requiere evaluación previa; espirometría sola $40.000 en Corrientes salvo que el borrador diga otra cosa confirmada.',
+      `Mantené EXACTOS los montos y la regla: test de alergia requiere evaluación previa; espirometría sola $${standaloneSpirometryPriceLabel} en Corrientes salvo que el borrador diga otra cosa confirmada.`,
       'No inventes precios de test de alergia ni omitas que hace falta consulta de evaluación.'
     );
   }
@@ -4705,7 +4738,7 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
     replyContextInstructions.push(
       'Contexto: el paciente pidió obra social/prepaga, consulta particular y precio de espirometría en el mismo mensaje.',
       'Son tres respuestas separadas en orden: (1) plus y total con obra social + espirometría en consulta, (2) consulta particular, (3) espirometría sola sin consulta.',
-      'Mantené EXACTOS los montos del borrador. No confundas espirometría sola ($40.000) con la espirometría en consulta ($30.000).',
+      `Mantené EXACTOS los montos del borrador. No confundas espirometría sola ($${standaloneSpirometryPriceLabel}) con la espirometría en consulta ($${studyWithConsultationPriceLabel}).`,
       'No repitas la ciudad en cada mensaje si el borrador ya la omitió en el segundo o tercer bloque.'
     );
   }
@@ -4794,7 +4827,7 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
     replyContextInstructions.push(
       'Contexto: la obra social del paciente ya cubre la consulta y pregunta cuánto sale SOLO el estudio.',
       'Si el test no está claro, preguntá si es test de alergia o espirometría; NO pidas obra social otra vez.',
-      'Espirometría sola: $40.000. Test de alergia: se valora en evaluación, sin precio único fijo. No sumes consulta particular + test.'
+      `Espirometría sola: $${standaloneSpirometryPriceLabel}. Test de alergia: se valora en evaluación, sin precio único fijo. No sumes consulta particular + test.`
     );
   }
   const systemPrompt = [

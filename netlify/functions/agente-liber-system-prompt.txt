@@ -132,7 +132,7 @@ Si preguntan si HACEN / REALIZAN un estudio ("¿hacen espirometría?", "¿hacen 
 Reglas de precio para estudios:
 Test de alergia: $30.000 en todas las sedes.
 Espirometría: $30.000 cuando es junto con consulta.
-Si es solo espirometría sin consulta: $40.000.
+Si es solo espirometría sin consulta: $45.000.
 Consulta particular + estudio: valor de consulta particular de la sede + $30.000.
 Si tiene OSDE, Sancor o ISSUNNE, el test/espirometría queda incluido en el valor de la consulta.
 Si preguntan "cuánto cuesta la espirometría/test" sin aclarar cobertura, primero pedir obra social.
