@@ -6311,11 +6311,57 @@ function collapseRedundantPatientQuestionIntents(intents, options = {}) {
   return orderPatientQuestionIntents(collapsed);
 }
 
-function messageLooksLikeMultiQuestionPatientInquiry(rawText) {
+function messageHasMultipleDistinctQuestionSignals(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  let signalCount = 0;
+  if (messageAsksAboutConsultDuration(rawText)) signalCount += 1;
+  if (messageAsksWhetherConsultationIncludesStudies(rawText)) signalCount += 1;
+  if (messageLooksLikeAnyPriceQuestion(rawText)) signalCount += 1;
+  if (
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageAsksHealthInsuranceAcceptanceInText(rawText)
+  ) {
+    signalCount += 1;
+  }
+  if (messageMatchesStudiesTopic(rawText)) signalCount += 1;
+  if (messageAsksAboutConditionTreatment(rawText)) signalCount += 1;
+  if (messageLooksLikeBookingIntent(rawText)) signalCount += 1;
+  if (messageAsksAboutStudyPreparation(rawText)) signalCount += 1;
+  return signalCount >= 2;
+}
+
+function messageLooksLikeMultiQuestionPatientInquiry(rawText, priorState = null) {
   if (!rawText || typeof rawText !== 'string') return false;
   const questionCount = (String(rawText).match(/\?/g) || []).length;
   if (questionCount >= 2) return true;
   if (questionCount >= 1 && messageLooksLikeComplexClinicalInquiry(rawText)) return true;
+
+  const patientTopics = collectPatientReplyTopicsFromMessage(rawText, priorState);
+  if (patientTopics.length >= 2) return true;
+
+  if (questionCount >= 1 && messageHasMultipleDistinctQuestionSignals(rawText)) return true;
+
+  if (inferPatientQuestionIntentsFromMessage(rawText).length >= 2) return true;
+
+  if (questionCount === 1) {
+    const normalized = normalizeForMatch(rawText);
+    const conjunctionParts = normalized.split(/\s+y\s+|\s+ademas\s+|\s+tambien\s+/);
+    if (conjunctionParts.length >= 2) {
+      const substantiveParts = conjunctionParts.filter(
+        (part) =>
+          part.includes('cuanto') ||
+          part.includes('dura') ||
+          part.includes('cuesta') ||
+          part.includes('sale') ||
+          part.includes('atienden') ||
+          part.includes('incluye') ||
+          part.includes('hacen') ||
+          part.includes('necesito') ||
+          part.includes('preparacion')
+      );
+      if (substantiveParts.length >= 2) return true;
+    }
+  }
   return false;
 }
 
@@ -6453,6 +6499,15 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
   if (messageAsksAboutStudyPreparation(segmentText) || messageAsksAboutStudyFasting(segmentText)) {
     return 'STUDY_PREPARATION';
   }
+  if (messageAsksAboutConsultDuration(segmentText) || messageAsksAboutConsultDuration(fullText)) {
+    return 'CONSULTATION_DURATION';
+  }
+  if (
+    messageAsksWhetherConsultationIncludesStudies(segmentText) ||
+    messageAsksWhetherConsultationIncludesStudies(fullText)
+  ) {
+    return 'CONSULTATION_INCLUDES_STUDIES';
+  }
   if (messageMentionsChildPatientContext(segmentText) || messageAsksIfDoctorTreatsChildren(segmentText)) {
     return 'PEDIATRICS';
   }
@@ -6470,6 +6525,8 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
 const PATIENT_QUESTION_INTENT_ORDER = [
   'PEDIATRICS',
   'CONDITION_TREATMENT',
+  'CONSULTATION_DURATION',
+  'CONSULTATION_INCLUDES_STUDIES',
   'SEDE_PRESENCE',
   'HEALTH_INSURANCE_ACCEPTANCE',
   'HEALTH_INSURANCE_PLUS',
@@ -6485,6 +6542,8 @@ const PATIENT_QUESTION_INTENT_ORDER = [
 const PATIENT_QUESTION_INTENT_OPENAI_TOKENS = [
   'PEDIATRICS',
   'CONDITION_TREATMENT',
+  'CONSULTATION_DURATION',
+  'CONSULTATION_INCLUDES_STUDIES',
   'SEDE_PRESENCE',
   'HEALTH_INSURANCE_ACCEPTANCE',
   'HEALTH_INSURANCE_PLUS',
@@ -6531,6 +6590,8 @@ async function extractPatientQuestionIntentsWithOpenAi(userMessage, priorState, 
     `Intents permitidos (en orden lógico de respuesta): ${PATIENT_QUESTION_INTENT_OPENAI_TOKENS.join(', ')}.`,
     'Reglas:',
     '- Si pregunta si ACEPTAN/ATIENDEN o si CUBRE una obra social o prepaga → HEALTH_INSURANCE_ACCEPTANCE (no SEDE_PRESENCE).',
+    '- Si pregunta cuánto dura la consulta o el turno → CONSULTATION_DURATION.',
+    '- Si pregunta si la consulta incluye estudios/tests → CONSULTATION_INCLUDES_STUDIES.',
     '- Si pregunta ayuno o preparación del estudio → STUDY_PREPARATION.',
     '- Si pregunta por plus/coseguro/copago → HEALTH_INSURANCE_PLUS.',
     '- Si pregunta cuánto sale/cuesta consulta Y test/estudio juntos → CONSULTATION_AND_STUDY_PRICE.',
@@ -6622,6 +6683,10 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
         mergeConversationStatePreservingGreeting(priorState, priorState || {}, buildLastSedeStatePatch(lastSede) || {}),
         fullText
       );
+    case 'CONSULTATION_DURATION':
+      return CONSULT_DURATION_MESSAGE;
+    case 'CONSULTATION_INCLUDES_STUDIES':
+      return CONSULTATION_DOES_NOT_INCLUDE_STUDIES_MESSAGE;
     case 'SEDE_PRESENCE':
       return `Sí, el Dr. atiende en ${lastSede.displayName}.`;
     case 'HEALTH_INSURANCE_ACCEPTANCE': {
@@ -6767,7 +6832,23 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     isGenericInstitutionHealthInsurance,
     isStandaloneSpirometryWithoutConsultation,
   });
-  if (intents.length === 0) return false;
+
+  const patientTopics = collectPatientReplyTopicsFromMessage(bodyText, mergedState);
+  const topicsCoveredByIntents = new Set(
+    intents
+      .map((intent) => {
+        if (intent === 'PEDIATRICS') return 'PEDIATRICS';
+        if (intent === 'CONSULTATION_DURATION') return 'CONSULTATION_DURATION';
+        if (intent === 'STUDY_PREPARATION') return 'STUDY_PREPARATION';
+        return null;
+      })
+      .filter(Boolean)
+  );
+  const supplementalPatientTopics = patientTopics.filter((topic) => !topicsCoveredByIntents.has(topic));
+
+  if (intents.length === 0 && supplementalPatientTopics.length < 2 && patientTopics.length < 2) {
+    return false;
+  }
 
   const shouldDeliverBookingLink =
     intents.includes('BOOKING_AVAILABILITY') &&
@@ -6821,6 +6902,21 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
     }
     seenReplyTexts.add(trimmedReply);
     replies.push(trimmedReply);
+  }
+  if (supplementalPatientTopics.length > 0) {
+    const topicReplies = await buildRulesReplyPlanFromTopics(
+      mergedState,
+      bodyText,
+      lastSede,
+      healthInsuranceName,
+      supplementalPatientTopics
+    );
+    for (const topicReply of topicReplies) {
+      const trimmedTopicReply = stripDuplicatePatientReplyPrefix(topicReply.trim(), seenReplyTexts);
+      if (!trimmedTopicReply || seenReplyTexts.has(trimmedTopicReply)) continue;
+      seenReplyTexts.add(trimmedTopicReply);
+      replies.push(trimmedTopicReply);
+    }
   }
   if (messageAsksAboutSameDayStudies(bodyText)) {
     const sameDayReply = stripDuplicatePatientReplyPrefix(SAME_DAY_STUDIES_MESSAGE, seenReplyTexts);
@@ -7658,7 +7754,8 @@ async function tryHandleAwaitingLinkConfirmation(from, bodyText, priorState, pro
 
   const shouldBypassPendingLinkConfirmation =
     linkOfferDecision.action === 'ASK_CLARIFY' &&
-    (messageLooksLikePatientFaqQuestion(bodyText) ||
+    (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState) ||
+      messageLooksLikePatientFaqQuestion(bodyText) ||
       messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
       messageLooksLikeAnyPriceQuestion(bodyText) ||
       messageAsksWhetherConsultationIncludesStudies(bodyText) ||
@@ -10552,6 +10649,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
+  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -10590,9 +10690,6 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
     return true;
   }
   if (await tryHandleConsultationIncludesStudiesInquiry(from, bodyText, priorState, profileDisplayName)) {
-    return true;
-  }
-  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleRichPatientIntakeInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -12854,6 +12951,7 @@ function buildPatientFaqReply(bodyText, priorState) {
 }
 
 async function tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return false;
   if (!messageLooksLikePatientFaqQuestion(bodyText)) return false;
   if (messageAsksAboutStudyPreparation(bodyText, priorState)) return false;
   const reply = buildPatientFaqReply(bodyText, priorState);
@@ -15341,6 +15439,7 @@ async function buildRulesReplyPlanFromTopics(priorState, rawText, lastSede, heal
 
 async function tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, profileDisplayName) {
   if (!messageLooksLikePatientTopicsOrchestratorCandidate(bodyText, priorState)) return false;
+  if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return false;
   if (
     messageLooksLikeRichPatientIntakeInquiry(bodyText) ||
     messageLooksLikeCompleteCostTotalInquiry(bodyText, priorState) ||
@@ -16316,6 +16415,7 @@ async function tryHandleCombinedConsultationAndStudyPriceInquiry(
   priorState,
   profileDisplayName
 ) {
+  if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return false;
   if (!messageLooksLikeCombinedConsultationAndStudyPriceInquiry(bodyText)) return false;
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState);
   const mergedState = mergeConversationStatePreservingGreeting(
@@ -16360,6 +16460,9 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
   priorState,
   profileDisplayName
 ) {
+  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
   if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
@@ -16380,9 +16483,6 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
     return true;
   }
   if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
-    return true;
-  }
-  if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (!messageShouldBypassSedeCityDeclaration(bodyText)) return false;
@@ -17054,6 +17154,7 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
 }
 
 async function tryHandleConsultationIncludesStudiesInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) return false;
   if (!messageAsksWhetherConsultationIncludesStudies(bodyText)) return false;
 
   const healthInsuranceName =
@@ -18743,6 +18844,12 @@ exports.handler = async (event) => {
           ) {
             continue;
           }
+          if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -18755,12 +18862,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -18896,6 +18997,9 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleChacoRegionSedeDisambiguation(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
+          if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -20208,6 +20312,9 @@ exports.handler = async (event) => {
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
+            if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+              continue;
+            }
             if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
               continue;
             }
@@ -20328,7 +20435,8 @@ exports.handler = async (event) => {
             // If they changed topic (e.g. asking price / obra social), do not trap them in a "sí/no" loop.
             const shouldBypassPendingLinkConfirmation =
               linkOfferDecision.action === 'ASK_CLARIFY' &&
-              (messageLooksLikePatientFaqQuestion(bodyText) ||
+              (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState) ||
+                messageLooksLikePatientFaqQuestion(bodyText) ||
                 messageLooksLikePrivatePriceQuestion(bodyText, priorState) ||
                 messageLooksLikeAnyPriceQuestion(bodyText) ||
                 messageLooksLikeHealthInsurancePlusQuestion(bodyText) ||
@@ -20336,6 +20444,11 @@ exports.handler = async (event) => {
                 messageAsksAboutConditionTreatment(bodyText) ||
                 messageLooksLikeChronicSymptomFrustration(bodyText));
             if (shouldBypassPendingLinkConfirmation) {
+              if (messageLooksLikeMultiQuestionPatientInquiry(bodyText, priorState)) {
+                if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
+                  continue;
+                }
+              }
               if (messageLooksLikePatientFaqQuestion(bodyText)) {
                 if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
                   continue;
