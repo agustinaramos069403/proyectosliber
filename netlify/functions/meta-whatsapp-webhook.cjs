@@ -2106,8 +2106,56 @@ function messageLooksLikeChronicSymptomFrustration(rawText) {
   );
 }
 
+function messageLooksLikeUndecidedBookingRecommendationInquiry(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageExplicitlyRequestsBookingLink(rawText)) return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+  const asksRecommendation =
+    normalized.includes('me recomendas') ||
+    normalized.includes('me recomendás') ||
+    normalized.includes('que me recomendas') ||
+    normalized.includes('qué me recomendas') ||
+    normalized.includes('que me recomendás') ||
+    normalized.includes('qué me recomendás') ||
+    normalized.includes('que harias') ||
+    normalized.includes('qué harías') ||
+    normalized.includes('que harías') ||
+    normalized.includes('vale la pena');
+  const expressesBookingUncertainty =
+    normalized.includes('no se si quiero') ||
+    normalized.includes('no sé si quiero') ||
+    normalized.includes('todavia no se') ||
+    normalized.includes('todavía no sé') ||
+    normalized.includes('todavia no se si') ||
+    normalized.includes('todavía no sé si') ||
+    normalized.includes('aun no se si') ||
+    normalized.includes('aún no sé si') ||
+    normalized.includes('no estoy seguro') ||
+    normalized.includes('no estoy segura') ||
+    normalized.includes('no se si sacar') ||
+    normalized.includes('no sé si sacar');
+  if (expressesBookingUncertainty && (asksRecommendation || normalized.includes('turno'))) {
+    return true;
+  }
+  if (
+    asksRecommendation &&
+    (normalized.includes('sacar turno') ||
+      normalized.includes('pedir turno') ||
+      normalized.includes('agendar') ||
+      normalized.includes('reservar'))
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function messageAsksWhyChooseDoctorOrTrustQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
+  if (messageLooksLikeUndecidedBookingRecommendationInquiry(rawText)) return true;
   if (rawTextMatchesCriticalEmergencyPhrases(rawText)) return false;
   const normalized = normalizeForMatch(rawText)
     .replace(/[!?.,;:]+/g, ' ')
@@ -2234,9 +2282,9 @@ async function tryClassifyDoctorTrustInquiryWithOpenAi(userMessage, options = {}
     'Sos un clasificador para WhatsApp de un consultorio de alergología e inmunología en español rioplatense (Argentina).',
     'Tarea: decidir si el paciente pregunta por la EXPERIENCIA del Dr., por QUÉ ELEGIRLO, si hace ALGO DIFERENTE, o expresa FRUSTRACIÓN porque otros alergistas/tratamientos no funcionaron.',
     'Respondé solo: YES o NO.',
-    'YES: "nada funcionó con alergistas, ¿el Dr hace algo diferente?", "hace 15 años que me atiendo", "ya fui a varios", "por qué atenderse con el Dr Liber", "vale la pena".',
+    'YES: "nada funcionó con alergistas, ¿el Dr hace algo diferente?", "hace 15 años que me atiendo", "ya fui a varios", "por qué atenderse con el Dr Liber", "vale la pena", "todavía no sé si quiero sacar turno ¿qué me recomendás?".',
     'NO: solo pregunta logística de estudios ("¿hacen prick test?", "¿realizan espirometría?") sin frustración ni comparación con otros médicos.',
-    'NO: precio, turno, dirección u obra social sin mencionar confianza en el médico.',
+    'NO: precio, turno, dirección u obra social sin mencionar confianza en el médico ni pedir recomendación.',
   ].join('\n');
   const userContent = buildOpenAiClassifierUserContent(userMessage, {
     conversationContext:
@@ -2280,6 +2328,13 @@ async function tryClassifyDoctorTrustInquiryWithOpenAi(userMessage, options = {}
 
 function buildDoctorTrustAndExperienceReply(rawText) {
   const normalized = normalizeForMatch(rawText);
+  if (messageLooksLikeUndecidedBookingRecommendationInquiry(rawText)) {
+    return (
+      'Está bien tomarse el tiempo para decidir. La primera consulta con el Dr. Liber es una evaluación a fondo: revisa síntomas, estudios previos si tenés, y explica el plan según cada caso. ' +
+      'Es alergista e inmunólogo con más de 20 años de experiencia en el NEA. ' +
+      'Cuando quieras avanzar, con gusto te orientamos; no hay apuro.'
+    );
+  }
   const mentionsLongTreatmentHistory =
     normalized.includes('anos que me atiendo') ||
     normalized.includes('años que me atiendo') ||
@@ -4692,8 +4747,8 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
   }
   if (options.replyContext === 'doctor_trust') {
     replyContextInstructions.push(
-      'Contexto: el paciente pregunta por qué atenderse con el Dr., si hace algo diferente, o expresa frustración con años de alergistas/estudios sin mejora.',
-      'Validá la emoción primero (frustración, cansancio). Mencioná la experiencia del Dr. Liber (20+ años, alergia e inmunología, NEA) y enfoque personalizado según historial.',
+      'Contexto: el paciente pregunta por qué atenderse con el Dr., si hace algo diferente, expresa frustración con otros alergistas, o aún no sabe si quiere turno y pide recomendación.',
+      'Validá la emoción primero (frustración, cansancio, duda). Mencioná la experiencia del Dr. Liber (20+ años, alergia e inmunología, NEA) y enfoque personalizado según historial.',
       'NO listes estudios ni precios. NO digas solo que "hacen prick test". Motivá con calidez sin prometer cura. NO pidas sede ni ofrezcas link de turno en esta respuesta.'
     );
   }
@@ -8312,7 +8367,7 @@ async function tryResolveBookingIntentWithOpenAi(userMessage, options = {}) {
       'YES ejemplos: "quiero agendar", "necesito turno", "cómo reservo", "para mañana hay turno", "hay turno", "me gustaría sacar turno", typos como "urno".',
       'NO si pide que VOS/la asistente agende por él ("agendame vos", "podés agendarme", "me lo reservás vos"): eso NO es pedido de link propio.',
       'NO ejemplos: pregunta de PRECIO/COSTO de consulta ("qué costo tiene la consulta", "precio consulta particular", "cuánto sale la consulta"), obra social, dirección, preparación de estudios o qué traer, sin pedir turno.',
-      'NO si pregunta POR QUÉ atenderse/elegir al Dr., experiencia del médico o frustración con otros alergistas sin pedir turno explícito.',
+      'NO si pregunta POR QUÉ atenderse/elegir al Dr., experiencia del médico, frustración con otros alergistas, o aún no sabe si quiere turno y pide recomendación, sin pedir turno explícito.',
       'IMPORTANTE: "consulta" en una pregunta de precio NO es pedido de turno.',
       'Si el contexto ya tiene sede (Corrientes/Resistencia) y el paciente pregunta por turno o disponibilidad, respondé YES.',
     ].join('\n');
@@ -10460,6 +10515,7 @@ async function tryHandleBookingWithHealthInsuranceContext(
 async function tryHandleBookingWithPatientContext(from, bodyText, priorState, profileDisplayName) {
   if (messageAsksToChangeBookingSede(bodyText)) return false;
   if (messageAsksWhyChooseDoctorOrTrustQuestion(bodyText)) return false;
+  if (messageLooksLikeUndecidedBookingRecommendationInquiry(bodyText)) return false;
   if (messageLooksLikeSpirometryOnlyInquiry(bodyText)) return false;
   if (messagePrioritizesFamilyOrApproximateCostInquiry(bodyText)) return false;
   if (messageLooksLikePatientFaqQuestion(bodyText)) return false;
@@ -11063,6 +11119,9 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   }
 
   if (primaryIntent === 'BOOKING') {
+    if (messageLooksLikeUndecidedBookingRecommendationInquiry(bodyText)) {
+      return tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName);
+    }
     if (await tryHandleReferralSedePatientGuidanceInquiry(from, bodyText, priorState, profileDisplayName)) {
       return true;
     }
@@ -12845,6 +12904,7 @@ function messageLooksLikeBookingIntent(rawText) {
   if (messageLooksLikeStudyProcedureRequest(rawText)) return false;
   if (messageLooksLikeReferralSedePatientGuidanceInquiry(rawText)) return false;
   if (messageAsksWhyChooseDoctorOrTrustQuestion(rawText)) return false;
+  if (messageLooksLikeUndecidedBookingRecommendationInquiry(rawText)) return false;
   if (messageLooksLikeStandaloneSpirometryPriceInquiryLite(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (messageAsksGenericConsultationPrice(rawText)) return false;
@@ -16198,6 +16258,7 @@ function messageShouldSkipOpenAiAssistantFallback(rawText, priorState) {
   if (messageAsksAboutWalkInWithoutAppointment(rawText)) return true;
   if (messageLooksLikePregnancyClinicalInquiry(rawText)) return true;
   if (textMatchesMedicalEmergency(rawText)) return true;
+  if (messageAsksWhyChooseDoctorOrTrustQuestion(rawText)) return true;
   if (messageLooksLikeAnyPriceQuestion(rawText) && findSedeFromText(rawText)) return true;
   if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return true;
   return false;
@@ -19244,6 +19305,9 @@ exports.handler = async (event) => {
           if (await tryHandleFamilyConsultationCostEstimateInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
+          if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandlePatientFaqInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -19253,9 +19317,6 @@ exports.handler = async (event) => {
             continue;
           }
           if (await tryHandleCombinedConsultationAndStudyPriceInquiry(from, bodyText, priorState, profileDisplayName)) {
-            continue;
-          }
-          if (await tryHandleDoctorTrustOrExperienceInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleStudyAvailabilityInquiry(from, bodyText, priorState, profileDisplayName)) {
