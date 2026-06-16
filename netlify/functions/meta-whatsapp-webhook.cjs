@@ -1058,8 +1058,9 @@ function messageAsksWhetherConsultationIncludesStudies(rawText) {
   const mentionsStudies =
     normalized.includes('estudio') ||
     normalized.includes('estudios') ||
-    messageMentionsSpirometryStudy(rawText) ||
-    messageMentionsAllergyTestStudy(rawText);
+    normalized.includes('espirometr') ||
+    normalized.includes('test') ||
+    normalized.includes('prick');
   if (!mentionsStudies) return false;
   const asksInclusionOrSeparation =
     normalized.includes('incluye') ||
@@ -6313,7 +6314,115 @@ function collapseRedundantPatientQuestionIntents(intents, options = {}) {
   return orderPatientQuestionIntents(collapsed);
 }
 
+let patientInquiryRoutingDetectionDepth = 0;
+
+function messageMentionsSpirometryStudyLite(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  if (normalized.includes('espirometr') || normalized.includes('estirometr')) return true;
+  const spirometryTypoPatterns = [
+    'eperitometria',
+    'epirometria',
+    'espirimetria',
+    'espirometia',
+    'espitometria',
+    'espirometrea',
+    'espirometri',
+  ];
+  return spirometryTypoPatterns.some((pattern) => normalized.includes(pattern));
+}
+
+function messageLooksLikeBookingIntentKeywordsOnly(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    /\b(turno|turnos|agendar|agenda|reservar|reserva|cita)\b/.test(normalized) ||
+    /\burno\b/.test(normalized) ||
+    /\bun\s*urno\b/.test(normalized)
+  );
+}
+
+function messageLooksLikeStandaloneSpirometryPriceInquiryLite(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (!messageMentionsSpirometryStudyLite(rawText)) return false;
+  const normalized = normalizeForMatch(rawText);
+  const asksStandaloneSpirometry =
+    normalized.includes('sin consulta') ||
+    normalized.includes('no necesito consulta') ||
+    normalized.includes('no quiero consulta') ||
+    normalized.includes('solo espirometr') ||
+    normalized.includes('solo la espirometr') ||
+    normalized.includes('espirometria sola') ||
+    normalized.includes('espirometría sola') ||
+    normalized.includes('unicamente una espirometr') ||
+    normalized.includes('unicamente espirometr') ||
+    normalized.includes('solamente espirometr') ||
+    normalized.includes('solamente una espirometr') ||
+    normalized.includes('solamente la espirometr') ||
+    (normalized.includes('unicamente') && normalized.includes('espirometr')) ||
+    (normalized.includes('ya tengo diagnostico') && normalized.includes('espirometr'));
+  if (!asksStandaloneSpirometry) return false;
+  return messageLooksLikeAnyPriceQuestion(rawText) || normalized.includes('particular');
+}
+
+function messageHasMultipleDistinctQuestionSignalsLite(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  let signalCount = 0;
+  if (messageAsksAboutConsultDuration(rawText)) signalCount += 1;
+  if (messageAsksWhetherConsultationIncludesStudies(rawText)) signalCount += 1;
+  if (messageLooksLikeAnyPriceQuestion(rawText)) signalCount += 1;
+  if (
+    messageLooksLikeHealthInsurancePlusQuestion(rawText) ||
+    messageAsksHealthInsuranceAcceptanceInText(rawText)
+  ) {
+    signalCount += 1;
+  }
+  if (
+    normalized.includes('estudio') ||
+    normalized.includes('espirometr') ||
+    normalized.includes('test') ||
+    normalized.includes('prick')
+  ) {
+    signalCount += 1;
+  }
+  if (messageAsksAboutConditionTreatment(rawText)) signalCount += 1;
+  if (messageLooksLikeBookingIntentKeywordsOnly(rawText)) signalCount += 1;
+  if (messageLooksLikeStudyPreparationKeywordsOnly(rawText)) signalCount += 1;
+  return signalCount >= 2;
+}
+
+function messageLooksLikeMultiQuestionPatientInquiryLite(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const questionCount = (String(rawText).match(/\?/g) || []).length;
+  if (questionCount >= 2) return true;
+  if (questionCount >= 1 && messageHasMultipleDistinctQuestionSignalsLite(rawText)) return true;
+  if (questionCount === 1) {
+    const normalized = normalizeForMatch(rawText);
+    const conjunctionParts = normalized.split(/\s+y\s+|\s+ademas\s+|\s+tambien\s+/);
+    if (conjunctionParts.length >= 2) {
+      const substantiveParts = conjunctionParts.filter(
+        (part) =>
+          part.includes('cuanto') ||
+          part.includes('dura') ||
+          part.includes('cuesta') ||
+          part.includes('sale') ||
+          part.includes('atienden') ||
+          part.includes('incluye') ||
+          part.includes('hacen') ||
+          part.includes('necesito') ||
+          part.includes('preparacion')
+      );
+      if (substantiveParts.length >= 2) return true;
+    }
+  }
+  return false;
+}
+
 function messageHasMultipleDistinctQuestionSignals(rawText) {
+  if (patientInquiryRoutingDetectionDepth > 0) {
+    return messageHasMultipleDistinctQuestionSignalsLite(rawText);
+  }
   if (!rawText || typeof rawText !== 'string') return false;
   let signalCount = 0;
   if (messageAsksAboutConsultDuration(rawText)) signalCount += 1;
@@ -6327,12 +6436,15 @@ function messageHasMultipleDistinctQuestionSignals(rawText) {
   }
   if (messageMatchesStudiesClinicalTopic(rawText)) signalCount += 1;
   if (messageAsksAboutConditionTreatment(rawText)) signalCount += 1;
-  if (messageLooksLikeBookingIntent(rawText)) signalCount += 1;
+  if (messageLooksLikeBookingIntentKeywordsOnly(rawText)) signalCount += 1;
   if (messageLooksLikeStudyPreparationKeywordsOnly(rawText)) signalCount += 1;
   return signalCount >= 2;
 }
 
 function messageLooksLikeMultiQuestionPatientInquiry(rawText, priorState = null) {
+  if (patientInquiryRoutingDetectionDepth > 0) {
+    return messageLooksLikeMultiQuestionPatientInquiryLite(rawText);
+  }
   if (!rawText || typeof rawText !== 'string') return false;
   const questionCount = (String(rawText).match(/\?/g) || []).length;
   if (questionCount >= 2) return true;
@@ -7276,7 +7388,7 @@ function shouldRouteToStudyPrice(rawText, priorState) {
 
 function messageLooksLikePrivatePriceQuestion(rawText, priorState = null) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (messageLooksLikeSpirometryOnlyInquiry(rawText)) return false;
+  if (messageLooksLikeStandaloneSpirometryPriceInquiryLite(rawText)) return false;
   if (messageAsksAboutStudiesOrTests(rawText)) return false;
   if (messageAsksAboutStudyPrice(rawText)) return false;
   if (messageAsksGenericConsultationPrice(rawText)) return false;
@@ -12603,13 +12715,19 @@ function messageLooksLikeBookingIntent(rawText) {
   if (messageLooksLikeStudyProcedureRequest(rawText)) return false;
   if (messageLooksLikeReferralSedePatientGuidanceInquiry(rawText)) return false;
   if (messageAsksWhyChooseDoctorOrTrustQuestion(rawText)) return false;
-  if (messageLooksLikePrivatePriceQuestion(rawText)) return false;
+  if (messageLooksLikeStandaloneSpirometryPriceInquiryLite(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (messageAsksGenericConsultationPrice(rawText)) return false;
   if (messageAsksApproximateConsultationCost(rawText)) return false;
   if (
     messageLooksLikeAnyPriceQuestion(rawText) &&
     /\b(consulta|turno|visita)\b/.test(normalized)
+  ) {
+    return false;
+  }
+  if (
+    messageLooksLikeAnyPriceQuestion(rawText) &&
+    !/\b(turno|turnos|agendar|agenda|reservar|reserva|cita)\b/.test(normalized)
   ) {
     return false;
   }
@@ -12876,7 +12994,7 @@ function messageMentionsSpirometryStudy(rawText) {
 
 function messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (messageMentionsSpirometryStudy(rawText)) return false;
+  if (messageMentionsSpirometryStudyLite(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (!normalized) return false;
   if (normalized.includes('covid') || normalized.includes('pcr') || normalized.includes('antigeno')) {
@@ -13579,7 +13697,7 @@ function messageMentionsAllergyTestStudy(rawText) {
   if (normalized.includes('test de alerg') || normalized.includes('test alerg') || normalized.includes('prick')) {
     return true;
   }
-  if (messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) && !messageMentionsSpirometryStudy(rawText)) {
+  if (messageLooksLikeBareAllergyOrGenericTestInquiry(rawText) && !messageMentionsSpirometryStudyLite(rawText)) {
     return true;
   }
   return false;
@@ -14280,7 +14398,7 @@ async function tryHandleHealthInsuranceCoversConsultationStandaloneStudyPriceInq
 
 function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (!messageMentionsSpirometryStudy(rawText)) return false;
+  if (!messageMentionsSpirometryStudyLite(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   return (
     normalized.includes('sin consulta') ||
@@ -14303,9 +14421,9 @@ function messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) {
 
 function messageLooksLikeSpirometrySchedulingInquiry(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (!messageMentionsSpirometryStudy(rawText)) return false;
+  if (!messageMentionsSpirometryStudyLite(rawText)) return false;
   if (!findSedeFromText(rawText)) return false;
-  if (messageLooksLikeMultiQuestionPatientInquiry(rawText)) return false;
+  if (messageLooksLikeMultiQuestionPatientInquiryLite(rawText)) return false;
   if (messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) return false;
   return (
     messageLooksLikeStudyProcedureRequest(rawText) || messageLooksLikeSpecificSlotBookingRequest(rawText)
@@ -14313,16 +14431,22 @@ function messageLooksLikeSpirometrySchedulingInquiry(rawText) {
 }
 
 function messageLooksLikeSpirometryOnlyInquiry(rawText) {
-  if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) return false;
-  if (messageLooksLikeMultiQuestionPatientInquiry(rawText)) return false;
-  if (!messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) return false;
-  const normalized = normalizeForMatch(rawText);
-  return (
-    messageLooksLikeAnyPriceQuestion(rawText) ||
-    messageLooksLikeRealtimeAvailabilityQuestion(rawText) ||
-    messageLooksLikeScheduleAvailabilityQuestion(rawText) ||
-    normalized.includes('particular')
-  );
+  if (patientInquiryRoutingDetectionDepth > 0) return false;
+  patientInquiryRoutingDetectionDepth += 1;
+  try {
+    if (messageLooksLikeCombinedConsultationAndStudyPriceInquiry(rawText)) return false;
+    if (messageLooksLikeMultiQuestionPatientInquiryLite(rawText)) return false;
+    if (!messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText)) return false;
+    const normalized = normalizeForMatch(rawText);
+    return (
+      messageLooksLikeAnyPriceQuestion(rawText) ||
+      messageLooksLikeRealtimeAvailabilityQuestion(rawText) ||
+      messageLooksLikeScheduleAvailabilityQuestion(rawText) ||
+      normalized.includes('particular')
+    );
+  } finally {
+    patientInquiryRoutingDetectionDepth -= 1;
+  }
 }
 
 function buildSpirometryOnlyInquiryPriceAndLinkReply() {
