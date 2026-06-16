@@ -22,7 +22,7 @@ const OPENAI_HUMANIZE_TEMPERATURE = 0.72;
 const OPENAI_HUMANIZE_MAX_TOKENS = 160;
 
 const GOOGLE_SHEETS_API_BASE_URL = 'https://sheets.googleapis.com/v4/spreadsheets';
-const GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_GOOGLE_SHEETS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 let cachedGoogleSheetsData = null;
 let cachedGoogleSheetsDataExpiresAtMs = 0;
@@ -3225,6 +3225,29 @@ function getGoogleSheetsPlusRange() {
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : 'HealthInsurancePlus!A:F';
 }
 
+function getGoogleSheetsCacheTtlMs() {
+  const raw = process.env.GOOGLE_SHEETS_CACHE_TTL_SECONDS;
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    return DEFAULT_GOOGLE_SHEETS_CACHE_TTL_MS;
+  }
+  const seconds = Number(raw.trim());
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return DEFAULT_GOOGLE_SHEETS_CACHE_TTL_MS;
+  }
+  return Math.round(seconds * 1000);
+}
+
+function parseSheetAmountArs(rawValue) {
+  if (rawValue == null) return null;
+  const trimmed = String(rawValue).trim();
+  if (!trimmed) return null;
+  const digitsOnly = trimmed.replace(/[^\d]/g, '');
+  if (!digitsOnly) return null;
+  const parsedInteger = Number(digitsOnly);
+  if (!Number.isFinite(parsedInteger)) return null;
+  return parsedInteger;
+}
+
 function getGoogleSheetsPrivatePricesRange() {
   const raw = process.env.GOOGLE_SHEETS_PRIVATE_PRICES_RANGE;
   return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : 'PrivatePrices!A:C';
@@ -3827,14 +3850,18 @@ async function clearConversationState(fromPhoneId) {
 
 async function fetchCsvRows(csvUrl) {
   if (!csvUrl) return null;
+  const cacheBustSuffix = `_=${Math.floor(Date.now() / 60000)}`;
+  const requestUrl = csvUrl.includes('?') ? `${csvUrl}&${cacheBustSuffix}` : `${csvUrl}?${cacheBustSuffix}`;
   const headers = {
     'User-Agent': 'Mozilla/5.0 (Netlify Function) meta-whatsapp-webhook',
     Accept: 'text/csv,text/plain;q=0.9,*/*;q=0.8',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
   };
   const maxAttempts = 2;
   for (let attemptIndex = 1; attemptIndex <= maxAttempts; attemptIndex += 1) {
     try {
-      const response = await fetch(csvUrl, { method: 'GET', headers });
+      const response = await fetch(requestUrl, { method: 'GET', headers });
       if (!response.ok) {
         const text = await response.text();
         console.error(
@@ -3949,7 +3976,7 @@ function buildPlusLookupMap(rows) {
     const notes = notesIndex >= 0 && row[notesIndex] != null ? String(row[notesIndex]).trim() : '';
     const isAccepted = /^(true|1|yes|si|sí)$/i.test(isAcceptedRaw);
     const hasPlus = /^(true|1|yes|si|sí)$/i.test(hasPlusRaw);
-    const plusAmountArs = Number(plusAmountRaw.replace(/[^\d.]/g, ''));
+    const plusAmountArs = parseSheetAmountArs(plusAmountRaw);
     map.set(key, {
       city,
       name,
@@ -3973,11 +4000,71 @@ function buildPrivatePriceMap(rows) {
     const priceRaw = row[priceIndex] != null ? String(row[priceIndex]).trim() : '';
     if (!city || !priceRaw) continue;
     const cityKey = normalizeForMatch(city);
-    const priceArs = Number(priceRaw.replace(/[^\d.]/g, ''));
+    const priceArs = parseSheetAmountArs(priceRaw);
     if (!Number.isFinite(priceArs)) continue;
     map.set(cityKey, priceArs);
   }
   return map;
+}
+
+async function loadPlusRowsFromConfiguredSources() {
+  const plusSpreadsheetId = getGoogleSheetsPlusSpreadsheetId();
+  const plusRange = getGoogleSheetsPlusRange();
+  const plusCsvUrl = getGoogleSheetsPlusCsvUrl();
+  const hasServiceAccount = Boolean(getGoogleServiceAccountJson());
+
+  if (plusSpreadsheetId && hasServiceAccount) {
+    const apiRows = await fetchGoogleSheetsValues(plusSpreadsheetId, plusRange);
+    if (apiRows) {
+      return { plusRows: apiRows, plusSource: 'sheets_api' };
+    }
+    console.error(
+      'meta-whatsapp-webhook: Sheets API plus fetch failed; falling back to CSV if configured',
+      { plusSpreadsheetId, plusRange }
+    );
+  }
+
+  if (plusCsvUrl) {
+    const csvRows = await fetchCsvRows(plusCsvUrl);
+    if (csvRows) {
+      return { plusRows: csvRows, plusSource: 'csv' };
+    }
+  }
+
+  if (plusSpreadsheetId && !hasServiceAccount) {
+    console.error(
+      'meta-whatsapp-webhook: GOOGLE_SHEETS_PLUS_SPREADSHEET_ID is set but GOOGLE_SERVICE_ACCOUNT_JSON is missing'
+    );
+  }
+
+  return { plusRows: null, plusSource: null };
+}
+
+async function loadPrivatePriceRowsFromConfiguredSources() {
+  const privatePricesSpreadsheetId = getGoogleSheetsPrivatePricesSpreadsheetId();
+  const privatePricesRange = getGoogleSheetsPrivatePricesRange();
+  const privatePricesCsvUrl = getGoogleSheetsPrivatePricesCsvUrl();
+  const hasServiceAccount = Boolean(getGoogleServiceAccountJson());
+
+  if (privatePricesSpreadsheetId && hasServiceAccount) {
+    const apiRows = await fetchGoogleSheetsValues(privatePricesSpreadsheetId, privatePricesRange);
+    if (apiRows) {
+      return { privatePriceRows: apiRows, privatePriceSource: 'sheets_api' };
+    }
+    console.error(
+      'meta-whatsapp-webhook: Sheets API private price fetch failed; falling back to CSV if configured',
+      { privatePricesSpreadsheetId, privatePricesRange }
+    );
+  }
+
+  if (privatePricesCsvUrl) {
+    const csvRows = await fetchCsvRows(privatePricesCsvUrl);
+    if (csvRows) {
+      return { privatePriceRows: csvRows, privatePriceSource: 'csv' };
+    }
+  }
+
+  return { privatePriceRows: null, privatePriceSource: null };
 }
 
 async function getGoogleSheetsData() {
@@ -3987,58 +4074,37 @@ async function getGoogleSheetsData() {
     return cachedGoogleSheetsData;
   }
 
-  const plusCsvUrl = getGoogleSheetsPlusCsvUrl();
-  const privatePricesCsvUrl = getGoogleSheetsPrivatePricesCsvUrl();
-  if (plusCsvUrl || privatePricesCsvUrl) {
-    const [plusRows, privatePriceRows] = await Promise.all([
-      plusCsvUrl ? fetchCsvRows(plusCsvUrl) : null,
-      privatePricesCsvUrl ? fetchCsvRows(privatePricesCsvUrl) : null,
-    ]);
-    if (!plusRows && !privatePriceRows) {
-      debugBotLog('sheets csv fetch returned null for both');
-      return null;
+  const [{ plusRows, plusSource }, { privatePriceRows, privatePriceSource }] = await Promise.all([
+    loadPlusRowsFromConfiguredSources(),
+    loadPrivatePriceRowsFromConfiguredSources(),
+  ]);
+
+  if (!plusRows && !privatePriceRows) {
+    const plusSpreadsheetId = getGoogleSheetsPlusSpreadsheetId();
+    const privatePricesSpreadsheetId = getGoogleSheetsPrivatePricesSpreadsheetId();
+    if (!plusSpreadsheetId && !privatePricesSpreadsheetId && !getGoogleSheetsPlusCsvUrl()) {
+      console.error(
+        'meta-whatsapp-webhook: missing GOOGLE_SHEETS_SPREADSHEET_ID (or the specific *_SPREADSHEET_ID overrides)'
+      );
     }
-    cachedGoogleSheetsData = {
-      plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
-      privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
-    };
-    debugBotLog('sheets loaded', {
-      plusLookupSize: cachedGoogleSheetsData.plusLookup.size,
-      privatePriceLookupSize: cachedGoogleSheetsData.privatePriceLookup.size,
-    });
-    cachedGoogleSheetsDataExpiresAtMs = now + GOOGLE_SHEETS_CACHE_TTL_MS;
-    return cachedGoogleSheetsData;
+    debugBotLog('sheets fetch returned null for both plus and private prices');
+    return null;
   }
 
-  const plusSpreadsheetId = getGoogleSheetsPlusSpreadsheetId();
-  const privatePricesSpreadsheetId = getGoogleSheetsPrivatePricesSpreadsheetId();
-  if (!plusSpreadsheetId && !privatePricesSpreadsheetId) {
-    console.error(
-      'meta-whatsapp-webhook: missing GOOGLE_SHEETS_SPREADSHEET_ID (or the specific *_SPREADSHEET_ID overrides)'
-    );
-    return null;
-  }
-  const plusRange = getGoogleSheetsPlusRange();
-  const privatePricesRange = getGoogleSheetsPrivatePricesRange();
-  const [plusRows, privatePriceRows] = await Promise.all([
-    plusSpreadsheetId ? fetchGoogleSheetsValues(plusSpreadsheetId, plusRange) : null,
-    privatePricesSpreadsheetId
-      ? fetchGoogleSheetsValues(privatePricesSpreadsheetId, privatePricesRange)
-      : null,
-  ]);
-  if (!plusRows && !privatePriceRows) {
-    debugBotLog('sheets api fetch returned null for both');
-    return null;
-  }
   cachedGoogleSheetsData = {
     plusLookup: plusRows ? buildPlusLookupMap(plusRows) : new Map(),
     privatePriceLookup: privatePriceRows ? buildPrivatePriceMap(privatePriceRows) : new Map(),
+    plusSource: plusSource || null,
+    privatePriceSource: privatePriceSource || null,
+    loadedAtMs: now,
   };
-  debugBotLog('sheets loaded (api)', {
+  console.info('meta-whatsapp-webhook: sheets loaded', {
     plusLookupSize: cachedGoogleSheetsData.plusLookup.size,
     privatePriceLookupSize: cachedGoogleSheetsData.privatePriceLookup.size,
+    plusSource: cachedGoogleSheetsData.plusSource,
+    privatePriceSource: cachedGoogleSheetsData.privatePriceSource,
   });
-  cachedGoogleSheetsDataExpiresAtMs = now + GOOGLE_SHEETS_CACHE_TTL_MS;
+  cachedGoogleSheetsDataExpiresAtMs = now + getGoogleSheetsCacheTtlMs();
   return cachedGoogleSheetsData;
 }
 
@@ -4050,6 +4116,17 @@ async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
   const key = `${cityKey}::${osKey}`;
   const exactValue = data.plusLookup.get(key) || null;
   if (exactValue) {
+    console.info('meta-whatsapp-webhook: plus lookup', {
+      cityDisplayName,
+      healthInsuranceName,
+      cityKey,
+      osKey,
+      key,
+      found: true,
+      mode: 'exact',
+      plusAmountArs: exactValue.plusAmountArs,
+      plusSource: data.plusSource || null,
+    });
     debugBotLog('lookupPlusRule', {
       cityDisplayName,
       healthInsuranceName,
@@ -4064,14 +4141,14 @@ async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
 
   // Fuzzy match within the same city: when the Sheet contains plan/parentheses variants,
   // match by "contains" and a small typo tolerance.
-  let best = null;
+  const fuzzyCandidates = [];
   for (const [candidateKey, rule] of data.plusLookup.entries()) {
     if (typeof candidateKey !== 'string') continue;
     if (!candidateKey.startsWith(`${cityKey}::`)) continue;
     const candidateOsKey = candidateKey.slice(`${cityKey}::`.length);
     if (!candidateOsKey) continue;
     if (candidateOsKey === osKey) {
-      best = { rule, distance: 0, candidateOsKey };
+      fuzzyCandidates.push({ rule, score: 0, candidateOsKey, exactNameMatch: true });
       break;
     }
     const containsMatch =
@@ -4080,13 +4157,24 @@ async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
     const acceptable = containsMatch || distance <= MAX_LEVENSHTEIN_DISTANCE;
     if (!acceptable) continue;
     const score = containsMatch ? 0 : distance;
-    if (!best || score < best.distance) {
-      best = { rule, distance: score, candidateOsKey };
-    }
+    fuzzyCandidates.push({
+      rule,
+      score,
+      candidateOsKey,
+      exactNameMatch: candidateOsKey === osKey,
+    });
   }
 
-  const fuzzyValue = best ? best.rule : null;
-  debugBotLog('lookupPlusRule', {
+  fuzzyCandidates.sort((left, right) => {
+    if (left.exactNameMatch !== right.exactNameMatch) {
+      return left.exactNameMatch ? -1 : 1;
+    }
+    if (left.score !== right.score) return left.score - right.score;
+    return left.candidateOsKey.length - right.candidateOsKey.length;
+  });
+
+  const fuzzyValue = fuzzyCandidates.length > 0 ? fuzzyCandidates[0].rule : null;
+  console.info('meta-whatsapp-webhook: plus lookup', {
     cityDisplayName,
     healthInsuranceName,
     cityKey,
@@ -4094,7 +4182,9 @@ async function lookupPlusRule(cityDisplayName, healthInsuranceName) {
     key,
     found: Boolean(fuzzyValue),
     mode: fuzzyValue ? 'fuzzy' : 'miss',
-    matchedCandidateOsKey: best ? best.candidateOsKey : null,
+    matchedCandidateOsKey: fuzzyCandidates[0] ? fuzzyCandidates[0].candidateOsKey : null,
+    plusAmountArs: fuzzyValue ? fuzzyValue.plusAmountArs : null,
+    plusSource: data.plusSource || null,
   });
   return fuzzyValue;
 }
@@ -16178,38 +16268,11 @@ async function buildFamilyConsultationCostEstimateReplies(
       if (plusRule && plusRule.isAccepted && plusRule.hasPlus && plusRule.plusAmountArs) {
         const plusFormatted = formatArsAmount(plusRule.plusAmountArs);
         const twoPlusTotalFormatted = formatArsAmount(plusRule.plusAmountArs * (mentionsBoth ? 2 : 1));
-        costLine += ` Con ${healthInsuranceName}, el plus es $${plusFormatted} por consulta`;
+        costLine += ` Con ${healthInsuranceName} en ${lastSede.displayName}, el plus es $${plusFormatted} por consulta`;
         if (mentionsBoth) {
           costLine += ` (unas $${twoPlusTotalFormatted} si consultan los dos)`;
         }
         costLine += '.';
-      } else {
-        const alternateCityEntry = await findPrimaryAcceptedCityEntryForHealthInsurance(
-          healthInsuranceName,
-          lastSede.displayName
-        );
-        if (alternateCityEntry) {
-          const alternatePlusRule = await lookupPlusRule(
-            alternateCityEntry.displayName,
-            healthInsuranceName
-          );
-          if (
-            alternatePlusRule &&
-            alternatePlusRule.isAccepted &&
-            alternatePlusRule.hasPlus &&
-            alternatePlusRule.plusAmountArs
-          ) {
-            const plusFormatted = formatArsAmount(alternatePlusRule.plusAmountArs);
-            const twoPlusTotalFormatted = formatArsAmount(
-              alternatePlusRule.plusAmountArs * (mentionsBoth ? 2 : 1)
-            );
-            costLine += ` Con ${healthInsuranceName} en ${alternateCityEntry.displayName}, el plus es $${plusFormatted} por consulta`;
-            if (mentionsBoth) {
-              costLine += ` (unas $${twoPlusTotalFormatted} si consultan los dos)`;
-            }
-            costLine += '.';
-          }
-        }
       }
     }
     costLine += ' El total exacto lo define el Dr. según qué estudios pida en cada consulta.';
