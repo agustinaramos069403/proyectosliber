@@ -217,6 +217,7 @@ const BOOKING_LINK_OFFER_OPTOUT_MS = 45 * 60 * 1000;
 const PRICE_OBJECTION_CONTEXT_WINDOW_MS = 30 * 60 * 1000;
 const BOOKING_LINK_OFFER_REPEAT_COOLDOWN_MS = 8 * 60 * 1000;
 const BOOKING_LINK_RECENTLY_SENT_MS = 60 * 60 * 1000;
+const BOOKING_LINK_RESEND_AFTER_ACTIVE_CHAT_MS = 12 * 60 * 1000;
 const BOOKING_LINK_TROUBLE_FOLLOWUP_WINDOW_MS = 10 * 60 * 1000;
 const WAITLIST_CONFIRMATION_WINDOW_MS = 30 * 60 * 1000;
 const URGENCY_CLARIFICATION_WINDOW_MS = 10 * 60 * 1000;
@@ -12640,15 +12641,105 @@ function messageMentionsBookingLinkOrAgenda(rawText) {
   );
 }
 
+function hasBookingLinkWasSentForSedeEver(priorState, entry) {
+  if (!priorState || typeof priorState !== 'object' || !entry) return false;
+  const linkUrl =
+    typeof priorState.lastBookingLinkUrl === 'string' ? priorState.lastBookingLinkUrl.trim() : '';
+  if (!linkUrl) return false;
+  if (typeof priorState.lastBookingLinkSedeEnvKey === 'string') {
+    return priorState.lastBookingLinkSedeEnvKey === entry.envKey;
+  }
+  return Boolean(resolveLastSedeEntryFromState(priorState)?.envKey === entry.envKey);
+}
+
+function conversationLooksLikeLinkBuriedInLongChat(priorState, entry) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastLinkAtMs = Number(priorState.lastBookingLinkSentAtMs);
+  const hasKnownSede = Boolean(entry || resolveLastSedeEntryFromState(priorState));
+  if (!hasKnownSede) return false;
+
+  if (hasBookingLinkWasSentForSedeEver(priorState, entry)) {
+    if (!Number.isFinite(lastLinkAtMs) || lastLinkAtMs <= 0) return true;
+    if (Date.now() - lastLinkAtMs >= BOOKING_LINK_RESEND_AFTER_ACTIVE_CHAT_MS) return true;
+    const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+    if (Number.isFinite(lastBotReplyAtMs) && lastBotReplyAtMs - lastLinkAtMs >= 3 * 60 * 1000) {
+      return true;
+    }
+    const lastBotReplyText =
+      typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText : '';
+    if (
+      lastBotReplyText &&
+      !botReplyActuallyContainsBookingLinkUrl(lastBotReplyText) &&
+      Date.now() - lastLinkAtMs >= 5 * 60 * 1000
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  const lastSedeAtMs = Number(priorState.lastSedeAtMs);
+  return (
+    Number.isFinite(lastSedeAtMs) &&
+    Date.now() - lastSedeAtMs >= BOOKING_LINK_RESEND_AFTER_ACTIVE_CHAT_MS
+  );
+}
+
+function messageLooksLikeBookingLinkResendOrRecoveryRequest(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  if (messageExplicitlyRequestsBookingLink(rawText)) return true;
+  if (messageLooksLikeBookingIntent(rawText)) return true;
+  if (messageAsksWhereOrHowToBook(rawText)) return true;
+  if (messageAsksExplicitlyHowToBookTurn(rawText)) return true;
+  if (messageAsksHowBookingWorks(rawText)) return true;
+  const normalized = normalizeForMatch(rawText);
+  return (
+    normalized.includes('de nuevo') ||
+    normalized.includes('otra vez') ||
+    normalized.includes('nuevamente') ||
+    normalized.includes('no lo encuentro') ||
+    normalized.includes('no lo veo') ||
+    normalized.includes('no lo tengo') ||
+    normalized.includes('se me perdio') ||
+    normalized.includes('se me perdió') ||
+    normalized.includes('donde era el link') ||
+    normalized.includes('donde esta el link') ||
+    normalized.includes('dónde está el link') ||
+    normalized === 'el link' ||
+    normalized === 'el enlace' ||
+    /\b(el link|el enlace|ese link|ese enlace)\b/.test(normalized)
+  );
+}
+
 function messageSaysUserLostOrNeedsBookingLinkResent(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (!messageMentionsBookingLinkOrAgenda(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('no lo encuentro') ||
+    normalized.includes('no lo veo') ||
+    normalized.includes('se me perdio') ||
+    normalized.includes('se me perdió')
+  ) {
+    return true;
+  }
+  if (
+    (normalized.includes('de nuevo') ||
+      normalized.includes('otra vez') ||
+      normalized.includes('nuevamente')) &&
+    (normalized.includes('pasame') ||
+      normalized.includes('mandame') ||
+      normalized.includes('enviame') ||
+      normalized.includes('me lo pasas') ||
+      normalized.includes('me lo pasás') ||
+      normalized.includes('me lo mandas') ||
+      normalized.includes('me lo mandás'))
+  ) {
+    return true;
+  }
+  if (!messageMentionsBookingLinkOrAgenda(rawText)) return false;
   return (
     normalized.includes('no tengo el link') ||
     normalized.includes('no tengo link') ||
     normalized.includes('no lo tengo') ||
-    normalized.includes('no lo encuentro') ||
     normalized.includes('perdi el link') ||
     normalized.includes('perdí el link') ||
     normalized.includes('nuevamente') ||
@@ -12681,7 +12772,10 @@ function messageExplicitlyRequestsBookingLink(rawText) {
     normalized.includes('link de agenda') ||
     normalized.includes('link de turno') ||
     normalized.includes('link del turno') ||
-    normalized.includes('link de los turnos')
+    normalized.includes('link de los turnos') ||
+    normalized === 'el link' ||
+    normalized === 'el enlace' ||
+    /\b(el link|el enlace|ese link|ese enlace)\b/.test(normalized)
   ) {
     return true;
   }
@@ -12732,6 +12826,12 @@ function shouldResendFullBookingLinkUrl(priorState, userMessage, entry) {
   if (messageExplicitlyRequestsBookingLink(userMessage)) return true;
   if (messageConfirmsLinkSend(userMessage)) return true;
   if (messageLooksLikeBookingIntent(userMessage)) return true;
+  if (
+    conversationLooksLikeLinkBuriedInLongChat(priorState, entry) &&
+    messageLooksLikeBookingLinkResendOrRecoveryRequest(userMessage)
+  ) {
+    return true;
+  }
   if (!wasBookingLinkSentRecently(priorState)) return true;
   if (!hasBookingLinkInStateForSede(priorState, entry)) return true;
   const lastBotReplyText =
@@ -17124,11 +17224,15 @@ function buildAlreadySentBookingLinkAffirmationReply(priorState, entry, options 
   const linkUrl = resolveBookingLinkUrlFromState(priorState, entry);
   const linkAlreadyShared =
     wasBookingLinkSentRecently(priorState) && hasBookingLinkInStateForSede(priorState, entry);
-  const directReminderLine = linkAlreadyShared
-    ? `Con el link que ya te pasé podés ver horarios y reservar tu turno en ${cityName}.`
-    : linkUrl
-      ? `Podés ver horarios y reservar tu turno en ${cityName} en este link:\n${linkUrl}`
-      : null;
+  const shouldIncludeUrlInReminder =
+    conversationLooksLikeLinkBuriedInLongChat(priorState, entry) ||
+    messageLooksLikeBookingLinkResendOrRecoveryRequest(userMessage);
+  const directReminderLine =
+    linkAlreadyShared && !shouldIncludeUrlInReminder
+      ? `Con el link que ya te pasé podés ver horarios y reservar tu turno en ${cityName}.`
+      : linkUrl
+        ? `Acá tenés el link para elegir el día y horario que mejor te quede en ${cityName}:\n${linkUrl}`
+        : null;
 
   if (!directReminderLine) {
     return buildLinkMessage(entry);
