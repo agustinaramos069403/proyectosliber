@@ -681,7 +681,8 @@ function normalizeForMatch(text) {
 }
 
 function tokenizeNormalizedText(normalizedText) {
-  return String(normalizedText || '')
+  const safeText = String(normalizedText || '').slice(0, 8000);
+  return safeText
     .replace(/[!?.,;:()"'`]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -6324,10 +6325,10 @@ function messageHasMultipleDistinctQuestionSignals(rawText) {
   ) {
     signalCount += 1;
   }
-  if (messageMatchesStudiesTopic(rawText)) signalCount += 1;
+  if (messageMatchesStudiesClinicalTopic(rawText)) signalCount += 1;
   if (messageAsksAboutConditionTreatment(rawText)) signalCount += 1;
   if (messageLooksLikeBookingIntent(rawText)) signalCount += 1;
-  if (messageAsksAboutStudyPreparation(rawText)) signalCount += 1;
+  if (messageLooksLikeStudyPreparationKeywordsOnly(rawText)) signalCount += 1;
   return signalCount >= 2;
 }
 
@@ -12869,6 +12870,7 @@ function messageMentionsSpirometryStudy(rawText) {
     'espirometri',
   ];
   if (spirometryTypoPatterns.some((pattern) => normalized.includes(pattern))) return true;
+  if (normalized.length > 8000) return false;
   return normalizedTextContainsApproxWord(normalized, 'espirometria', 3);
 }
 
@@ -13259,13 +13261,7 @@ function messageAsksAboutStudyPreparation(rawText, priorState) {
 function messageLooksLikeStudyPreparationQuestion(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  const mentionsStudyContext =
-    messageMentionsSpirometryStudy(rawText) ||
-    normalized.includes('estudio') ||
-    normalized.includes('prick') ||
-    normalized.includes('test de alerg') ||
-    normalized.includes('parche') ||
-    normalized.includes('patch');
+  const mentionsStudyContext = messageMentionsStudyContextInText(rawText);
   const asksPreparation =
     normalized.includes('preparacion') ||
     normalized.includes('preparación') ||
@@ -13295,7 +13291,7 @@ function messageLooksLikeStudyPreparationQuestion(rawText) {
   if (!asksPreparation) return false;
   if (normalized.includes('algo especial')) return true;
   if (normalized.includes('preparacion') || normalized.includes('preparación')) return true;
-  if (mentionsStudyContext || messageMentionsSpirometryStudy(rawText)) return true;
+  if (mentionsStudyContext) return true;
   if (
     messageAsksAboutStudyFasting(rawText) ||
     messageAsksAboutStudyMedicationPreparation(rawText) ||
@@ -16216,8 +16212,7 @@ function messageAsksObraSocialOrCoveragePrice(rawText) {
 function messageAsksStudyProcedurePrice(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
   const normalized = normalizeForMatch(rawText);
-  const mentionsStudy =
-    messageMentionsSpirometryStudy(rawText) || messageMatchesStudiesTopic(rawText);
+  const mentionsStudy = messageMentionsStudyContextInText(rawText);
   if (!mentionsStudy) return false;
   return (
     messageLooksLikeAnyPriceQuestion(rawText) ||
@@ -16678,7 +16673,7 @@ function messageAsksWhatStudiesDoctorDoes(rawText) {
 
 function messageAsksWhatStudiesToBring(rawText) {
   if (!rawText || typeof rawText !== 'string') return false;
-  if (messageLooksLikeStudyPreparationQuestion(rawText)) return false;
+  if (messageLooksLikeStudyPreparationKeywordsOnly(rawText)) return false;
   const normalized = normalizeForMatch(rawText);
   if (normalized.includes('algo especial')) return false;
   if (normalized.includes('preparacion') || normalized.includes('preparación')) return false;
@@ -16852,20 +16847,85 @@ function messageMentionsChildPatientContext(rawText) {
   );
 }
 
-function messageMatchesStudiesPatientOnlyFaq(rawText, priorState) {
+function messageLooksLikeStudyPreparationKeywordsOnly(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
   return (
-    messageAsksAboutStudyPreparation(rawText, priorState) ||
-    messageAsksWhatStudiesToBring(rawText) ||
-    messageSaysHasNoPriorStudies(rawText) ||
-    messageAsksWhatStudiesWillBeRequested(rawText) ||
-    messageAsksAboutDigitalStudyResults(rawText) ||
-    messageWasSentForStudiesBeforeVisit(rawText) ||
-    messageAsksAboutMedicalHistoryToBring(rawText)
+    normalized.includes('preparacion') ||
+    normalized.includes('preparación') ||
+    normalized.includes('algo especial') ||
+    normalized.includes('que tengo que hacer antes') ||
+    normalized.includes('qué tengo que hacer antes') ||
+    normalized.includes('que debo hacer antes') ||
+    normalized.includes('qué debo hacer antes') ||
+    normalized.includes('antes del estudio') ||
+    normalized.includes('antes de hacerme') ||
+    normalized.includes('antes de hacer') ||
+    normalized.includes('antes de la espirometr') ||
+    normalized.includes('tengo que ir en ayunas') ||
+    normalized.includes('ayunas') ||
+    normalized.includes('ayuno')
   );
 }
 
-function messageMatchesStudiesTopic(rawText) {
-  return messageAsksAboutStudiesOrTests(rawText) || messageMatchesStudiesPatientOnlyFaq(rawText);
+function messageMentionsStudyContextInText(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  if (
+    normalized.includes('estudio') ||
+    normalized.includes('estudios') ||
+    normalized.includes('prick') ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('test alerg') ||
+    normalized.includes('laboratorio') ||
+    normalized.includes('parche') ||
+    normalized.includes('patch')
+  ) {
+    return true;
+  }
+  if (normalized.includes('espirometr') || normalized.includes('estirometr')) return true;
+  const spirometryTypoPatterns = [
+    'eperitometria',
+    'epirometria',
+    'espirimetria',
+    'espirometia',
+    'espitometria',
+    'espirometrea',
+    'espirometri',
+  ];
+  if (spirometryTypoPatterns.some((pattern) => normalized.includes(pattern))) return true;
+  return /\btests?\b/.test(normalized);
+}
+
+let studyPatientFaqDetectionDepth = 0;
+
+function messageMatchesStudiesClinicalTopic(rawText) {
+  return messageAsksAboutStudiesOrTests(rawText);
+}
+
+function messageMatchesStudiesPatientOnlyFaq(rawText, priorState) {
+  if (studyPatientFaqDetectionDepth > 0) return false;
+  studyPatientFaqDetectionDepth += 1;
+  try {
+    return (
+      messageAsksAboutStudyPreparation(rawText, priorState) ||
+      messageAsksWhatStudiesToBring(rawText) ||
+      messageSaysHasNoPriorStudies(rawText) ||
+      messageAsksWhatStudiesWillBeRequested(rawText) ||
+      messageAsksAboutDigitalStudyResults(rawText) ||
+      messageWasSentForStudiesBeforeVisit(rawText) ||
+      messageAsksAboutMedicalHistoryToBring(rawText)
+    );
+  } finally {
+    studyPatientFaqDetectionDepth -= 1;
+  }
+}
+
+function messageMatchesStudiesTopic(rawText, priorState = null) {
+  return (
+    messageMatchesStudiesClinicalTopic(rawText) ||
+    messageMatchesStudiesPatientOnlyFaq(rawText, priorState)
+  );
 }
 
 function appendSedeContextIfKnown(baseMessage, priorState) {
