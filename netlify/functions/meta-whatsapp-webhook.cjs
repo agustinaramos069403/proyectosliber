@@ -3442,6 +3442,14 @@ function guessKeyLooksLikePrivatePayIntent(guessKey) {
   ) {
     return true;
   }
+  if (
+    normalized.includes('hacerlo particular') ||
+    normalized.includes('quiero hacerlo particular') ||
+    normalized.includes('si quiero particular') ||
+    normalized.includes('lo quiero particular')
+  ) {
+    return true;
+  }
   return false;
 }
 
@@ -4542,6 +4550,40 @@ async function buildHealthInsuranceCoverageLineForSede(sedeEntry, healthInsuranc
   return `En ${sedeEntry.displayName} no trabajamos con ${canonicalHealthInsuranceName}.`;
 }
 
+async function isHealthInsuranceAcceptedInSede(sedeEntry, healthInsuranceName) {
+  if (!sedeEntry || !healthInsuranceName) return false;
+  const canonicalHealthInsuranceName =
+    normalizeHealthInsuranceCanonicalName(healthInsuranceName) || healthInsuranceName;
+  if (isKnownNotAcceptedHealthInsurance(canonicalHealthInsuranceName)) return false;
+
+  const plusRule = await lookupPlusRule(sedeEntry.displayName, canonicalHealthInsuranceName);
+  if (plusRule) return Boolean(plusRule.isAccepted);
+
+  const cityNormalized = normalizeForMatch(sedeEntry.displayName);
+  const healthInsuranceNormalized = normalizeForMatch(healthInsuranceName);
+  const isOsde = healthInsuranceNormalized.includes('osde');
+  const isIsunne = healthInsuranceNormalized.includes('isunne');
+  const isSancor =
+    healthInsuranceNormalized.includes('sancor') && !healthInsuranceNormalized.includes('mutual');
+  return (
+    (cityNormalized.includes('corrientes') && (isOsde || isIsunne || isSancor)) ||
+    (cityNormalized.includes('resistencia') && (isOsde || isIsunne || isSancor))
+  );
+}
+
+async function shouldIncludePrivateConsultationPriceReply(sedeEntry, healthInsuranceName, rawText) {
+  if (!sedeEntry) return true;
+  if (messageExplicitlyAsksPrivateConsultationPrice(rawText)) return true;
+  if (!healthInsuranceName) return true;
+  const asksConsultationPrice =
+    messageAsksConsultationCostInText(rawText) ||
+    messageAsksGenericConsultationPrice(rawText) ||
+    messageAsksApproximateConsultationCost(rawText);
+  if (!asksConsultationPrice) return true;
+  const accepted = await isHealthInsuranceAcceptedInSede(sedeEntry, healthInsuranceName);
+  return !accepted;
+}
+
 async function buildHealthInsuranceMismatchReplyForKnownSede(sedeEntry, healthInsuranceName) {
   return buildHealthInsuranceCoverageLineForSede(sedeEntry, healthInsuranceName);
 }
@@ -4908,6 +4950,14 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
       'Contexto: paciente pregunta si hacen tests/estudios de forma genérica (ej. "hacen test").',
       'Mantené: sí se realizan estudios; tests de alergia requieren consulta previa sin dar precio fijo; aclarar que no siempre hace falta test; espirometría sola sí tiene valor conocido.',
       'No ofrezcas link de agenda ni digas que no podés agendar por el paciente.'
+    );
+  }
+  if (options.replyContext === 'complete_cost_total') {
+    replyContextInstructions.push(
+      'Contexto: el paciente pidió el TOTAL (consulta + estudio, particular o con obra social).',
+      'Mantené EXACTOS todos los montos y el desglose del borrador. Si hay total aproximado, decilo con claridad.',
+      'Tono cálido y claro; no mandes al paciente a "escribir de nuevo" si el borrador ya trae el total.',
+      'No ofrezcas link de agenda en esta respuesta salvo que el borrador ya lo incluya.'
     );
   }
   if (options.replyContext === 'standalone_study_price_with_covered_consultation') {
@@ -6528,6 +6578,12 @@ function collapseRedundantPatientQuestionIntents(intents, options = {}) {
       collapsed.push('STANDALONE_SPIROMETRY_PRICE');
     }
   }
+  if (
+    collapsed.includes('CONSULTATION_PRICE') &&
+    (collapsed.includes('HEALTH_INSURANCE_ACCEPTANCE') || collapsed.includes('HEALTH_INSURANCE_PLUS'))
+  ) {
+    collapsed = collapsed.filter((intent) => intent !== 'CONSULTATION_PRICE');
+  }
   return orderPatientQuestionIntents(collapsed);
 }
 
@@ -6854,6 +6910,12 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
     return 'BOOKING_AVAILABILITY';
   }
   if (messageLooksLikeAnyPriceQuestion(segmentText) && segment.includes('consulta')) {
+    if (
+      hasHealthInsuranceContext &&
+      !messageExplicitlyAsksPrivateConsultationPrice(fullText)
+    ) {
+      return 'HEALTH_INSURANCE_PLUS';
+    }
     return 'CONSULTATION_PRICE';
   }
   if (messageLooksLikeAnyPriceQuestion(segmentText) && messageMatchesStudiesTopic(segmentText)) {
@@ -6866,6 +6928,12 @@ function classifyPatientQuestionSegmentIntent(segmentText, fullText) {
       messageMatchesStudiesTopic(fullText)
     ) {
       return 'CONSULTATION_AND_STUDY_PRICE';
+    }
+    if (
+      hasHealthInsuranceContext &&
+      !messageExplicitlyAsksPrivateConsultationPrice(fullText)
+    ) {
+      return 'HEALTH_INSURANCE_PLUS';
     }
     return 'CONSULTATION_PRICE';
   }
@@ -6984,6 +7052,7 @@ async function extractPatientQuestionIntentsWithOpenAi(userMessage, priorState, 
     '- Si pregunta ayuno o preparación del estudio → STUDY_PREPARATION.',
     '- Si pregunta por plus/coseguro/copago → HEALTH_INSURANCE_PLUS.',
     '- Si pregunta cuánto sale/cuesta consulta Y test/estudio juntos → CONSULTATION_AND_STUDY_PRICE.',
+    '- Si pregunta cuánto sale/cuesta la consulta y nombra obra social/prepaga (sin pedir particular) → HEALTH_INSURANCE_PLUS o HEALTH_INSURANCE_ACCEPTANCE, NO CONSULTATION_PRICE.',
     '- Si pide SOLO espirometría sin consulta y pregunta precio → STANDALONE_SPIROMETRY_PRICE.',
     '- Si pregunta turnos/disponibilidad/esta semana → BOOKING_AVAILABILITY.',
     '- Si pregunta si hacen/realizan un estudio → STUDY_AVAILABILITY.',
@@ -7119,8 +7188,19 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
       }
       return buildStudyAvailabilityPrimaryReply(studyType, priorState, { sedeEntry: lastSede });
     }
-    case 'CONSULTATION_PRICE':
+    case 'CONSULTATION_PRICE': {
+      if (
+        healthInsuranceName &&
+        !(await shouldIncludePrivateConsultationPriceReply(lastSede, healthInsuranceName, fullText))
+      ) {
+        return await buildConsultationPriceReplyForSedeAndHealthInsurance(
+          lastSede,
+          healthInsuranceName,
+          priorState
+        );
+      }
       return await buildPrivatePriceReply(lastSede);
+    }
     case 'STANDALONE_SPIROMETRY_PRICE':
       return buildSpirometryStandalonePriceReply(priorState, fullText, lastSede);
     case 'BOOKING_AVAILABILITY':
@@ -7770,7 +7850,20 @@ function messageConfirmsLinkSend(rawText) {
   }
 
   // Accept short confirmations even with extra words: "si quiero", "si pasame el link", "dale pasalo"
-  if (/^(si|dale|ok|oka|de una|listo|ya)\b/.test(normalized)) return true;
+  if (/^(si|dale|ok|oka|de una|listo|ya)\b/.test(normalized)) {
+    if (
+      normalized.includes('particular') ||
+      normalized.includes('total') ||
+      normalized.includes('cuanto') ||
+      normalized.includes('precio') ||
+      normalized.includes('cuesta') ||
+      normalized.includes('sale') ||
+      normalized.includes('hacerlo particular')
+    ) {
+      return false;
+    }
+    return true;
+  }
   if (/^(por favor|porfa|x favor)\b/.test(normalized)) return true;
   if (/^(gracias|genial|perfecto)\b/.test(normalized)) return true;
   if (/\bquiero agendar\b/.test(normalized)) return true;
@@ -10789,7 +10882,7 @@ async function tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, pr
   if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
-  if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandlePatientTopicsOrchestrator(from, bodyText, priorState, profileDisplayName)) {
@@ -10820,8 +10913,15 @@ async function tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, pr
     if (sedeFromMessage && healthInsuranceName) {
       const healthInsuranceSummary = await buildHealthInsuranceSummary(sedeFromMessage, healthInsuranceName);
       if (healthInsuranceSummary !== 'ASK_CITY_FOR_HEALTH_INSURANCE') {
-        const privatePriceReply = await buildPrivatePriceReply(sedeFromMessage);
-        const combined = `${healthInsuranceSummary} ${privatePriceReply}`.trim();
+        const includePrivatePrice = await shouldIncludePrivateConsultationPriceReply(
+          sedeFromMessage,
+          healthInsuranceName,
+          bodyText
+        );
+        const privatePriceReply = includePrivatePrice ? await buildPrivatePriceReply(sedeFromMessage) : '';
+        const combined = includePrivatePrice
+          ? `${healthInsuranceSummary} ${privatePriceReply}`.trim()
+          : healthInsuranceSummary;
         const wrapped = buildAutoReplyWithGreetingIfNeeded(
           appendBookingLinkOfferIfAllowed(priorState, combined),
           profileDisplayName,
@@ -11088,7 +11188,7 @@ async function dispatchOpenAiPrimaryIntent(from, bodyText, priorState, profileDi
   if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
-  if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -15339,15 +15439,13 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
   }
 
   if (messageAsksCompleteOrTotalCost(rawText) && studyType && healthInsuranceName) {
+    const totalReply = await buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, rawText);
     if (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) {
-      if (messageMentionsChildPatientContext(rawText)) {
+      if (messageMentionsChildPatientContext(rawText) && !totalReply.includes('consulten antes')) {
         replies.push('Qué bueno que consulten antes, así van con una idea más clara.');
       }
-      replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
-      replies.push(buildAllergyTestRequiresEvaluationPriceReply(lastSede));
-    } else {
-      replies.push(await buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, rawText));
     }
+    replies.push(totalReply);
   } else if (messageAsksCompleteOrTotalCost(rawText) && studyType && !healthInsuranceName) {
     const privateEstimate = await estimatePrivateConsultationAndStudyTotal(lastSede, studyType);
     if (privateEstimate) {
@@ -15363,7 +15461,10 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
     if (healthInsuranceName) {
       replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
     }
-    if (messageAsksConsultationCostInText(rawText)) {
+    if (
+      messageAsksConsultationCostInText(rawText) &&
+      (await shouldIncludePrivateConsultationPriceReply(lastSede, healthInsuranceName, rawText))
+    ) {
       replies.push(await buildPrivatePriceReply(lastSede));
     }
     if (studyType) {
@@ -16846,6 +16947,79 @@ async function estimatePrivateConsultationAndStudyTotal(sedeEntry, studyType) {
   };
 }
 
+async function estimatePrivateConsultationAndStandaloneSpirometryTotal(sedeEntry) {
+  const consultationAmountArs = await lookupPrivatePrice(sedeEntry.displayName);
+  if (!Number.isFinite(consultationAmountArs)) return null;
+  const studyAmountArs = STANDALONE_SPIROMETRY_PRICE_ARS;
+  return {
+    consultationAmountArs,
+    studyAmountArs,
+    totalAmountArs: consultationAmountArs + studyAmountArs,
+    isPrivatePay: true,
+    studyType: 'espirometría',
+    usesStandaloneSpirometryPrice: true,
+  };
+}
+
+function priorStateRecentlyOfferedPrivateTotal(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (!lastBotReplyText) return false;
+  const lastBotReplyAtMs = Number(priorState.lastBotReplyAtMs);
+  if (!Number.isFinite(lastBotReplyAtMs) || Date.now() - lastBotReplyAtMs > PRICE_OBJECTION_CONTEXT_WINDOW_MS) {
+    return false;
+  }
+  const normalized = normalizeForMatch(lastBotReplyText);
+  return (
+    normalized.includes('no trabajamos') ||
+    normalized.includes('hacerlo particular') ||
+    normalized.includes('te paso el total') ||
+    normalized.includes('decime y te paso')
+  );
+}
+
+function priorStateRecentlyQuotedStandaloneSpirometryPrice(priorState) {
+  if (!priorState || typeof priorState !== 'object') return false;
+  const lastBotReplyText =
+    typeof priorState.lastBotReplyText === 'string' ? priorState.lastBotReplyText.trim() : '';
+  if (!lastBotReplyText) return false;
+  const normalized = normalizeForMatch(lastBotReplyText);
+  return normalized.includes('solo por espirometr') || normalized.includes('venis solo por espirometr');
+}
+
+function messageAsksConsultationInAdditionToStudy(rawText, priorState = null) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText)
+    .replace(/[!?.,;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized.includes('consulta')) return false;
+  const asksAlso =
+    normalized.includes('ademas') ||
+    normalized.includes('además') ||
+    normalized.includes('tambien') ||
+    normalized.includes('también') ||
+    normalized.includes('junto') ||
+    normalized.includes('sumar') ||
+    normalized.includes('agregar');
+  const hasSpirometryContext =
+    normalized.includes('espirometr') ||
+    priorStateIndicatesSpirometryStudy(priorState) ||
+    priorStateRecentlyQuotedStandaloneSpirometryPrice(priorState);
+  if (!hasSpirometryContext) return false;
+  return asksAlso || messageAsksCompleteOrTotalCost(rawText) || messageLooksLikeAnyPriceQuestion(rawText);
+}
+
+async function buildPrivateConsultationAndStandaloneSpirometryTotalReply(sedeEntry) {
+  const estimate = await estimatePrivateConsultationAndStandaloneSpirometryTotal(sedeEntry);
+  if (!estimate) return null;
+  const consultationFormatted = formatArsAmount(estimate.consultationAmountArs);
+  const studyFormatted = formatArsAmount(estimate.studyAmountArs);
+  const totalFormatted = formatArsAmount(estimate.totalAmountArs);
+  return `En ${sedeEntry.displayName}, consulta particular $${consultationFormatted} + espirometría $${studyFormatted}. Total aproximado: $${totalFormatted}.`;
+}
+
 async function buildCompleteCostTotalReply(sedeEntry, healthInsuranceName, studyType, rawText = '') {
   const studyWithArticle = buildStudyTypeWithArticle(studyType);
   const cityName = sedeEntry.displayName;
@@ -16860,7 +17034,14 @@ async function buildCompleteCostTotalReply(sedeEntry, healthInsuranceName, study
       studyType
     );
     if (!estimate) {
-      return `${warmPrefix}Con ${healthInsuranceName} en ${cityName} no trabajamos. Si querés hacerlo particular, escribime y te paso el total.`;
+      const privateEstimate = await estimatePrivateConsultationAndStudyTotal(sedeEntry, studyType);
+      if (privateEstimate) {
+        const consultationFormatted = formatArsAmount(privateEstimate.consultationAmountArs);
+        const studyFormatted = formatArsAmount(privateEstimate.studyAmountArs);
+        const totalFormatted = formatArsAmount(privateEstimate.totalAmountArs);
+        return `${warmPrefix}Con ${healthInsuranceName} en ${cityName} no trabajamos. En particular: consulta $${consultationFormatted} + ${studyWithArticle} $${studyFormatted}. Total aproximado: $${totalFormatted}.`;
+      }
+      return `${warmPrefix}Con ${healthInsuranceName} en ${cityName} no trabajamos. Si querés el total particular, escribime "particular" y te lo detallo.`;
     }
     const insuranceLabel = estimate.healthInsuranceDisplayName;
     if (estimate.studyIncludedInConsultation) {
@@ -16899,10 +17080,17 @@ async function tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, pro
     patientContext.statePatch
   );
   const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
-  const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
-    priorState,
+  let isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+    priorState: mergedState,
     profileDisplayName,
   });
+  if (
+    !isPrivatePay &&
+    priorStateRecentlyOfferedPrivateTotal(mergedState) &&
+    (messageAsksCompleteOrTotalCost(bodyText) || messageStatesPrivatePayWithoutHealthInsurance(bodyText))
+  ) {
+    isPrivatePay = true;
+  }
   const healthInsuranceName = isPrivatePay
     ? null
     : await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, { profileDisplayName });
@@ -16974,6 +17162,120 @@ async function tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, pro
     userMessage: bodyText,
     replyContext: 'complete_cost_total',
   });
+}
+
+async function tryHandleConsultationPlusStandaloneSpirometryTotalInquiry(
+  from,
+  bodyText,
+  priorState,
+  profileDisplayName
+) {
+  if (!messageAsksConsultationInAdditionToStudy(bodyText, priorState)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  if (!lastSede) return false;
+  const reply = await buildPrivateConsultationAndStandaloneSpirometryTotalReply(lastSede);
+  if (!reply) return false;
+  return sendFinalizedPatientTextReply(
+    from,
+    reply,
+    mergedState,
+    profileDisplayName,
+    {
+      lastStudyType: 'espirometría',
+      lastStudyPriceContextAtMs: Date.now(),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'complete_cost_total',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
+async function tryHandlePrivatePayTotalFollowUpInquiry(from, bodyText, priorState, profileDisplayName) {
+  if (!priorStateRecentlyOfferedPrivateTotal(priorState)) return false;
+  const wantsPrivateTotal =
+    messageStatesPrivatePayWithoutHealthInsurance(bodyText) ||
+    (await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+      priorState,
+      profileDisplayName,
+    }));
+  if (!wantsPrivateTotal) return false;
+
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede = patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState);
+  const studyType =
+    (await resolveStudyTypeFromMessage(bodyText, mergedState, { profileDisplayName })) ||
+    (mergedState &&
+    typeof mergedState === 'object' &&
+    typeof mergedState.lastStudyType === 'string' &&
+    mergedState.lastStudyType.trim().length > 0
+      ? mergedState.lastStudyType.trim()
+      : 'estudio');
+  if (!lastSede) return false;
+
+  let reply = null;
+  if (
+    priorStateRecentlyQuotedStandaloneSpirometryPrice(mergedState) &&
+    priorStateIndicatesSpirometryStudy(mergedState)
+  ) {
+    reply = await buildPrivateConsultationAndStandaloneSpirometryTotalReply(lastSede);
+  }
+  if (!reply) {
+    reply = await buildCompleteCostTotalReply(lastSede, null, studyType, bodyText);
+  }
+  if (!reply) return false;
+
+  return sendFinalizedPatientTextReply(
+    from,
+    reply,
+    mergedState,
+    profileDisplayName,
+    {
+      lastStudyType: studyType,
+      lastStudyPriceContextAtMs: Date.now(),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      bookingLinkOptOutUntilMs: Date.now() + BOOKING_LINK_OFFER_OPTOUT_MS,
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'complete_cost_total',
+      suppressBookingLinkOffer: true,
+    }
+  );
+}
+
+async function tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName) {
+  if (await tryHandlePrivatePayTotalFollowUpInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  if (
+    await tryHandleConsultationPlusStandaloneSpirometryTotalInquiry(
+      from,
+      bodyText,
+      priorState,
+      profileDisplayName
+    )
+  ) {
+    return true;
+  }
+  if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+    return true;
+  }
+  return false;
 }
 
 async function buildStudyPriceLineForKnownCoverage(studyType, sedeEntry, healthInsuranceName) {
@@ -17165,7 +17467,7 @@ async function tryHandleSubstantivePatientInquiryBeforeSedeRouting(
   if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
-  if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+  if (await tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName)) {
     return true;
   }
   if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -19886,7 +20188,7 @@ exports.handler = async (event) => {
           if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+          if (await tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -20225,7 +20527,7 @@ exports.handler = async (event) => {
           if (await tryHandleComplexClinicalInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
-          if (await tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, profileDisplayName)) {
+          if (await tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleMultiIntentPatientInquiry(from, bodyText, priorState, profileDisplayName)) {
@@ -21151,6 +21453,9 @@ exports.handler = async (event) => {
 
           // If the user answers "sí/ok/dale" but we lost state (serverless restart),
           // don't fall through to the LLM greeting; ask which sede they want the link for.
+          if (await tryHandlePatientTotalCostInquiries(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (stateLooksLikeAwaitingLinkConfirmation(priorState)) {
             if (await tryHandleMultiQuestionPatientInquiryWithOpenAi(from, bodyText, priorState, profileDisplayName)) {
               continue;
