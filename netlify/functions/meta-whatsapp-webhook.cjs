@@ -4078,6 +4078,12 @@ function buildPrivatePriceMap(rows) {
   const header = rows[0].map((h) => normalizeForMatch(String(h || '')));
   const cityIndex = header.indexOf('city');
   const priceIndex = header.indexOf('privatepricears');
+  if (cityIndex < 0 || priceIndex < 0) {
+    console.error('meta-whatsapp-webhook: PrivatePrices sheet missing City or PrivatePriceArs columns', {
+      header,
+    });
+    return map;
+  }
   for (const row of rows.slice(1)) {
     const city = row[cityIndex] != null ? String(row[cityIndex]).trim() : '';
     const priceRaw = row[priceIndex] != null ? String(row[priceIndex]).trim() : '';
@@ -4088,6 +4094,17 @@ function buildPrivatePriceMap(rows) {
     map.set(cityKey, priceArs);
   }
   return map;
+}
+
+function getPrivatePriceFromSheetsData(sheetsData, cityDisplayName) {
+  if (!sheetsData || !(sheetsData.privatePriceLookup instanceof Map)) return null;
+  const cityKey = normalizeForMatch(normalizeCityKeyForSheets(cityDisplayName));
+  return sheetsData.privatePriceLookup.get(cityKey) ?? null;
+}
+
+function invalidateGoogleSheetsCache() {
+  cachedGoogleSheetsData = null;
+  cachedGoogleSheetsDataExpiresAtMs = 0;
 }
 
 async function loadPlusRowsFromConfiguredSources() {
@@ -4204,6 +4221,7 @@ async function getGoogleSheetsData() {
     privatePriceLookupSize: cachedGoogleSheetsData.privatePriceLookup.size,
     plusSource: cachedGoogleSheetsData.plusSource,
     privatePriceSource: cachedGoogleSheetsData.privatePriceSource,
+    privatePricesByCity: Object.fromEntries(cachedGoogleSheetsData.privatePriceLookup.entries()),
   });
   cachedGoogleSheetsDataExpiresAtMs = now + getGoogleSheetsCacheTtlMs();
   return cachedGoogleSheetsData;
@@ -4309,21 +4327,20 @@ async function healthInsuranceExistsInAnyCity(healthInsuranceName) {
 }
 
 async function lookupPrivatePrice(cityDisplayName) {
-  const data = await getGoogleSheetsData();
-  if (!data) {
-    console.warn('meta-whatsapp-webhook: private price lookup missed (no sheets data)', {
-      cityDisplayName,
-    });
-    return null;
+  let data = await getGoogleSheetsData();
+  let priceArs = getPrivatePriceFromSheetsData(data, cityDisplayName);
+  if (!Number.isFinite(priceArs)) {
+    invalidateGoogleSheetsCache();
+    data = await getGoogleSheetsData();
+    priceArs = getPrivatePriceFromSheetsData(data, cityDisplayName);
   }
   const cityKey = normalizeForMatch(normalizeCityKeyForSheets(cityDisplayName));
-  const priceArs = data.privatePriceLookup.get(cityKey) ?? null;
   console.info('meta-whatsapp-webhook: private price lookup', {
     cityDisplayName,
     cityKey,
     priceArs,
-    privatePriceSource: data.privatePriceSource || null,
-    privatePriceLookupSize: data.privatePriceLookup.size,
+    privatePriceSource: data?.privatePriceSource || null,
+    privatePriceLookupSize: data?.privatePriceLookup?.size ?? 0,
   });
   return priceArs;
 }
@@ -4404,6 +4421,34 @@ function processAssistantReplyForPatient(rawModelText, options = {}) {
     ),
     { priorState, bodyText }
   );
+}
+
+function assistantReplyMentionsPrivateConsultationPrice(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  const normalized = normalizeForMatch(replyText);
+  if (!normalized.includes('consulta')) return false;
+  return (
+    normalized.includes('consulta particular') ||
+    normalized.includes('consulta sale') ||
+    normalized.includes('precio de la consulta') ||
+    normalized.includes('precio consulta') ||
+    normalized.includes('cuanto sale la consulta') ||
+    normalized.includes('cuanto cuesta la consulta') ||
+    (normalized.includes('consulta') && replyTextContainsPriceAmount(replyText))
+  );
+}
+
+async function enforceSheetPrivateConsultationPriceInAssistantReply(openAiReply, bodyText, priorState) {
+  if (!openAiReply || typeof openAiReply !== 'string') return openAiReply;
+  if (!assistantReplyMentionsPrivateConsultationPrice(openAiReply)) return openAiReply;
+  const sedeEntry =
+    findSedeFromText(bodyText) ||
+    resolveLastSedeEntryFromState(priorState) ||
+    resolveSedeEntryFromState(priorState);
+  if (!sedeEntry) return openAiReply;
+  const sheetReply = await buildPrivatePriceReply(sedeEntry);
+  if (sheetReply === MISSING_INFORMATION_CALL_OFFICE_MESSAGE) return openAiReply;
+  return sheetReply;
 }
 
 function sanitizeBookingAssistanceReplyText(replyText, priorState = null, sedeEntry = null) {
@@ -7211,13 +7256,25 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
       if (messageAsksAboutStandaloneSpirometryWithoutConsultation(fullText) && isSpirometryStudyType(studyType)) {
         return buildSpirometryStandalonePriceReply(priorState, fullText, lastSede);
       }
-      if (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) {
+      if (
+        healthInsuranceName &&
+        messageAsksCompleteOrTotalCost(fullText)
+      ) {
+        return await buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, fullText);
+      }
+      if (
+        (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) &&
+        shouldUseAllergyTestEvaluationMessageInsteadOfTotal(fullText)
+      ) {
         return buildAllergyTestRequiresEvaluationPriceReply(lastSede);
       }
       if (isSpirometryStudyType(studyType)) {
         return buildSpirometryStandalonePriceReply(priorState, fullText, lastSede);
       }
-      return buildAllergyTestRequiresEvaluationPriceReply(lastSede);
+      if (shouldUseAllergyTestEvaluationMessageInsteadOfTotal(fullText)) {
+        return buildAllergyTestRequiresEvaluationPriceReply(lastSede);
+      }
+      return null;
     }
     case 'CONSULTATION_AND_STUDY_PRICE': {
       if (messageStatesHealthInsuranceCoversConsultationButWantsOnlyStudy(fullText)) {
@@ -7238,10 +7295,13 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
         return buildSpirometryStandalonePriceReply(priorState, fullText, lastSede);
       }
       if (healthInsuranceName) {
-        if (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) {
+        if (
+          (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) &&
+          shouldUseAllergyTestEvaluationMessageInsteadOfTotal(fullText)
+        ) {
           return buildAllergyTestRequiresEvaluationPriceReply(lastSede);
         }
-        return buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, fullText);
+        return await buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, fullText);
       }
       const privateEstimate = await estimatePrivateConsultationAndStudyTotal(lastSede, studyType);
       if (!privateEstimate) return null;
@@ -7286,7 +7346,7 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
   const isGenericInstitutionHealthInsurance = messageLooksLikeGenericInstitutionHealthInsurance(bodyText);
   const healthInsuranceName = isGenericInstitutionHealthInsurance
     ? null
-    : await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, { profileDisplayName });
+    : await resolveHealthInsuranceNameForCompleteCostReply(bodyText, mergedState, { profileDisplayName });
 
   let intents = inferPatientQuestionIntentsFromMessage(bodyText);
   if (getOpenAiApiKey()) {
@@ -7405,6 +7465,15 @@ async function tryHandleMultiQuestionPatientInquiryWithOpenAi(
       replies.push(bookingOfferReply);
     }
   }
+  await appendCompleteCostTotalReplyIfMissing(
+    replies,
+    seenReplyTexts,
+    bodyText,
+    mergedState,
+    lastSede,
+    healthInsuranceName,
+    profileDisplayName
+  );
   if (replies.length === 0) return false;
 
   const studyType = await resolveStudyTypeFromMessage(bodyText, mergedState, { profileDisplayName });
@@ -12020,6 +12089,7 @@ function sanitizePatientReplyWhenSedeUnknown(replyText, priorState, bodyText) {
 }
 
 async function buildPrivatePriceReply(entry) {
+  // Source of truth: Google Sheets tab PrivatePrices (City, PrivatePriceArs).
   const priceArs = await lookupPrivatePrice(entry.displayName);
   if (!Number.isFinite(priceArs)) {
     return MISSING_INFORMATION_CALL_OFFICE_MESSAGE;
@@ -12577,7 +12647,12 @@ async function tryHandleSmartOpenAiFallback(from, bodyText, priorState, profileD
     priorState,
   });
   if (!openAiReply) return false;
-  const processed = processAssistantReplyForPatient(openAiReply, { priorState, bodyText });
+  const sheetBackedReply = await enforceSheetPrivateConsultationPriceInAssistantReply(
+    openAiReply,
+    bodyText,
+    priorState
+  );
+  const processed = processAssistantReplyForPatient(sheetBackedReply, { priorState, bodyText });
   const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
   const statePatch = {
     greeted: true,
@@ -14493,6 +14568,83 @@ function buildAllergyTestRequiresEvaluationPriceReply(lastSede = null) {
   return ALLERGY_TEST_REQUIRES_EVALUATION_PRICE_MESSAGE;
 }
 
+function shouldUseAllergyTestEvaluationMessageInsteadOfTotal(rawText) {
+  if (!rawText || typeof rawText !== 'string') return true;
+  return (
+    !messageAsksCompleteOrTotalCost(rawText) &&
+    !messageLooksLikeFamilyConsultationCostEstimateInquiry(rawText)
+  );
+}
+
+async function resolveHealthInsuranceNameForCompleteCostReply(bodyText, priorState, options = {}) {
+  const fromState = resolveActiveHealthInsuranceNameFromState(priorState);
+  if (fromState) {
+    return normalizeHealthInsuranceCanonicalName(fromState) || fromState;
+  }
+  return resolveHealthInsuranceNameFromMessage(bodyText, priorState, options);
+}
+
+async function resolveStudyTypeForCompleteCostReply(rawText, priorState, profileDisplayName) {
+  const resolvedStudyType = await resolveStudyTypeFromMessage(rawText, priorState, { profileDisplayName });
+  if (resolvedStudyType) return resolvedStudyType;
+  const studyTypesFromText = collectStudyTypesFromText(rawText);
+  if (studyTypesFromText.length > 0) return studyTypesFromText[0];
+  const studyTypesFromContext = collectStudyTypesFromClinicalContext(rawText);
+  if (studyTypesFromContext.length > 0) return studyTypesFromContext[0];
+  return getStudyTypeFromText(rawText);
+}
+
+function replyMentionsApproximateTotalCost(replyText) {
+  if (!replyText || typeof replyText !== 'string') return false;
+  const normalized = normalizeForMatch(replyText);
+  return (
+    normalized.includes('total aproximado') ||
+    normalized.includes('total aprox') ||
+    normalized.includes('valor final') ||
+    normalized.includes('precio final')
+  );
+}
+
+async function appendCompleteCostTotalReplyIfMissing(
+  replies,
+  seenReplyTexts,
+  bodyText,
+  priorState,
+  lastSede,
+  healthInsuranceName,
+  profileDisplayName
+) {
+  if (!messageAsksCompleteOrTotalCost(bodyText)) return;
+  if (!lastSede) return;
+  if ((replies || []).some((reply) => replyMentionsApproximateTotalCost(reply))) return;
+
+  const isPrivatePay = await resolvePrivatePayWithoutHealthInsuranceFromMessage(bodyText, {
+    priorState,
+    profileDisplayName,
+  });
+  const resolvedHealthInsuranceName = isPrivatePay
+    ? null
+    : await resolveHealthInsuranceNameForCompleteCostReply(bodyText, priorState, {
+        profileDisplayName,
+      }) || healthInsuranceName;
+  if (!resolvedHealthInsuranceName && !isPrivatePay) return;
+
+  const studyType = await resolveStudyTypeForCompleteCostReply(bodyText, priorState, profileDisplayName);
+  if (!studyType) return;
+
+  const totalReply = await buildCompleteCostTotalReply(
+    lastSede,
+    resolvedHealthInsuranceName,
+    studyType,
+    bodyText
+  );
+  if (!totalReply || !totalReply.trim()) return;
+  const trimmedTotal = stripDuplicatePatientReplyPrefix(totalReply.trim(), seenReplyTexts);
+  if (!trimmedTotal || seenReplyTexts.has(trimmedTotal)) return;
+  seenReplyTexts.add(trimmedTotal);
+  replies.push(trimmedTotal);
+}
+
 function buildSpirometryStandalonePriceReply(priorState, rawText, lastSede = null, options = {}) {
   const sede = lastSede || resolveKnownSedeForConversationContext(priorState);
   const formattedAmount = formatArsAmount(STANDALONE_SPIROMETRY_PRICE_ARS);
@@ -15399,6 +15551,9 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
   );
   const replies = [];
   const normalized = normalizeForMatch(rawText);
+  const healthInsuranceForPricing =
+    healthInsuranceName ||
+    (await resolveHealthInsuranceNameForCompleteCostReply(rawText, priorState, options));
 
   if (
     includeEmpathy &&
@@ -15424,6 +15579,10 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
 
   const studyTypesFromMessage = collectStudyTypesFromText(rawText);
   const studyType = await resolveStudyTypeFromMessage(rawText, priorState);
+  const studyTypeForPricing =
+    studyType ||
+    (studyTypesFromMessage.length > 0 ? studyTypesFromMessage[0] : null) ||
+    getStudyTypeFromText(rawText);
   if (messageAsksWhetherDoctorPerformsStudyInMessage(rawText)) {
     if (studyTypesFromMessage.length >= 2) {
       replies.push(
@@ -15438,18 +15597,23 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
     }
   }
 
-  if (messageAsksCompleteOrTotalCost(rawText) && studyType && healthInsuranceName) {
-    const totalReply = await buildCompleteCostTotalReply(lastSede, healthInsuranceName, studyType, rawText);
-    if (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) {
+  if (messageAsksCompleteOrTotalCost(rawText) && studyTypeForPricing && healthInsuranceForPricing) {
+    const totalReply = await buildCompleteCostTotalReply(
+      lastSede,
+      healthInsuranceForPricing,
+      studyTypeForPricing,
+      rawText
+    );
+    if (isAllergyStudyType(studyTypeForPricing) || isPatchStudyType(studyTypeForPricing)) {
       if (messageMentionsChildPatientContext(rawText) && !totalReply.includes('consulten antes')) {
         replies.push('Qué bueno que consulten antes, así van con una idea más clara.');
       }
     }
     replies.push(totalReply);
-  } else if (messageAsksCompleteOrTotalCost(rawText) && studyType && !healthInsuranceName) {
-    const privateEstimate = await estimatePrivateConsultationAndStudyTotal(lastSede, studyType);
+  } else if (messageAsksCompleteOrTotalCost(rawText) && studyTypeForPricing && !healthInsuranceName) {
+    const privateEstimate = await estimatePrivateConsultationAndStudyTotal(lastSede, studyTypeForPricing);
     if (privateEstimate) {
-      const studyWithArticle = buildStudyTypeWithArticle(studyType);
+      const studyWithArticle = buildStudyTypeWithArticle(studyTypeForPricing);
       const consultationFormatted = formatArsAmount(privateEstimate.consultationAmountArs);
       const studyFormatted = formatArsAmount(privateEstimate.studyAmountArs);
       const totalFormatted = formatArsAmount(privateEstimate.totalAmountArs);
@@ -15458,36 +15622,37 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
       );
     }
   } else {
-    if (healthInsuranceName) {
-      replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceName));
+    if (healthInsuranceForPricing) {
+      replies.push(await buildHealthInsuranceCoverageLineForSede(lastSede, healthInsuranceForPricing));
     }
     if (
       messageAsksConsultationCostInText(rawText) &&
-      (await shouldIncludePrivateConsultationPriceReply(lastSede, healthInsuranceName, rawText))
+      (await shouldIncludePrivateConsultationPriceReply(lastSede, healthInsuranceForPricing, rawText))
     ) {
       replies.push(await buildPrivatePriceReply(lastSede));
     }
-    if (studyType) {
-      const plusRuleInSede = healthInsuranceName
-        ? await lookupPlusRule(lastSede.displayName, healthInsuranceName)
+    if (studyTypeForPricing) {
+      const plusRuleInSede = healthInsuranceForPricing
+        ? await lookupPlusRule(lastSede.displayName, healthInsuranceForPricing)
         : null;
       const studySede =
         plusRuleInSede && plusRuleInSede.isAccepted
           ? lastSede
           : (await findPrimaryAcceptedCityEntryForHealthInsurance(
-              healthInsuranceName,
+              healthInsuranceForPricing,
               lastSede.displayName
             )) || lastSede;
       if (
-        (isAllergyStudyType(studyType) || isPatchStudyType(studyType)) &&
+        (isAllergyStudyType(studyTypeForPricing) || isPatchStudyType(studyTypeForPricing)) &&
+        shouldUseAllergyTestEvaluationMessageInsteadOfTotal(rawText) &&
         (messageLooksLikeAnyPriceQuestion(rawText) || messageAsksCompleteOrTotalCost(rawText))
       ) {
         replies.push(buildAllergyTestRequiresEvaluationPriceReply(lastSede));
-      } else if (isSpirometryStudyType(studyType) && messageLooksLikeSpirometryPriceOnlyInquiry(rawText, studyType)) {
+      } else if (isSpirometryStudyType(studyTypeForPricing) && messageLooksLikeSpirometryPriceOnlyInquiry(rawText, studyTypeForPricing)) {
         replies.push(buildSpirometryStandalonePriceReply(priorState, rawText, lastSede));
-      } else if (healthInsuranceName) {
-        replies.push(await buildStudyPriceLineForKnownCoverage(studyType, studySede, healthInsuranceName));
-      } else if (isSpirometryStudyType(studyType)) {
+      } else if (healthInsuranceForPricing) {
+        replies.push(await buildStudyPriceLineForKnownCoverage(studyTypeForPricing, studySede, healthInsuranceForPricing));
+      } else if (isSpirometryStudyType(studyTypeForPricing)) {
         replies.push(buildSpirometryStandalonePriceReply(priorState, rawText, lastSede));
       } else if (messageLooksLikeAnyPriceQuestion(rawText)) {
         const formattedAmount = formatArsAmount(STUDY_PRICE_WITH_CONSULTATION_ARS);
@@ -16620,7 +16785,13 @@ function messageShouldSkipOpenAiAssistantFallback(rawText, priorState) {
   if (messageLooksLikePregnancyClinicalInquiry(rawText)) return true;
   if (textMatchesMedicalEmergency(rawText)) return true;
   if (messageAsksWhyChooseDoctorOrTrustQuestion(rawText)) return true;
-  if (messageLooksLikeAnyPriceQuestion(rawText) && findSedeFromText(rawText)) return true;
+  if (messageLooksLikeAnyPriceQuestion(rawText)) {
+    const sedeEntry =
+      findSedeFromText(rawText) ||
+      resolveLastSedeEntryFromState(priorState) ||
+      resolveSedeEntryFromState(priorState);
+    if (sedeEntry) return true;
+  }
   if (messageLooksLikeBookingIntent(rawText) || messageExplicitlyRequestsBookingLink(rawText)) return true;
   return false;
 }
@@ -16910,11 +17081,12 @@ async function estimatePatientOutOfPocketTotalForConsultationAndStudy(
 ) {
   const canonicalHealthInsuranceName =
     normalizeHealthInsuranceCanonicalName(healthInsuranceName) || healthInsuranceName;
-  const studyIncludedInConsultation = INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(
-    canonicalHealthInsuranceName
+  const studyIncludedInConsultation = INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.some(
+    (includedName) =>
+      normalizeForMatch(includedName) === normalizeForMatch(canonicalHealthInsuranceName)
   );
   const studyAmountArs = studyIncludedInConsultation ? 0 : STUDY_PRICE_WITH_CONSULTATION_ARS;
-  const plusRule = await lookupPlusRule(sedeEntry.displayName, healthInsuranceName);
+  const plusRule = await lookupPlusRule(sedeEntry.displayName, canonicalHealthInsuranceName);
   if (!plusRule || !plusRule.isAccepted) {
     return null;
   }
@@ -17093,9 +17265,9 @@ async function tryHandleCompleteCostTotalInquiry(from, bodyText, priorState, pro
   }
   const healthInsuranceName = isPrivatePay
     ? null
-    : await resolveHealthInsuranceNameFromMessage(bodyText, mergedState, { profileDisplayName });
+    : await resolveHealthInsuranceNameForCompleteCostReply(bodyText, mergedState, { profileDisplayName });
   const studyType =
-    (await resolveStudyTypeFromMessage(bodyText, mergedState, { profileDisplayName })) ||
+    (await resolveStudyTypeForCompleteCostReply(bodyText, mergedState, profileDisplayName)) ||
     (mergedState &&
     typeof mergedState === 'object' &&
     typeof mergedState.lastStudyType === 'string' &&
@@ -17281,7 +17453,10 @@ async function tryHandlePatientTotalCostInquiries(from, bodyText, priorState, pr
 async function buildStudyPriceLineForKnownCoverage(studyType, sedeEntry, healthInsuranceName) {
   const canonicalHealthInsuranceName = normalizeHealthInsuranceCanonicalName(healthInsuranceName) || healthInsuranceName;
   const studyWithArticle = buildStudyTypeWithArticle(studyType);
-  if (INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(canonicalHealthInsuranceName)) {
+  const studyIncludedInConsultation = INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.some(
+    (includedName) => normalizeForMatch(includedName) === normalizeForMatch(canonicalHealthInsuranceName)
+  );
+  if (studyIncludedInConsultation) {
     const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
     return `Con ${canonicalHealthInsuranceName} en ${sedeEntry.displayName}, ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta.`;
   }
