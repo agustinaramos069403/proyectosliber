@@ -7269,6 +7269,14 @@ async function buildReplyForPatientQuestionIntent(intent, context) {
         return buildAllergyTestRequiresEvaluationPriceReply(lastSede);
       }
       if (isSpirometryStudyType(studyType)) {
+        if (healthInsuranceName) {
+          return buildSpirometryPriceReplyForPatientContext(
+            priorState,
+            fullText,
+            lastSede,
+            healthInsuranceName
+          );
+        }
         return buildSpirometryStandalonePriceReply(priorState, fullText, lastSede);
       }
       if (shouldUseAllergyTestEvaluationMessageInsteadOfTotal(fullText)) {
@@ -12429,6 +12437,35 @@ async function tryHandleStudyPriceAffirmativeFollowUp(from, bodyText, priorState
       priorState.lastStudyType.trim().length > 0
         ? priorState.lastStudyType.trim()
         : 'espirometría');
+    if (healthInsuranceIncludesStudyInConsultation(healthInsuranceName)) {
+      const includedReply = await buildStudyPriceLineForKnownCoverage(
+        studyType,
+        lastSede,
+        healthInsuranceName
+      );
+      return deliverSequentialPatientTextMessages(
+        from,
+        [includedReply],
+        priorState,
+        profileDisplayName,
+        {
+          lastStudyType: studyType,
+          lastStudyPriceContextAtMs: Date.now(),
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...(buildLastSedeStatePatch(lastSede) || {}),
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+          ...buildAwaitingLinkConfirmationState(lastSede, 'after_combined_price_inquiry', {
+            healthInsuranceName,
+          }),
+        },
+        {
+          userMessage: bodyText,
+          replyContext: 'study_included_in_consultation',
+          skipHumanization: true,
+        }
+      );
+    }
     const replies = await buildTriplePriceBreakdownReplies(
       lastSede,
       healthInsuranceName,
@@ -14724,9 +14761,56 @@ function buildStudyCoverageIncludedAdjective(studyType) {
   return normalizeForMatch(studyType).includes('espirometr') ? 'incluida' : 'incluido';
 }
 
+function healthInsuranceIncludesStudyInConsultation(healthInsuranceName) {
+  if (!healthInsuranceName || typeof healthInsuranceName !== 'string') return false;
+  const canonicalName = normalizeHealthInsuranceCanonicalName(healthInsuranceName) || healthInsuranceName;
+  return INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.some(
+    (includedName) => normalizeForMatch(includedName) === normalizeForMatch(canonicalName)
+  );
+}
+
+function messageAsksWhetherStudyIsFreeOrIncludedClarification(rawText) {
+  if (!rawText || typeof rawText !== 'string') return false;
+  const normalized = normalizeForMatch(rawText);
+  const mentionsStudy =
+    messageMentionsSpirometryStudy(rawText) ||
+    normalized.includes('test de alerg') ||
+    normalized.includes('prick') ||
+    normalized.includes('estudio');
+  if (!mentionsStudy) return false;
+  return (
+    normalized.includes('gratis') ||
+    normalized.includes('sin cargo') ||
+    normalized.includes('sin costo') ||
+    normalized.includes('no pago') ||
+    (normalized.includes('incluid') && normalized.includes('?'))
+  );
+}
+
+function buildStudyNotFreeButIncludedInConsultationReply(studyType, healthInsuranceName, sedeEntry) {
+  const canonicalName = normalizeHealthInsuranceCanonicalName(healthInsuranceName) || healthInsuranceName;
+  const studyWithArticle = buildStudyTypeWithArticle(studyType);
+  const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
+  return `No es gratis por separado: con ${canonicalName} en ${sedeEntry.displayName}, ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta (no se cobra el estudio aparte).`;
+}
+
+async function buildSpirometryPriceReplyForPatientContext(priorState, rawText, lastSede, healthInsuranceName) {
+  const asksStandaloneOnly =
+    messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) ||
+    messageLooksLikeStandaloneSpirometryPriceInquiryLite(rawText);
+  if (
+    healthInsuranceName &&
+    healthInsuranceIncludesStudyInConsultation(healthInsuranceName) &&
+    !asksStandaloneOnly
+  ) {
+    return buildStudyPriceLineForKnownCoverage('espirometría', lastSede, healthInsuranceName);
+  }
+  return buildSpirometryStandalonePriceReply(priorState, rawText, lastSede);
+}
+
 function buildIncludedStudyCoverageFollowUpReply(studyType, healthInsuranceName, sedeEntry) {
   if (!healthInsuranceName || !sedeEntry) return null;
-  if (!INSURANCE_NAMES_WITH_INCLUDED_STUDY_IN_CONSULTATION.includes(healthInsuranceName)) return null;
+  if (!healthInsuranceIncludesStudyInConsultation(healthInsuranceName)) return null;
   const studyWithArticle = buildStudyTypeWithArticle(studyType);
   const includedAdjective = buildStudyCoverageIncludedAdjective(studyType);
   return `Con ${healthInsuranceName} en ${sedeEntry.displayName}, sin plus: ${studyWithArticle} queda ${includedAdjective} en el valor de la consulta.`;
@@ -15236,10 +15320,22 @@ async function sendSpirometryOnlyInquiryReply(from, bodyText, priorState, profil
     messageLooksLikeScheduleAvailabilityQuestion(bodyText) ||
     messageLooksLikeBookingIntent(bodyText);
 
-  const replies = [
-    buildStudyAvailabilityPrimaryReply('espirometría', mergedState, { sedeEntry: lastSede }),
-    buildSpirometryStandalonePriceReply(mergedState, bodyText, lastSede),
-  ];
+  const healthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(mergedState, bodyText);
+  const asksPrice =
+    messageLooksLikeAnyPriceQuestion(bodyText) || messageAsksAboutStudyPrice(bodyText);
+  const replies = [buildStudyAvailabilityPrimaryReply('espirometría', mergedState, { sedeEntry: lastSede })];
+  if (asksPrice) {
+    replies.push(
+      await buildSpirometryPriceReplyForPatientContext(
+        mergedState,
+        bodyText,
+        lastSede,
+        healthInsuranceName
+      )
+    );
+  } else {
+    replies.push(buildSpirometryStandalonePriceReply(mergedState, bodyText, lastSede));
+  }
   if (!asksAvailability) {
     replies.push(buildMicroCommitmentMessage());
   }
@@ -15247,6 +15343,13 @@ async function sendSpirometryOnlyInquiryReply(from, bodyText, priorState, profil
   const statePatch = {
     ...(patientContext.statePatch || {}),
     ...(buildLastSedeStatePatch(lastSede) || {}),
+    ...(healthInsuranceName
+      ? {
+          healthInsuranceName,
+          lastHealthInsuranceName: healthInsuranceName,
+          ...buildLastHealthInsuranceDiscussionStatePatch(),
+        }
+      : {}),
     lastStudyType: 'espirometría',
     lastStudyPriceContextAtMs: Date.now(),
     ...(isReferralOnlySedeEntry(lastSede)
@@ -15283,6 +15386,55 @@ async function sendSpirometryOnlyInquiryReply(from, bodyText, priorState, profil
     });
   }
   return true;
+}
+
+async function tryHandleStudyFreeOrIncludedClarification(from, bodyText, priorState, profileDisplayName) {
+  if (!messageAsksWhetherStudyIsFreeOrIncludedClarification(bodyText)) return false;
+  const patientContext = await resolvePatientContextFromMessage(bodyText, priorState, { profileDisplayName });
+  const mergedState = mergeConversationStatePreservingGreeting(
+    priorState,
+    priorState || {},
+    patientContext.statePatch
+  );
+  const lastSede =
+    patientContext.sedeEntry || resolveLastSedeEntryFromState(mergedState) || findSedeFromText(bodyText);
+  if (!lastSede) return false;
+  const healthInsuranceName = resolveKnownHealthInsuranceNameForStudyPricing(mergedState, bodyText);
+  if (!healthInsuranceName || !healthInsuranceIncludesStudyInConsultation(healthInsuranceName)) {
+    return false;
+  }
+  const studyType =
+    (await resolveStudyTypeFromMessage(bodyText, mergedState, { profileDisplayName })) ||
+    (mergedState &&
+    typeof mergedState === 'object' &&
+    typeof mergedState.lastStudyType === 'string' &&
+    mergedState.lastStudyType.trim().length > 0
+      ? mergedState.lastStudyType.trim()
+      : 'espirometría');
+  const reply = buildStudyNotFreeButIncludedInConsultationReply(studyType, healthInsuranceName, lastSede);
+  return sendFinalizedPatientTextReply(
+    from,
+    reply,
+    priorState,
+    profileDisplayName,
+    {
+      ...(patientContext.statePatch || {}),
+      ...(buildLastSedeStatePatch(lastSede) || {}),
+      healthInsuranceName,
+      lastHealthInsuranceName: healthInsuranceName,
+      lastStudyType: studyType,
+      lastStudyPriceContextAtMs: Date.now(),
+      ...buildLastHealthInsuranceDiscussionStatePatch(),
+      ...buildAwaitingLinkConfirmationState(lastSede, 'after_study_included_clarification', {
+        healthInsuranceName,
+      }),
+    },
+    {
+      userMessage: bodyText,
+      replyContext: 'study_included_in_consultation',
+      suppressBookingLinkOffer: false,
+    }
+  );
 }
 
 async function tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName) {
@@ -15648,8 +15800,18 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
         (messageLooksLikeAnyPriceQuestion(rawText) || messageAsksCompleteOrTotalCost(rawText))
       ) {
         replies.push(buildAllergyTestRequiresEvaluationPriceReply(lastSede));
-      } else if (isSpirometryStudyType(studyTypeForPricing) && messageLooksLikeSpirometryPriceOnlyInquiry(rawText, studyTypeForPricing)) {
-        replies.push(buildSpirometryStandalonePriceReply(priorState, rawText, lastSede));
+      } else if (
+        isSpirometryStudyType(studyTypeForPricing) &&
+        (messageLooksLikeSpirometryPriceOnlyInquiry(rawText, studyTypeForPricing) || healthInsuranceForPricing)
+      ) {
+        replies.push(
+          await buildSpirometryPriceReplyForPatientContext(
+            priorState,
+            rawText,
+            lastSede,
+            healthInsuranceForPricing
+          )
+        );
       } else if (healthInsuranceForPricing) {
         replies.push(await buildStudyPriceLineForKnownCoverage(studyTypeForPricing, studySede, healthInsuranceForPricing));
       } else if (isSpirometryStudyType(studyTypeForPricing)) {
@@ -17482,7 +17644,14 @@ async function buildTriplePriceBreakdownReplies(lastSede, healthInsuranceName, s
     replies.push(privatePriceReply.trim());
   }
 
-  if (messageAsksStudyProcedurePrice(rawText) && isSpirometryStudyType(studyType)) {
+  const shouldAddStandaloneSpirometryPrice =
+    messageAsksStudyProcedurePrice(rawText) &&
+    isSpirometryStudyType(studyType) &&
+    (!healthInsuranceName ||
+      !healthInsuranceIncludesStudyInConsultation(healthInsuranceName) ||
+      messageAsksAboutStandaloneSpirometryWithoutConsultation(rawText) ||
+      messageLooksLikeStandaloneSpirometryPriceInquiryLite(rawText));
+  if (shouldAddStandaloneSpirometryPrice) {
     const standaloneReply = buildSpirometryStandalonePriceReply(null, rawText, lastSede, {
       emphasizeWithoutConsultation: true,
     });
@@ -20139,6 +20308,9 @@ exports.handler = async (event) => {
             continue;
           }
 
+          if (await tryHandleStudyFreeOrIncludedClarification(from, bodyText, priorState, profileDisplayName)) {
+            continue;
+          }
           if (await tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
@@ -20725,6 +20897,9 @@ exports.handler = async (event) => {
               profileDisplayName
             )
           ) {
+            continue;
+          }
+          if (await tryHandleStudyFreeOrIncludedClarification(from, bodyText, priorState, profileDisplayName)) {
             continue;
           }
           if (await tryHandleSpirometryOnlyInquiry(from, bodyText, priorState, profileDisplayName)) {
