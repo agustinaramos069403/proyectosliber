@@ -289,16 +289,16 @@
 - “Sáenz Peña”
   - Cobertura OSDE en Sáenz Peña; **no** ofrecer link de agenda.
 - “para agendar turno?”
-  - Derivación telefónica Sáenz Peña (`36415314019`); **no** volver a preguntar sede ni “Por acá no agendamos… ¿Para qué sede es?”.
+  - Derivación telefónica Sáenz Peña (`3644314019`); **no** volver a preguntar sede ni “Por acá no agendamos… ¿Para qué sede es?”.
   - **No** “link que ya te pasé” ni link de Resistencia/Corrientes.
   - Aunque el paciente tenga un link viejo de Resistencia en sesión, la sede activa es Sáenz Peña.
 
 ## Formosa / Sáenz Peña (solo derivación telefónica, sin link)
 - “Soy de Sáenz Peña y quiero atenderme la semana que viene.”
-  - Respuesta: teléfono de la sede (`36415314019`); **no** ofrecer link ni “coordinar cita por acá”.
+  - Respuesta: teléfono de la sede (`3644314019`); **no** ofrecer link ni “coordinar cita por acá”.
 - Tras esa respuesta: “sí”
   - Respuesta: repetir derivación telefónica; **no** “link que ya te pasé”.
-- Mismo criterio para Formosa (`3704445096`).
+- Mismo criterio para Formosa (`3705098000`).
 - Si hubo link de Corrientes/Resistencia hace más de 1 h, no recordarlo al hablar de Formosa/Sáenz Peña.
 
 ## Contexto de obra social — no volver a preguntar
@@ -320,7 +320,7 @@
     1. Sí, el Dr. realiza el test de alergia en Formosa + evaluación previa.
     2. Cobertura/plus de Sancor en Formosa (desde sheets).
     3. Orientación obra social vs particular según el caso.
-    4. Teléfono `3704445096` para turnos en Formosa.
+    4. Teléfono `3705098000` para turnos en Formosa.
   - **No** solo el teléfono en un único mensaje.
 
 ## Estudios — typos con IA y política de precios
@@ -339,7 +339,7 @@
 
 ## Anti-bucle Sáenz Peña — no quedar “tildado”
 - Tras contexto viejo o respuesta errónea de Sáenz Peña, usuario: **“Hacen test?”** / **“HACEM TEST?”** / **“Soy de corrientes”** / **“No soy de tesis”**
-  - **No** repetir siempre el teléfono `36415314019`.
+  - **No** repetir siempre el teléfono `3644314019`.
   - “Hacen/Hacem test” → estudios + consulta previa (sin precio fijo de alergia).
   - “Soy de corrientes” → confirmar Corrientes y limpiar sede referral vieja.
   - “No soy de tesis/resistencia” → pedir disculpas y repreguntar ciudad.

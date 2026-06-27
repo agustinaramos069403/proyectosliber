@@ -100,7 +100,7 @@ const SEDE_ENTRIES = [
     envKey: 'REFERRAL_FORMOSA',
     optionNumber: '3',
     bookingViaReferralOnly: true,
-    referralPhoneNumber: '3704445096',
+    referralPhoneNumber: '3705098000',
   },
   {
     displayName: 'Sáenz Peña',
@@ -121,12 +121,12 @@ const SEDE_ENTRIES = [
     envKey: 'REFERRAL_SAENZ_PENA',
     optionNumber: '4',
     bookingViaReferralOnly: true,
-    referralPhoneNumber: '36415314019',
+    referralPhoneNumber: '3644314019',
   },
 ];
 
-const FORMOSA_REFERRAL_PHONE_NUMBER = '3704445096';
-const SAENZ_PENA_REFERRAL_PHONE_NUMBER = '36415314019';
+const FORMOSA_REFERRAL_PHONE_NUMBER = '3705098000';
+const SAENZ_PENA_REFERRAL_PHONE_NUMBER = '3644314019';
 const ALL_SEDE_CITIES_LIST_MESSAGE = 'Corrientes, Resistencia, Formosa o Sáenz Peña';
 const ACTIVE_SEDE_OPTIONS_MESSAGE = `¿Desde qué ciudad te consultás? ${ALL_SEDE_CITIES_LIST_MESSAGE}. Para turno online por acá: 1 Corrientes o 2 Resistencia 😊`;
 const ACTIVE_SEDE_CITIES_LIST_MESSAGE = ALL_SEDE_CITIES_LIST_MESSAGE;
@@ -389,13 +389,44 @@ function resolveReferralPhoneNumberForSedeEntry(sedeEntry) {
   return null;
 }
 
+function formatReferralSedeWhatsAppContact(phoneNumber) {
+  return `escribí por WhatsApp al ${phoneNumber} (ese número no recibe llamadas)`;
+}
+
+function isResistenciaSedeEntry(sedeEntry) {
+  return Boolean(sedeEntry && sedeEntry.displayName === 'Resistencia');
+}
+
+function formatResistenciaCallsOnlyContact(phoneNumber) {
+  return `llamá al ${phoneNumber} (ese número solo recibe llamadas, no WhatsApp)`;
+}
+
+function buildDualClinicAssistanceContactLine(contextSuffix = 'según tu sede') {
+  return `comunicate al ${CORRIENTES_ASSISTANCE_PHONE_NUMBER} (Corrientes) o ${formatResistenciaCallsOnlyContact(RESISTENCIA_ASSISTANCE_PHONE_NUMBER)}, ${contextSuffix}`;
+}
+
+function capitalizeFirstLetter(text) {
+  if (!text || typeof text !== 'string' || text.length === 0) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function formatClinicAssistanceContactForSede(sedeEntry, phoneNumber) {
+  if (isReferralOnlySedeEntry(sedeEntry)) {
+    return formatReferralSedeWhatsAppContact(phoneNumber);
+  }
+  if (isResistenciaSedeEntry(sedeEntry)) {
+    return formatResistenciaCallsOnlyContact(phoneNumber);
+  }
+  return `comunicate al ${phoneNumber}`;
+}
+
 function buildReferralOnlySedeBookingReply(sedeEntry) {
   const cityLabel = sedeEntry && sedeEntry.displayName ? sedeEntry.displayName : 'esa sede';
   const phoneNumber = resolveReferralPhoneNumberForSedeEntry(sedeEntry);
   if (!phoneNumber) {
-    return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede. Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
+    return `Para turnos en ${cityLabel}, escribí por WhatsApp al equipo de esa sede (esos números no reciben llamadas). Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
   }
-  return `Para turnos en ${cityLabel}, comunicate con el equipo de esa sede al ${phoneNumber}. Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
+  return `Para turnos en ${cityLabel}, ${formatReferralSedeWhatsAppContact(phoneNumber)}. Por esta línea solo se reserva online en Corrientes y Resistencia con el link de agenda.`;
 }
 
 function stateHasRecentReferralSedeBookingContext(priorState) {
@@ -638,7 +669,12 @@ function resolveClinicAssistancePhoneNumberFromContext(priorState = null, sedeEn
 }
 
 function buildBookingPersonalAssistanceMessage(priorState = null, sedeEntry = null) {
+  const lastSede =
+    sedeEntry || resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
+  if (lastSede && (isReferralOnlySedeEntry(lastSede) || isResistenciaSedeEntry(lastSede))) {
+    return `Si necesitás ayuda, ${formatClinicAssistanceContactForSede(lastSede, phoneNumber)}.`;
+  }
   return `Si necesitás ayuda, podés comunicarte al ${phoneNumber}.`;
 }
 
@@ -2585,7 +2621,7 @@ function buildPriceObjectionPersonalAssistanceFollowUpReply(priorState) {
   const sedeEntry = resolveLastSedeEntryFromState(priorState) || resolveSedeEntryFromState(priorState);
   const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
   if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
-    return `Si querés una atención más personalizada, podés comunicarte con la clínica de ${sedeEntry.displayName.trim()} al ${phoneNumber}.`;
+    return `Si querés una atención más personalizada, podés ${formatClinicAssistanceContactForSede(sedeEntry, phoneNumber)} con la clínica de ${sedeEntry.displayName.trim()}.`;
   }
   return `Si querés una atención más personalizada, podés comunicarte con la clínica al ${phoneNumber}.`;
 }
@@ -4893,7 +4929,7 @@ async function tryHumanizePatientReplyWithOpenAi(originalReply, options = {}) {
   if (options.replyContext === 'referral_sede_guidance') {
     replyContextInstructions.push(
       'Contexto: paciente de Formosa o Sáenz Peña con varias consultas en un mensaje (estudio, cobertura Sancor/OS, qué le conviene).',
-      'Mantené EXACTOS: que el Dr. realiza el estudio, plus/cobertura de la prepaga, teléfono de la sede y que por este chat solo se agenda online en Corrientes/Resistencia.',
+      'Mantené EXACTOS: que el Dr. realiza el estudio, plus/cobertura de la prepaga, WhatsApp de la sede (Formosa/Sáenz Peña no reciben llamadas) y que por este chat solo se agenda online en Corrientes/Resistencia.',
       'Tono cálido y claro; no suenes a menú de opciones ni robot.'
     );
   }
@@ -5699,7 +5735,10 @@ function buildGenericBookingPolicyReplyForSede(sede, priorState = null) {
     return `En ${sede.displayName} los turnos se reservan solo con el link de agenda (por acá no agendamos por chat). Elegí día y horario acá:\n${linkUrl}`;
   }
   const assistancePhone = resolveClinicAssistancePhoneNumberForSedeEntry(sede);
-  return `En ${sede.displayName} los turnos se reservan solo con el link de agenda online. Si necesitás ayuda con el link, escribinos al ${assistancePhone}.`;
+  const assistanceContactLine = isResistenciaSedeEntry(sede)
+    ? formatResistenciaCallsOnlyContact(assistancePhone)
+    : `escribinos al ${assistancePhone}`;
+  return `En ${sede.displayName} los turnos se reservan solo con el link de agenda online. Si necesitás ayuda con el link, ${assistanceContactLine}.`;
 }
 
 function conversationAlreadySharedBookingLink(priorState) {
@@ -6597,8 +6636,12 @@ function buildGenericInstitutionHealthInsuranceReply(lastSede = null) {
   const phoneNumber = resolveClinicAssistancePhoneNumberForSedeEntry(lastSede);
   const contactClause =
     lastSede && typeof lastSede.displayName === 'string' && lastSede.displayName.trim().length > 0
-      ? `Para confirmarlo, comunicate con el consultorio de ${lastSede.displayName.trim()} al ${phoneNumber}.`
-      : `Para confirmarlo, comunicate al ${CORRIENTES_ASSISTANCE_PHONE_NUMBER} (Corrientes) o al ${RESISTENCIA_ASSISTANCE_PHONE_NUMBER} (Resistencia), según tu sede.`;
+      ? isReferralOnlySedeEntry(lastSede)
+        ? `Para confirmarlo, ${formatReferralSedeWhatsAppContact(phoneNumber)} (${lastSede.displayName.trim()}).`
+        : isResistenciaSedeEntry(lastSede)
+          ? `Para confirmarlo, ${formatResistenciaCallsOnlyContact(phoneNumber)}.`
+          : `Para confirmarlo, comunicate con el consultorio de ${lastSede.displayName.trim()} al ${phoneNumber}.`
+      : `Para confirmarlo, ${buildDualClinicAssistanceContactLine()}.`;
   return `No tengo cargada en la base de datos si atendemos con esa obra social ni si tiene plus${cityClause}. ${contactClause}`;
 }
 
@@ -12959,7 +13002,7 @@ function buildWeekendOrHolidayScheduleReply(priorState) {
   let reply = 'El Dr. no atiende sábados, domingos ni feriados.';
   if (lastSede && isReferralOnlySedeEntry(lastSede)) {
     const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
-    reply += ` En ${lastSede.displayName} consultá horarios y turnos comunicándote al ${phoneNumber}.`;
+    reply += ` En ${lastSede.displayName} consultá horarios y turnos: ${formatReferralSedeWhatsAppContact(phoneNumber)}.`;
     return reply;
   }
   if (lastSede) {
@@ -12967,14 +13010,14 @@ function buildWeekendOrHolidayScheduleReply(priorState) {
     return appendBookingLinkOfferIfAllowed(priorState, reply);
   }
   reply +=
-    ' Los días de consulta según sede se ven en la agenda online (Corrientes y Resistencia) o por teléfono en Formosa y Sáenz Peña.';
+    ' Los días de consulta según sede se ven en la agenda online (Corrientes y Resistencia) o por WhatsApp en Formosa y Sáenz Peña (esos números no reciben llamadas).';
   return reply;
 }
 
 function buildAppointmentWaitTimeOrAgendaLoadReply(priorState, lastSede) {
   if (lastSede && isReferralOnlySedeEntry(lastSede)) {
     const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
-    return `Por acá no podemos decir cuánto demora ni si hay cupo. Para saber disponibilidad en ${lastSede.displayName}, comunicate al ${phoneNumber}.`;
+    return `Por acá no podemos decir cuánto demora ni si hay cupo. Para saber disponibilidad en ${lastSede.displayName}, ${formatReferralSedeWhatsAppContact(phoneNumber)}.`;
   }
   return 'Por acá no podemos decir cuánto demora ni si hay cupo esta semana. La disponibilidad actualizada está en el link de agenda; a veces se liberan turnos por cancelaciones.';
 }
@@ -12982,13 +13025,13 @@ function buildAppointmentWaitTimeOrAgendaLoadReply(priorState, lastSede) {
 function buildWalkInWithoutAppointmentReply(priorState, lastSede) {
   if (lastSede && isReferralOnlySedeEntry(lastSede)) {
     const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
-    return `No, las consultas son con turno previo. En ${lastSede.displayName} coordiná al ${phoneNumber}.`;
+    return `No, las consultas son con turno previo. En ${lastSede.displayName} coordiná: ${formatReferralSedeWhatsAppContact(phoneNumber)}.`;
   }
   if (lastSede) {
     const reply = `No, las consultas son con turno previo. En ${lastSede.displayName} reservás con el link de agenda online.`;
     return appendBookingLinkOfferIfAllowed(priorState, reply);
   }
-  return 'No, las consultas son con turno previo. En Corrientes y Resistencia reservás con el link de agenda; en Formosa y Sáenz Peña comunicate con el teléfono de la sede.';
+  return 'No, las consultas son con turno previo. En Corrientes y Resistencia reservás con el link de agenda; en Formosa y Sáenz Peña escribí por WhatsApp al número de la sede (no reciben llamadas).';
 }
 
 function buildPregnancyClinicalInquiryReply(rawText) {
@@ -14269,6 +14312,12 @@ function buildHumanContactAssistanceReply(priorState) {
     resolveKnownSedeForConversationContext(priorState) || resolveLastSedeEntryFromState(priorState);
   const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
   if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    if (isReferralOnlySedeEntry(sedeEntry)) {
+      return `Sí. Para contactar al equipo de ${sedeEntry.displayName.trim()}, ${formatReferralSedeWhatsAppContact(phoneNumber)}.`;
+    }
+    if (isResistenciaSedeEntry(sedeEntry)) {
+      return `Sí. Para hablar con el equipo de Resistencia, ${formatResistenciaCallsOnlyContact(phoneNumber)}.`;
+    }
     return `Sí. Para hablar con el equipo de ${sedeEntry.displayName.trim()}, comunicate al ${phoneNumber}.`;
   }
   return `Sí. Decime tu ciudad (${ACTIVE_SEDE_CITIES_LIST_MESSAGE}) y te paso el teléfono del consultorio correspondiente.`;
@@ -14279,6 +14328,12 @@ function buildDoctorPrivateContactRedirectReply(priorState) {
     resolveKnownSedeForConversationContext(priorState) || resolveLastSedeEntryFromState(priorState);
   const phoneNumber = resolveClinicAssistancePhoneNumberFromContext(priorState, sedeEntry);
   if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    if (isReferralOnlySedeEntry(sedeEntry)) {
+      return `No compartimos el contacto personal del médico por este chat. Para consultas del consultorio en ${sedeEntry.displayName.trim()}, ${formatReferralSedeWhatsAppContact(phoneNumber)}.`;
+    }
+    if (isResistenciaSedeEntry(sedeEntry)) {
+      return `No compartimos el contacto personal del médico por este chat. Para consultas del consultorio en Resistencia, ${formatResistenciaCallsOnlyContact(phoneNumber)}.`;
+    }
     return `No compartimos el contacto personal del médico por este chat. Para consultas del consultorio en ${sedeEntry.displayName.trim()}, comunicate al ${phoneNumber}.`;
   }
   return `No compartimos el contacto personal del médico por este chat. ${buildBookingPersonalAssistanceMessage(priorState)}`;
@@ -14293,6 +14348,12 @@ function buildSedeAdministrativeAssistanceReply(priorState, introSentence) {
       ? `${introSentence.trim().replace(/\.$/, '')}.`
       : '';
   if (sedeEntry && typeof sedeEntry.displayName === 'string' && sedeEntry.displayName.trim().length > 0) {
+    if (isReferralOnlySedeEntry(sedeEntry)) {
+      return `${intro} ${formatReferralSedeWhatsAppContact(phoneNumber)} (${sedeEntry.displayName.trim()}) y te lo confirman.`.trim();
+    }
+    if (isResistenciaSedeEntry(sedeEntry)) {
+      return `${intro} ${formatResistenciaCallsOnlyContact(phoneNumber)} y te lo confirman.`.trim();
+    }
     return `${intro} Comunicate con el consultorio de ${sedeEntry.displayName.trim()} al ${phoneNumber} y te lo confirman.`.trim();
   }
   return `${intro} Decime tu ciudad (${ACTIVE_SEDE_CITIES_LIST_MESSAGE}) y te paso el teléfono del consultorio.`.trim();
@@ -15843,7 +15904,7 @@ async function buildPatientOrchestratedReplies(priorState, rawText, lastSede, he
       const phoneNumber = resolveReferralPhoneNumberForSedeEntry(lastSede);
       if (phoneNumber) {
         replies.push(
-          `Para fechas en ${lastSede.displayName} comunicate al ${phoneNumber}; el Dr. carga turnos con anticipación. Por este chat solo se agenda online en Corrientes y Resistencia.`
+          `Para fechas en ${lastSede.displayName} ${formatReferralSedeWhatsAppContact(phoneNumber)}; el Dr. carga turnos con anticipación. Por este chat solo se agenda online en Corrientes y Resistencia.`
         );
       } else {
         replies.push(buildReferralOnlySedeBookingReply(lastSede));
@@ -19171,9 +19232,11 @@ function buildChangeBookingSedeReply(priorState, rawText) {
       targetSede && targetSede.displayName !== bookingSede.displayName
         ? ` para pasarte a ${targetSede.displayName}`
         : '';
-    return `${intro}\n\nComunicate al ${phoneNumber} (${bookingSede.displayName}), donde hiciste la reserva${targetLabel}.\n\n${closing}`;
+    const contactLine = formatClinicAssistanceContactForSede(bookingSede, phoneNumber);
+    return `${intro}\n\n${capitalizeFirstLetter(contactLine)} (${bookingSede.displayName}), donde hiciste la reserva${targetLabel}.\n\n${closing}`;
   }
-  return `${intro}\n\nComunicate al ${CORRIENTES_ASSISTANCE_PHONE_NUMBER} (Corrientes) o al ${RESISTENCIA_ASSISTANCE_PHONE_NUMBER} (Resistencia), según donde tengas el turno actual.\n\n${closing}`;
+  const dualContactLine = buildDualClinicAssistanceContactLine('según donde tengas el turno actual');
+  return `${intro}\n\n${capitalizeFirstLetter(dualContactLine)}.\n\n${closing}`;
 }
 
 async function tryHandleChangeBookingSedeInquiry(
@@ -19269,9 +19332,16 @@ function buildRescheduleOrCancelBookingReply(priorState, rawText) {
   const closing = 'Ellos van a poder ayudarte a encontrar un nuevo horario.';
   if (lastSede) {
     const phoneNumber = resolveClinicAssistancePhoneNumberForSedeEntry(lastSede);
+    if (isReferralOnlySedeEntry(lastSede)) {
+      return `${intro}\n\n${capitalizeFirstLetter(formatReferralSedeWhatsAppContact(phoneNumber))} (${lastSede.displayName}).\n\n${closing}`;
+    }
+    if (isResistenciaSedeEntry(lastSede)) {
+      return `${intro}\n\n${capitalizeFirstLetter(formatResistenciaCallsOnlyContact(phoneNumber))}.\n\n${closing}`;
+    }
     return `${intro}\n\nComunicate por favor al ${phoneNumber} (${lastSede.displayName}).\n\n${closing}`;
   }
-  return `${intro}\n\nComunicate por favor al ${CORRIENTES_ASSISTANCE_PHONE_NUMBER} (Corrientes) o al ${RESISTENCIA_ASSISTANCE_PHONE_NUMBER} (Resistencia), según tu sede.\n\n${closing}`;
+  const dualContactLine = buildDualClinicAssistanceContactLine('según tu sede');
+  return `${intro}\n\n${capitalizeFirstLetter(dualContactLine)}.\n\n${closing}`;
 }
 
 async function tryHandleRescheduleOrCancelBookingInquiry(
@@ -19323,17 +19393,29 @@ function buildConfirmExistingBookingReply(priorState, rawText) {
     resolveLastSedeEntryFromState(priorState) ||
     resolveSedeEntryFromState(priorState);
   const isScheduleRecall = messageAsksAboutExistingBookingScheduleRecall(rawText);
-  const intro = isScheduleRecall
-    ? 'Por este chat no consultamos la agenda ni podemos ver tu turno. Para confirmar el día y horario de tu reserva, comunicate con el equipo de la sede al:'
-    : 'Por este chat no confirmamos turnos. Si ya reservaste desde la agenda, para verificar o confirmar tu reserva comunicate con el equipo de la sede al:';
+  const isReferralSede = Boolean(lastSede && isReferralOnlySedeEntry(lastSede));
+  const isResistenciaSede = Boolean(lastSede && isResistenciaSedeEntry(lastSede));
+  const intro = isReferralSede || isResistenciaSede
+    ? isScheduleRecall
+      ? 'Por este chat no consultamos la agenda ni podemos ver tu turno. Para confirmar el día y horario de tu reserva:'
+      : 'Por este chat no confirmamos turnos. Si ya reservaste, para verificar tu reserva:'
+    : isScheduleRecall
+      ? 'Por este chat no consultamos la agenda ni podemos ver tu turno. Para confirmar el día y horario de tu reserva, comunicate con el equipo de la sede al:'
+      : 'Por este chat no confirmamos turnos. Si ya reservaste desde la agenda, para verificar o confirmar tu reserva comunicate con el equipo de la sede al:';
   const closing = isScheduleRecall
     ? 'Ellos tienen acceso a la agenda y te confirman si es el jueves, el viernes u otro día.'
     : 'Ellos tienen acceso a la agenda y pueden confirmarte si quedó todo bien.';
   if (lastSede) {
     const phoneNumber = resolveClinicAssistancePhoneNumberForSedeEntry(lastSede);
+    if (isReferralOnlySedeEntry(lastSede)) {
+      return `${intro}\n${formatReferralSedeWhatsAppContact(phoneNumber)} (${lastSede.displayName})\n\n${closing}`;
+    }
+    if (isResistenciaSedeEntry(lastSede)) {
+      return `${intro}\n${formatResistenciaCallsOnlyContact(phoneNumber)}\n\n${closing}`;
+    }
     return `${intro}\n${phoneNumber} (${lastSede.displayName})\n\n${closing}`;
   }
-  return `${intro}\n${CORRIENTES_ASSISTANCE_PHONE_NUMBER} (Corrientes) o al ${RESISTENCIA_ASSISTANCE_PHONE_NUMBER} (Resistencia), según tu sede.\n\n${closing}`;
+  return `${intro}\n${capitalizeFirstLetter(buildDualClinicAssistanceContactLine())}.\n\n${closing}`;
 }
 
 async function tryHandleConfirmExistingBookingInquiry(
